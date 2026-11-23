@@ -48,7 +48,7 @@ describe('vitrine: tela', () => {
   it('parado, sem vitrine: só "Criar vitrine" (sem seletor de funcionário) e a dica', () => {
     const html = render({ status: { state: 'idle' } });
     expect(html).toContain('Criar vitrine');
-    expect(html).toContain('btn-primary');
+    expect(html).not.toContain('btn-primary'); // a primária do painel do projeto é só a da barra de ações
     expect(html).not.toContain('<select');
     expect(html).not.toContain('Quem faz');
     expect(html).not.toContain('Abrir vitrine');

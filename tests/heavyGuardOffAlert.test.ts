@@ -327,7 +327,7 @@ describe('heavyGuardOffInboxItem e a fiação do servidor', () => {
     const src = await fs.readFile(path.join(__dirname, '..', 'server', 'index.ts'), 'utf8');
     expect(src).toContain('heavyGuardOff: (sessionId) => tasks.noteHeavyGuardOff(sessionId),');
     expect(src).toContain('for (const g of chats.guardOffHits())');
-    expect(src).toContain('out.push(heavyGuardOffInboxItem(g, w))');
+    expect(src).toContain('resolver.guardOff(heavyGuardOffInboxItem(g, w))'); // passa pelo resolvedor (hooks.json que sumiu = resolvido) antes de entrar na lista
     const start = src.indexOf('/^\\/api\\/errors\\/dismiss$/');
     expect(start).toBeGreaterThan(0);
     const route = src.slice(start, src.indexOf('\n  ],', start));

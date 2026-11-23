@@ -178,7 +178,7 @@ describe('geração de título', () => {
     expect(await fs.readFile(m.systemCosts, 'utf8')).toContain('"source":"titulos"');
   });
 
-  it('virada após o ponto de corte gera de novo, e o título do assunto antigo não aparece no novo', async () => {
+  it('virada após o ponto de corte não renomeia: o título pronto vale pela conversa toda', async () => {
     await fs.writeFile(transcript('sess-1'), userLine('u1', 'Configurar o deploy') + asstLine('a1', `Feito. Atualizei a memória.\n${CP}`));
     const m = makeService();
     await m.annotate('sess-1');
@@ -186,12 +186,10 @@ describe('geração de título', () => {
     expect((await m.annotate('sess-1')).aiTitle).toBe('Título 1');
 
     await fs.appendFile(transcript('sess-1'), userLine('u2', 'Agora revisar o financeiro') + asstLine('a2', 'Vou ver as contas.'));
-    const before = await m.annotate('sess-1');
-    expect(before.aiTitle).toBeNull();
+    expect((await m.annotate('sess-1')).aiTitle).toBe('Título 1');
     await m.svc.drain();
-    expect(m.spawn).toHaveBeenCalledTimes(2);
-    expect((m.spawn.mock.calls[1]![2] as string)).toContain('Agora revisar o financeiro');
-    expect((await m.annotate('sess-1')).aiTitle).toBe('Título 2');
+    expect(m.spawn).toHaveBeenCalledTimes(1);
+    expect((await m.annotate('sess-1')).aiTitle).toBe('Título 1');
   });
 
   it('resultado atrasado é descartado quando o assunto mudou durante a geração', async () => {
@@ -264,6 +262,25 @@ describe('geração de título', () => {
     expect(kill).toHaveBeenCalled();
     expect(m.spawn).toHaveBeenCalledTimes(2);
     expect((await m.cache.get(AiTitleCache.keyOf('proj-1', 'claude', 'sess-1')))?.status).toBe('failed');
+  });
+
+  it.each([
+    ['skip (SEM_TITULO)', () => runOf(okOut('SEM_TITULO')), 'skip'],
+    ['falha', () => failRun(), 'failed'],
+  ] as const)('1ª geração com %s: virada com mensagem posterior não gera nem renomeia', async (_n, run, status) => {
+    await fs.writeFile(transcript('sess-1'), userLine('u1', 'oi tudo bem por aqui') + asstLine('a1', `Tudo bem.\n${CP}`));
+    const m = makeService({ spawnClaude: fakeClaude(run) });
+    await m.annotate('sess-1');
+    await m.svc.drain();
+    const calls = m.spawn.mock.calls.length;
+    expect((await m.cache.get(AiTitleCache.keyOf('proj-1', 'claude', 'sess-1')))?.status).toBe(status);
+
+    await fs.appendFile(transcript('sess-1'), userLine('u2', 'Agora revisar o financeiro do mês') + asstLine('a2', 'Vou ver as contas.'));
+    m.later(6 * 60 * 60_000 + 1);
+    expect((await m.annotate('sess-1')).aiTitle).toBeNull();
+    await m.svc.drain();
+    expect(m.spawn).toHaveBeenCalledTimes(calls);
+    expect((await m.annotate('sess-1')).aiTitle).toBeNull();
   });
 
   it('SEM_TITULO grava skip (fica o assunto, sem nova tentativa)', async () => {

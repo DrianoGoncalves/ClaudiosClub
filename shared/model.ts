@@ -391,6 +391,8 @@ export interface AppConfig {
   maxTurnMinutes: number;
   /** Títulos de conversa gerados por IA (Haiku) para as conversas do Club com assunto livre. Ligado por padrão; desligado, nenhuma chamada ao modelo e a lista volta ao assunto (o cache não aparece). Títulos manuais seguem valendo. Lido a cada lista. */
   aiTitles: boolean;
+  /** Parar o Claudio’s Club sozinho quando a última aba dele fechar (mesmo caminho do botão Parar), depois de uma carência sem nenhuma aba. Desligado por padrão: fechar o navegador deixa o servidor em segundo plano. Lido a cada checagem (server/tabPresence.ts). */
+  stopOnTabClose: boolean;
 }
 
 export const CONTEXT_SWITCHES = ['auto', 'suggest', 'off'] as const;
@@ -694,6 +696,15 @@ export interface BoardCommitConfig {
   autoCommit: boolean;
 }
 
+/**
+ * Um escritor por vez no checkout principal (também em `<projeto>/.myco/board.json`, na chave `singleWriter`; desligado por padrão): com ela ligada, só um card por vez fica com a "vaga de
+ * escrita" do projeto, e o outro que iria implementar espera na fila com o motivo (`Task.resourceWait`). Quem trabalha em worktree própria e a fase de plano não entram na conta
+ * (ver `TaskService.writeSlot`). Só liga e desliga pela tela.
+ */
+export interface BoardWriterConfig {
+  singleWriter: boolean;
+}
+
 /** Quantos arquivos do commit e quantos deixados de fora uma tarefa guarda (`TaskCommit.files` e `left`); o resto só entra na contagem da nota. */
 export const COMMIT_LIST_MAX = 100;
 
@@ -860,6 +871,18 @@ export interface Task {
    */
   noCode?: TaskNoCode;
   /**
+   * O card pede o plano primeiro (planejar antes de editar). `true`: o fim de turno em que o responsável entrega só o plano (nenhuma edição) não é entrega: o card vai para
+   * "planejando" com o plano pendente de quem pediu (`planWait`), sem revisão, sem rodada e sem reprovação. `false`: nunca espera plano, mesmo que a descrição peça. Ausente: o
+   * servidor lê a descrição e a meta (frases como "comece pelo plano" ou "plano primeiro"; ver `wantsPlan` em server/tasks.ts). Aceito na criação e na edição da tarefa.
+   */
+  planFirst?: boolean;
+  /**
+   * O plano que o responsável entregou num card que pedia plano primeiro (`planFirst`), esperando a decisão de quem pediu: aprovar (o card segue em "fazendo", no mesmo card,
+   * com o plano gravado em `plan`) ou recusar com o motivo (volta ao responsável, em "fazendo"). Só existe com o card em "planejando"; sair de lá (decisão, mensagem na conversa do
+   * card, cancelamento) a desfaz. Só o servidor grava.
+   */
+  planWait?: TaskPlanWait;
+  /**
    * O fim de turno do card (em "fazendo") achou agent ou comando ainda rodando em segundo plano: não é entrega. Sem revisão, sem resumo gravado e sem aviso a quem pediu; o card
    * segue em "fazendo" (e ocupando o funcionário) até o turno que vem depois do término. Vencido o prazo (`BACKGROUND_WAIT_MS`) sem o segundo plano terminar, a entrega segue como
    * sempre, com uma nota no histórico (`expiredAt`). Sai quando o card sai de "fazendo" ou quando o fim de turno acha o segundo plano vazio. Só o servidor grava.
@@ -896,8 +919,11 @@ export interface Task {
   queuePos?: number;
   /** Começar mesmo com o limite de consumo batido (você confirmou ao pôr na fila). */
   queuedForce?: boolean;
-  /** Na fila, a partida foi segurada pelo gate de recursos (ver server/resourceGate.ts): o motivo e desde quando. Limpo ao começar. */
-  resourceWait?: { reason: string; since: string } | null;
+  /**
+   * Na fila, a partida foi segurada pelo gate de recursos (ver server/resourceGate.ts) ou pela vaga de escrita do projeto (ver `BoardWriterConfig`): o motivo e desde quando. Limpo ao começar.
+   * `holder`: só na espera pela vaga de escrita, o id do card que a ocupa.
+   */
+  resourceWait?: { reason: string; since: string; holder?: string } | null;
   /** Na fila, a partida falhou por motivo da própria tarefa (ficha, worktree, branch…): a fila segue sem ela e ela espera `nextAt` (ver `takeNext`). Limpo ao começar ou sair da fila. */
   startRetry?: RetryState;
   /** Você tirou a tarefa da fila de propósito ("tirar da fila"): a varredura do tick não a põe de volta (ver `enqueueIdle`). Sai ao entrar na fila, mudar de coluna ou de responsável. */
@@ -950,6 +976,11 @@ export interface Task {
    */
   commit?: TaskCommit;
   /**
+   * O aviso de que o commit automático deixou arquivo de fora por outra tarefa (`why: 'shared'`) chegou a quem pediu (`requestedBy`): `key` é o conjunto de arquivo, motivo e tarefa que barrou,
+   * e o mesmo motivo não avisa de novo. Só é gravado quando o aviso chegou. Só o servidor grava.
+   */
+  commitNotice?: { key: string; at: string };
+  /**
    * Só na listagem (derivado, não gravado): a dúvida da tarefa está escalada a você (`question.status === 'escalated'`) e isso decide se
    * ela prende o funcionário. Ausente = dúvida com o gestor, respondida ou sem dúvida (a fila não muda).
    */
@@ -971,6 +1002,33 @@ export interface Task {
    * começa nem segue sozinha até ele ser retomado. Ausente = projeto rodando (ou tarefa encerrada).
    */
   projectPaused?: ProjectPause;
+  /**
+   * Só na listagem (derivado dos itens da caixa de entrada, não gravado): o card está parado esperando alguém agir num item da caixa que se refere a ele (ver `InboxWait`). Some sozinho
+   * quando o item é resolvido, dispensado ou deixa de valer. Ausente = nada o prende (um aviso na caixa que não trava o card não conta). Com mais de um item, vale o de maior prioridade.
+   */
+  inboxWait?: InboxWait;
+}
+
+/**
+ * O tipo do item da caixa que prende um card (`InboxWait.kind`): `plan` plano pronto para aprovar; `permission` pedido de permissão de ferramenta; `question` dúvida por opções (ou escrita, depois
+ * de escalada) sem resposta; `review` revisão automática que não começou ou ficou sem veredito; `resend` ajuste guardado que não chega ao funcionário; `noCode` card que terminou sem editar
+ * código, esperando decisão; `blocked` o card espera outra tarefa empacada (`blockerId`). Não prendem (só avisam): cartão esquecido em "a fazer" (`notStarted`), follow-up de revisão, ação barrada (`denied`),
+ * erro (commit automático, fila desligada, teto do turno, sandbox), segredo, sessão esperando em outro lugar (`waiting`), processo órfão, rotina, consumo, e as paradas que se resolvem sozinhas
+ * (espera do limite do motor, dúvida a caminho do gestor).
+ */
+export type InboxWaitKind = 'plan' | 'permission' | 'question' | 'review' | 'resend' | 'noCode' | 'blocked';
+
+/** Por que um card está parado esperando a caixa de entrada (`Task.inboxWait`). Sem texto livre: a tela monta a frase no idioma da página a partir de `kind`. */
+export interface InboxWait {
+  kind: InboxWaitKind;
+  /** De quem é a ação: `owner` o dono (você), pela caixa; `manager` o gestor (ou o revisor que reprovou), que responde a dúvida por opções antes de ela escalar a você. */
+  by: 'owner' | 'manager';
+  /** O `InboxItem.id` do item que o prende, para a tela abri-lo na caixa. */
+  itemId: string;
+  /** Desde quando o item espera (ISO; o `at` do item, ou a última mudança do card se o item não tem hora). */
+  since: string;
+  /** Só em `blocked`: a tarefa empacada que ele espera. */
+  blockerId?: string;
 }
 
 /** A permissão que a conversa de uma tarefa espera de você (`Task.permissionWait`). Só o nome da ferramenta: o comando e os arquivos ficam no cartão da conversa. */
@@ -1010,6 +1068,22 @@ export interface TaskNoCode {
   /** O aviso ao gestor ainda não chegou (conversa fechando, limite de consumo…): tentativas e a próxima (backoff); o tick refaz. Some ao entregar ou ao ir para o usuário. */
   notifyRetry?: RetryState;
   /** Quando o aviso ao gestor foi dado como perdido e o card passou a `to: 'owner'` (ISO). */
+  escalatedAt?: string;
+}
+
+/** O plano que espera decisão (`Task.planWait`). */
+export interface TaskPlanWait {
+  /** Quando o plano foi entregue (ISO); também identifica esta espera (a decisão só vale para ela). */
+  since: string;
+  /** O plano, como o responsável o escreveu ao terminar o turno (Markdown, até 8000 caracteres): é dele, e a tela o mostra como texto. */
+  text: string;
+  /** Quem decide: o gestor que pediu o card (`Task.requestedBy`) ou o usuário (caixa). */
+  to: 'manager' | 'owner';
+  /** Quando o aviso chegou à conversa do gestor (ISO). Ausente com `to: 'owner'` e enquanto não chegou. */
+  deliveredAt?: string;
+  /** O aviso ao gestor ainda não chegou (conversa fechando, limite de consumo…): tentativas e a próxima (backoff); o tick refaz. Some ao entregar ou ao ir para o usuário. */
+  notifyRetry?: RetryState;
+  /** Quando o aviso ao gestor foi dado como perdido e o plano passou a `to: 'owner'` (ISO). */
   escalatedAt?: string;
 }
 
@@ -1315,12 +1389,56 @@ export interface TaskProgress {
 }
 
 /**
- * Projeto pausado (ver server/projectPause.ts): nada começa sozinho nele (fila, revisão automática, rotinas, despertador, "continue", retomada do reinício, troca de
- * motor). O que já roda termina o turno e para; as suas ações manuais (chat, mover cartão, "Começar") seguem. Só você pausa e despausa, pelo navegador.
+ * Projeto pausado (ver server/projectPause.ts): nada de execução começa sozinho nele (fila, ajuste da reprovação, rotinas, despertador, "continue", retomada do reinício, troca de
+ * motor); a revisão automática da entrega já feita roda. O que já roda termina o turno e para; as suas ações manuais (chat, mover cartão, "Começar") seguem. Só você pausa e despausa, pelo navegador.
  */
 export interface ProjectPause {
   /** Quando pausou (ISO). */
   at: string;
+}
+
+/**
+ * O que a fila de um funcionário faz agora (`GET /api/projects/:id/queues`, ver `TaskService.queueStates`). Na ordem em que vale quando mais de um é verdade: `paused` (o projeto
+ * está pausado), `busy` (ele trabalha num card ou numa conversa), `resource-wait` (o gate de recursos segurou a partida), `usage-limit` (a trava de consumo barra o motor dele),
+ * `delivering` (uma entrega dele ainda está sendo processada), `heavy-wait` (essa entrega espera a vez da suíte de testes: outra validação pesada roda na máquina) e `free`.
+ * `delivering` e `heavy-wait` só aparecem com ele sem card em andamento: se ele já pegou o próximo, o estado é `busy` e a entrega segue em `deliveries`.
+ */
+export type QueueState = 'free' | 'busy' | 'delivering' | 'heavy-wait' | 'resource-wait' | 'usage-limit' | 'paused';
+
+/**
+ * O que a entrega de uma tarefa faz agora, depois de o card ir para revisão: `saving` (resumo e commit, ainda na vez do funcionário: a fila dele espera), `tests` (rodando a suíte), `heavy-wait`
+ * (a suíte espera a vez: outra validação pesada roda na máquina), `notice` (o aviso a quem pediu) e `review` (o pedido da revisão). Só `saving` segura a fila; as outras seguem em paralelo.
+ */
+export type DeliveryPhase = 'saving' | 'tests' | 'heavy-wait' | 'notice' | 'review';
+
+/** Uma entrega em processamento de um funcionário (ver `DeliveryPhase`). */
+export interface QueueDelivery {
+  taskId: string;
+  phase: DeliveryPhase;
+  /** Desde quando a entrega está nesta fase (ISO). */
+  since: string;
+  /** Desde quando a entrega está em processamento (ISO): o card foi para revisão. */
+  startedAt: string;
+  /** Em `heavy-wait`: o nome de quem segura a fila da suíte agora. */
+  holder?: string;
+}
+
+/** A fila de um funcionário: o estado (ver `QueueState`), o card que o explica, desde quando e o que mais importa dele. */
+export interface StaffQueue {
+  staffId: string;
+  state: QueueState;
+  /** O card que explica o estado: o que ele faz (`busy`), a que espera (`resource-wait`, `usage-limit`) ou o que entrega (`delivering`, `heavy-wait`). */
+  taskId?: string;
+  /** Desde quando está assim (ISO), quando o estado tem começo conhecido: o card entrou em andamento, a espera começou, a entrega começou (`delivering`) ou a suíte começou a esperar (`heavy-wait`). */
+  since?: string;
+  /** Em `delivering` e `heavy-wait`: a fase da entrega que explica o estado. */
+  phase?: DeliveryPhase;
+  /** O motivo em palavras: o do gate de recursos, a linha de parada de consumo, quem segura a suíte. */
+  detail?: string;
+  /** Quantos cards ele tem na fila ("a fazer"), de qualquer ordem. */
+  queued: number;
+  /** As entregas dele em processamento agora (a mais antiga primeiro), também quando o estado é outro (ele já pegou o próximo card). */
+  deliveries: QueueDelivery[];
 }
 
 /** Tarefas de um projeto para o cabeçalho: abertas (tudo que não está encerrado: nem pronto nem cancelado) e em revisão. */
@@ -1534,6 +1652,16 @@ export type McpAccess = 'off' | 'readonly' | 'ask' | 'free';
 /** legado: só a tela atual e a leitura de fichas antigas usam (`mcp__servidor`, `mcp__servidor__ferramenta`). */
 export type McpPolicy = 'allow' | 'ask' | 'off';
 
+/** Quem perguntou numa conversa de consulta (gravado na entrada da sessão do funcionário consultado; a tela só lê). */
+export interface ConsultStamp {
+  /** O id da consulta (`c-<6 hex>`, ver server/consult/store.ts). */
+  id: string;
+  fromProjectId: string;
+  fromProjectName: string;
+  fromStaffId: string;
+  fromStaffName: string;
+}
+
 export interface StaffProfile {
   id: string;
   projectId: string;
@@ -1624,9 +1752,10 @@ export interface StaffProfile {
    * Sessões abertas para este funcionário, a mais recente por último. `cwd` é a pasta onde a
    * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta. `model`/`effort`: o
    * que foi escolhido no chat desta conversa (vale ao reabrir); ausente = o da ficha. `readOnly`: conversa de revisão de tarefa, que não
-   * edita arquivos do projeto (ver `chatSpawn`); vale também ao reabrir.
+   * edita arquivos do projeto (ver `chatSpawn`); vale também ao reabrir. `consult`: conversa aberta pela consulta de um funcionário de outro projeto
+   * (ver server/consult/): só leitura da pasta do projeto, sem token, sem MCP; o carimbo diz quem perguntou e de qual projeto.
    */
-  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort; fallback?: { engine: Engine; model: string; effort?: CodexEffort }; readOnly?: boolean }[];
+  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort; fallback?: { engine: Engine; model: string; effort?: CodexEffort }; readOnly?: boolean; consult?: ConsultStamp }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1726,7 +1855,16 @@ export interface CostReview {
 /** Servidor MCP disponível num projeto (só nome e origem: a configuração pode ter segredos). */
 export interface McpServerInfo {
   name: string;
-  /** `club` = biblioteca do Claudio’s Club; `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos. */
+  /** O que a ficha guarda em `mcps`: `global:<nome>` ou `project:<nome>` (ver server/mcpAccessRefs.ts). */
+  ref: string;
+  /** Global = `~/.claude.json` (vale também no Claude Code fora do Claudio’s Club); Projeto = `.mcp.json` e o escopo local do projeto. */
+  scope: 'global' | 'project';
+  /** Projeto: o servidor está no escopo local do `~/.claude.json` (não vai para o git). */
+  outOfGit?: boolean;
+  /**
+   * @deprecated Use `scope`. Fica no tipo só até a tela trocar; o servidor só emite `user` (Global) e `project`.
+   * `club` = biblioteca do Claudio’s Club; `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos.
+   */
   source: 'club' | 'project' | 'local' | 'user';
   transport: string | null;
   /** Do último teste na biblioteca (ver server/staff/mcpTools.ts): total e quantas são de escrita. Ausente = nunca testado ou mudou desde o teste. */
@@ -1736,7 +1874,11 @@ export interface McpServerInfo {
 /** legado: só a tela atual e a leitura de fichas antigas usam (`mcpWrite`: `deny` vira `readonly`, `ask` fica `ask`). */
 export type McpWritePolicy = 'ask' | 'deny';
 
-export type McpScope = 'club' | 'user' | 'project' | 'local';
+/**
+ * Escopo de um MCP. O servidor só emite e aceita `global` e `project`; `club`, `user` e `local` são os antigos e ficam no tipo só até a
+ * tela trocar (a Global é o escopo `user` do ~/.claude.json, e `local` aparece como Projeto, com `outOfGit`).
+ */
+export type McpScope = 'global' | 'project' | /** @deprecated */ 'club' | /** @deprecated */ 'user' | /** @deprecated */ 'local';
 export type McpType = 'http' | 'sse' | 'stdio';
 
 /** MCP para a tela de biblioteca. Nunca traz valor de env/cabeçalho: só o nome e se está preenchido. */
@@ -1744,6 +1886,10 @@ export interface McpServerView {
   name: string;
   scope: McpScope;
   projectId?: string;
+  /** Projeto: vem do escopo local do ~/.claude.json (não vai para o git). */
+  outOfGit?: boolean;
+  /** Global: entrada do Claudio’s Club, com os valores no cofre (o ~/.claude.json só leva o lançador e o nome do servidor). */
+  managed?: boolean;
   type: McpType;
   url?: string;
   command?: string;
@@ -1838,6 +1984,15 @@ export const FTP_MCP_NAME = 'myco-ftp';
  * edição de arquivos está bloqueada nos dois motores (no Codex a sandbox de só leitura não aceita exceção por caminho).
  */
 export const MEMORIA_MCP_NAME = 'myco-memoria';
+
+/**
+ * MCP de git do Club (`git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pr_criar`), nos dois motores: roda fora da sandbox do Codex
+ * (onde o `.git` é só leitura e não há rede). A chave do acesso da ficha (`mcpAccess`) é este nome.
+ */
+export const GIT_MCP_NAME = 'myco-git';
+/** Ferramentas do `myco-git` só de leitura (a ficha com acesso `readonly` e a conversa de revisão veem só estas) e as de escrita. */
+export const GIT_READ_TOOLS: string[] = ['git_status', 'git_diff', 'git_log'];
+export const GIT_WRITE_TOOLS: string[] = ['git_commit', 'git_push', 'git_pr_criar'];
 
 /** MCP que leva uma pergunta ao GPT (Codex): a ferramenta aparece como `mcp__myco-gpt__perguntar_gpt`. */
 export const GPT_MCP_NAME = 'myco-gpt';
@@ -2160,6 +2315,11 @@ export interface InboxItem {
      * ao terminar (até 1500 caracteres, texto dele, puro).
      */
     noCode?: true;
+    /**
+     * O card pedia plano primeiro e entregou o plano (`Task.planWait`), e quem pediu é o usuário (ou o aviso ao gestor se perdeu): `humanAction` é 'decide'. A decisão é a rota
+     * `POST .../tasks/<id>/plan` (`{"decision": "approve"}` ou `{"decision": "reject", "reason": "…"}`). `summary`: o começo do plano (texto do funcionário, puro).
+     */
+    planWait?: true;
     summary?: string;
   };
   /**
@@ -2224,6 +2384,14 @@ export interface InboxItem {
    * de conversa (`projectId`, `projectName` e `sessionId` vêm vazios, `staffId` null, como o aviso de consumo da conta): o alvo é a própria caixa. Só na memória do servidor.
    */
   codexSandbox?: { cause: 'password-policy'; source: 'check' | 'turn'; minPasswordAgeDays: number | null; command: string; domainNote: true };
+  /**
+   * O problema deste aviso de erro já passou (ver `server/inboxResolved.ts`): ISO da primeira vez que o servidor o viu resolvido. Ausente = pendente, ou tipo sem detecção; nunca vem `null` nem `false`.
+   * Só aparece no kind 'error' de: commit automático (os arquivos da tarefa já não têm mudança no git, depois de visto fica), fila desligada (o `hooks.json` sumiu), sandbox do Codex (a duração mínima
+   * da senha passou a 0, vale só quando a causa era a política acima de 0) e teto do turno (a tarefa da conversa foi encerrada). `error:<sessão>` nunca leva: o item some sozinho quando a conversa volta.
+   * Com `resolvedAt` o item NÃO é pendência: a tela não o conta (sino, título, abas, cartão amarelo) e o mostra com a marca de finalizado, até ser ignorado (`POST /api/errors/dismiss`, a mesma rota) ou
+   * passar 24 h (o servidor o tira; o relógio fica na memória, um reinício o reinicia). Vai depois dos pendentes na lista e não vai à extensão do Chrome.
+   */
+  resolvedAt?: string;
 }
 
 export interface ContextUsage {

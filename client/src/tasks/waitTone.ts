@@ -1,4 +1,5 @@
 import type { TaskStatus } from '../../../shared/model';
+import { cardTone } from '../inbox/alertTone';
 
 /**
  * O laranja de espera (selos e textos do porquê de a tarefa não andar) é só da fila "A fazer":
@@ -6,5 +7,5 @@ import type { TaskStatus } from '../../../shared/model';
  */
 export const waitWarm = (status: TaskStatus): boolean => status === 'todo';
 
-/** Classe `task-wait` (o laranja) quando for o caso; vazia nas outras colunas, que ficam no visual neutro. */
-export const waitClass = (warm: boolean | undefined): string => (warm ? ' task-wait' : '');
+/** Classe do tom "fila que não anda" (o laranja, `CARD_TONE.queue`) quando for o caso; vazia nas outras colunas, que ficam no visual neutro. */
+export const waitClass = (warm: boolean | undefined): string => (warm ? ` ${cardTone('queue')}` : '');

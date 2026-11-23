@@ -619,20 +619,22 @@ describe('linha de parada do consumo', () => {
 });
 
 describe('MCPs', () => {
-  it('lista nomes e origem sem configuração; o local vence o do projeto', async () => {
+  it('lista nomes, ref e escopo sem configuração; o local (fora do git) vence o .mcp.json e aparece como Projeto', async () => {
     const list = await listMcpServers(projectPath, claudeJson);
     expect(list).toEqual([
-      { name: 'db', source: 'local', transport: 'stdio' },
-      { name: 'docs', source: 'project', transport: 'http' },
-      { name: 'n8n', source: 'user', transport: 'http' },
+      { name: 'db', ref: 'project:db', scope: 'project', outOfGit: true, source: 'project', transport: 'stdio' },
+      { name: 'docs', ref: 'project:docs', scope: 'project', source: 'project', transport: 'http' },
+      { name: 'n8n', ref: 'global:n8n', scope: 'global', source: 'user', transport: 'http' },
     ]);
     expect(JSON.stringify(list)).not.toContain('SEGREDO');
   });
 
-  it('monta a config só com os escolhidos', async () => {
-    const cfg = await buildMcpConfig(projectPath, ['db', 'inexistente'], claudeJson);
-    expect(Object.keys(cfg.mcpServers)).toEqual(['db']);
+  it('monta a config só com os escolhidos (por ref; ref que não existe fica de fora)', async () => {
+    const cfg = await buildMcpConfig(projectPath, ['project:db', 'project:inexistente', 'global:n8n'], claudeJson);
+    expect(Object.keys(cfg.mcpServers)).toEqual(['db', 'n8n']);
     expect(cfg.mcpServers.db).toMatchObject({ command: 'db-local' });
+    // Nome antigo (sem escopo) ainda vale: Projeto se existe lá, senão Global.
+    expect(Object.keys((await buildMcpConfig(projectPath, ['db', 'n8n'], claudeJson)).mcpServers)).toEqual(['db', 'n8n']);
   });
 });
 
@@ -682,6 +684,8 @@ describe('StaffService', () => {
     const p = r!.profile;
     expect(p.id).toMatch(/^bia-[0-9a-f]{4}$/);
     expect(p.browser).toBe(true); // usa o Chrome por padrão
+    // O nome antigo do MCP vira ref ao contratar (o `docs` está no .mcp.json do projeto).
+    expect(p.mcps).toEqual(['project:docs']);
 
     const dir = path.join(projectPath, '.myco', 'staff');
     const ficha = await fs.readFile(path.join(dir, `${p.id}.md`), 'utf8');
@@ -847,7 +851,14 @@ describe('StaffService', () => {
       const svc = service();
       const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Mcp A', autonomy: 'acceptEdits', canHire: true, mcps: ['a'], launch: false }, true))!;
       const r = (await apiHire(svc, boss.id, { roleId: dev.id, mcps: ['a', 'b'] }))!;
-      expect(r.profile.mcps).toEqual(['a']);
+      // Nome antigo vira ref (nenhum dos dois existe no projeto: Global), e o filtro do gestor vale sobre as refs.
+      expect(boss.mcps).toEqual(['global:a']);
+      expect(r.profile.mcps).toEqual(['global:a']);
+    });
+
+    it('MCP: marcar o mesmo nome na Global e no Projeto recusa (a conversa sobe um servidor por nome)', async () => {
+      const svc = service();
+      await expect(svc.hire('proj-id', { ...input, name: 'Dup Mcp', mcps: ['global:db', 'project:db'], launch: false }, true)).rejects.toThrow('marcado na Global e no Projeto');
     });
 
     it('MCP: gestor com MCP e pedido sem a chave mcps: contratado sem nenhum', async () => {

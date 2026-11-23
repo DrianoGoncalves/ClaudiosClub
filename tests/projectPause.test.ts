@@ -11,8 +11,9 @@ import { RoutineScheduler } from '../server/routines';
 import { TaskForbiddenError, TaskService } from '../server/tasks';
 import type { Engine, StaffProfile } from '../shared/model';
 
-// Pausar o projeto (t-8224a4): pausado, nada começa sozinho (fila, início que não é do dono, revisão automática, retomada das órfãs, reprovação, troca de motor, rotinas,
+// Pausar o projeto (t-8224a4): pausado, nada de execução começa sozinho (fila, início que não é do dono, retomada das órfãs, ajuste da reprovação, troca de motor, rotinas,
 // despertador/"continue"/retomada de turno e retomada do reinício); o que já roda termina o turno; as ações do dono seguem; o estado sobrevive ao reinício.
+// A revisão da entrega já feita NÃO é barrada (t-0210d5): abre, refaz, cobra e grava o veredito; só o ajuste que a reprovação manda espera.
 
 let root: string;
 beforeAll(async () => {
@@ -111,6 +112,8 @@ async function club(name: string, opts: Opts = {}) {
     busy: {} as Record<string, boolean>,
     lastText: null as string | null,
     stopped: [] as string[],
+    /** Quantos pedidos de revisão seguintes falham (limite de uso, conversa fechando). */
+    failReviews: 0,
     n: 0,
   };
   const svc = new TaskService({
@@ -118,6 +121,10 @@ async function club(name: string, opts: Opts = {}) {
     projectIds: async () => projects,
     readProfile: async (_p, id) => people(id),
     send: async (project, staffId, text, _force, override, reviewOnly) => {
+      if (reviewOnly && h.failReviews > 0) {
+        h.failReviews--;
+        throw new Error('limite de uso do revisor');
+      }
       const session = `${staffId}-${++h.n}`;
       h.opened.push({ project, staffId, text, session, override, reviewOnly });
       if (!reviewOnly) h.busy[`${project}:${staffId}`] = true;
@@ -266,25 +273,110 @@ describe.each<Engine>(['claude', 'codex'])('com o projeto pausado (funcionário 
     expect(c.works()[1]!.text).toContain('[Tarefa "B"]');
   });
 
-  it('revisão automática: a entrega fica em revisão sem pedir a revisão; ao retomar, o tick pede, uma vez', async () => {
+  it('revisão automática: a entrega que chega pausado abre a revisão (uma vez) e grava o veredito; a próxima da fila segue esperando e começa ao retomar', async () => {
     const c = await club(`revisao-${engine}`, { engine });
+    const a = await c.add('Tela', { reviewerId: 'rev-1' });
+    const b = await c.add('Outra');
+    await c.svc.start('p', a.id);
+    await c.svc.start('p', b.id); // Ana ocupada com a Tela: a Outra fica na fila
+    await c.svc.setPaused('p', true, true);
+    await c.turnEnds((await c.get(a.id)).sessionId!);
+
+    expect(c.reviews()).toHaveLength(1);
+    expect(c.reviews()[0]).toMatchObject({ reviewOnly: true });
+    expect(c.reviews()[0]!.text).toContain('[Revisão da tarefa "Tela"]');
+    expect(await c.get(a.id)).toMatchObject({ status: 'review', reviewRounds: 1, review: { staffId: 'rev-1', sessionId: c.reviews()[0]!.session } });
+    await c.svc.tick();
+    await c.svc.tick(new Date(Date.now() + 20 * MIN));
+    expect(c.reviews()).toHaveLength(1); // uma vez só
+
+    c.h.lastText = 'APROVADO\n🟢 nada a apontar';
+    await c.svc.onTurnDone(c.reviews()[0]!.session);
+    expect(await c.get(a.id)).toMatchObject({ status: 'done', review: { verdict: 'approved' } });
+    // A aprovação libera a Ana, mas o projeto segue pausado: a Outra não começa.
+    await c.svc.tick();
+    expect(c.works()).toHaveLength(1);
+    expect(await c.get(b.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+
+    await c.svc.setPaused('p', false, true);
+    await until(async () => (await c.get(b.id)).status === 'doing');
+    expect(c.works()).toHaveLength(2);
+    expect(c.reviews()).toHaveLength(1);
+  });
+
+  it('revisão automática: reprovação de entrega que chegou pausada grava o veredito, guarda o ajuste e o ajuste só vai ao retomar', async () => {
+    const c = await club(`revisao-reprova-${engine}`, { engine });
     const t = await c.add('Tela', { reviewerId: 'rev-1' });
     await c.svc.start('p', t.id);
     await c.svc.setPaused('p', true, true);
     await c.turnEnds((await c.get(t.id)).sessionId!);
-    expect(await c.get(t.id)).toMatchObject({ status: 'review' });
-    expect((await c.get(t.id)).delivery).toBeDefined();
+    expect(c.reviews()).toHaveLength(1);
+
+    c.h.lastText = 'REPROVADO\n🔴 faltou validar a entrada';
+    await c.svc.onTurnDone(c.reviews()[0]!.session);
+    const held = await c.get(t.id);
+    expect(held).toMatchObject({ status: 'review', review: { verdict: 'rejected' } });
+    expect(held.held).toHaveLength(1);
+    expect(held.held![0]).toMatchObject({ auto: true, reason: 'espera o projeto ser retomado' });
     await c.svc.tick();
-    await c.svc.tick(new Date(Date.now() + 5 * MIN));
-    expect(c.reviews()).toHaveLength(0);
+    expect(c.h.sentTo).toEqual([]);
+    expect(c.works()).toHaveLength(1);
+
+    await c.svc.setPaused('p', false, true);
+    await until(async () => c.h.sentTo.length === 1 && ((await c.get(t.id)).held ?? []).length === 0); // o ajuste sai e só depois some do guardado
+    expect(c.h.sentTo[0]!.text).toContain('faltou validar a entrada');
+  });
+
+  it('entrega que ficou sem pedido de revisão (o servidor caiu no meio): o tick a recupera mesmo pausado', async () => {
+    const c = await club(`revisao-perdida-${engine}`, { engine });
+    const t = await c.add('Tela', { reviewerId: 'rev-1' });
+    await c.svc.start('p', t.id);
+    await c.svc.setPaused('p', true, true);
+    await c.turnEnds((await c.get(t.id)).sessionId!);
+    expect(c.reviews()).toHaveLength(1);
+    // O estado em que o reinício deixou o cartão: em revisão, entregue, sem pedido (ver `reviewLost`).
+    await c.edit(t.id, (x) => {
+      delete x.review;
+      delete x.reviewRounds;
+    });
     expect((await c.get(t.id)).review).toBeUndefined();
 
-    await c.pauses.resume('p');
     await c.svc.tick();
+    expect(c.reviews()).toHaveLength(2);
+    expect(await c.get(t.id)).toMatchObject({ status: 'review', reviewRounds: 1, review: { staffId: 'rev-1', sessionId: c.reviews()[1]!.session } });
+  });
+
+  it('revisão que não começou (limite de uso do revisor): o tick refaz mesmo pausado, e a revisão abre quando o motivo passa', async () => {
+    const c = await club(`revisao-retry-${engine}`, { engine });
+    const t = await c.add('Tela', { reviewerId: 'rev-1' });
+    await c.svc.start('p', t.id);
+    await c.svc.setPaused('p', true, true);
+    c.h.failReviews = 1;
+    await c.turnEnds((await c.get(t.id)).sessionId!);
+    expect(c.reviews()).toHaveLength(0);
+    expect((await c.get(t.id)).reviewRetry).toMatchObject({ attempts: 1 });
+
+    await c.svc.tick(new Date(Date.now() + 2 * MIN));
     expect(c.reviews()).toHaveLength(1);
-    expect(await c.get(t.id)).toMatchObject({ reviewRounds: 1, review: { staffId: 'rev-1' } });
-    await c.svc.tick(new Date(Date.now() + 20 * MIN));
-    expect(c.reviews()).toHaveLength(1);
+    expect(await c.get(t.id)).toMatchObject({ status: 'review', reviewRounds: 1, review: { staffId: 'rev-1' } });
+    expect((await c.get(t.id)).reviewRetry).toBeUndefined();
+  });
+
+  it('revisor que não deu o veredito: o tick cobra uma vez mesmo pausado', async () => {
+    const c = await club(`revisao-cobra-${engine}`, { engine });
+    const t = await c.add('Tela', { reviewerId: 'rev-1' });
+    await c.svc.start('p', t.id);
+    await c.svc.setPaused('p', true, true);
+    await c.turnEnds((await c.get(t.id)).sessionId!);
+    const review = c.reviews()[0]!.session;
+    expect(c.h.sentTo).toEqual([]);
+
+    await c.svc.tick(new Date(Date.now() + 3 * MIN)); // a conversa dele parou sem resposta: marca a hora de cobrar
+    expect((await c.get(t.id)).review?.reaskAt).toBeDefined();
+    await c.svc.tick(new Date(Date.now() + 14 * MIN));
+    expect(c.h.sentTo).toHaveLength(1);
+    expect(c.h.sentTo[0]).toMatchObject({ session: review, staffId: 'rev-1' });
+    expect(c.h.sentTo[0]!.text).toContain('APROVADO ou REPROVADO');
   });
 
   it('retomada da órfã: a conversa que morreu no meio do turno só é retomada depois de retomar o projeto', async () => {

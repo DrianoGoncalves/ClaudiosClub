@@ -58,6 +58,10 @@ export default defineMessages({
     'toolbar.serverDesc':
       'O servidor é o programa do Clube dos Claudios rodando no seu computador. Parar fecha as conversas abertas (elas continuam salvas) e desliga tudo, inclusive as rotinas, até ele voltar. Reiniciar só aparece quando ele roda em segundo plano (npm run daily:start ou início automático).',
     'toolbar.serverKeywords': 'parar desligar encerrar reiniciar stop restart servidor',
+    'toolbar.stopOnTabCloseTitle': 'Parar ao fechar a aba',
+    'toolbar.stopOnTabCloseDesc':
+      'Ligado, o Clube dos Claudios para sozinho cerca de 30 segundos depois que a última aba dele fechar; recarregar a página (F5) não para. Para do mesmo jeito que o botão Parar: as conversas em andamento são interrompidas (ficam salvas) e as rotinas só voltam quando você o iniciar de novo. Desligado (padrão), fechar o navegador deixa o servidor rodando em segundo plano.',
+    'toolbar.stopOnTabCloseKeywords': 'parar fechar aba navegador segundo plano desligar sozinho automático servidor stop tab close',
     'toolbar.sysmonTitle': 'Monitor de CPU e memória',
     'toolbar.sysmonDesc':
       'Mostra, no canto superior direito, quanto da CPU e da memória (RAM) do computador está em uso, atualizado a cada 5 s. Fica vermelho a partir de 85% de CPU ou 90% de RAM. Ajuda a saber se a máquina está no limite. Vale só para este navegador.',
@@ -138,7 +142,7 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continuar sozinho limite de uso acabou voltar retomar continue conversa assinatura reset 5h 7d',
     'toolbar.autoRetryTitle': 'Retomar sozinho quando a conversa cair por falha passageira',
     'toolbar.autoRetryDesc':
-      'Se a conversa de um funcionário parar por falha passageira (API sobrecarregada, erro 5xx, limite de taxa, queda de conexão) ou o processo cair no meio do turno, ela segue sozinha: espera 30 s, 2 min e 8 min e manda uma mensagem pedindo para conferir o que já foi feito e seguir (até 3 tentativas por turno; 1 se a causa é desconhecida). Não retoma erro de login, cobrança, pedido recusado nem limite de uso (esse tem a opção própria, em Consumo), e não repete uma ação que mexia fora do projeto (deploy, push, comando em servidor): nesse caso avisa na caixa “precisa de mim”. Desligada, a conversa fica parada até você mandar mensagem.',
+      'Se a conversa de um funcionário parar por falha passageira (API sobrecarregada, erro 5xx, limite de taxa, queda de conexão) ou o processo cair no meio do turno, ela segue sozinha: espera 30 s, 2 min e 8 min e manda uma mensagem pedindo para conferir o que já foi feito e seguir (até 3 tentativas por turno; 1 se a causa é desconhecida). Não retoma erro de login, cobrança, pedido recusado nem limite de uso (esse tem a opção própria, em Consumo), e não repete uma ação que mexia fora do projeto (deploy, push, comando em servidor): nesse caso avisa na caixa “Inbox”. Desligada, a conversa fica parada até você mandar mensagem.',
     'toolbar.autoRetryKeywords': 'retomar sozinho falha passageira erro conversa caiu tentar de novo retry 529 503 sobrecarregada backoff continue automático queda processo',
     'toolbar.codexTitle': 'Usar o Codex (GPT)',
     'toolbar.codexDesc':
@@ -432,6 +436,10 @@ export default defineMessages({
     'toolbar.serverDesc':
       'The server is the Claudio’s Club program running on your computer. Stop closes open chats (they stay saved) and shuts everything down, routines included, until it is back. Restart only appears when it runs in the background (npm run daily:start or auto-start).',
     'toolbar.serverKeywords': 'stop shut down halt restart server',
+    'toolbar.stopOnTabCloseTitle': 'Stop when the tab closes',
+    'toolbar.stopOnTabCloseDesc':
+      'On, Claudio’s Club stops by itself about 30 seconds after its last tab closes; reloading the page (F5) does not stop it. It stops the same way as the Stop button: chats in progress are interrupted (they stay saved) and routines only come back when you start it again. Off (default), closing the browser leaves the server running in the background.',
+    'toolbar.stopOnTabCloseKeywords': 'stop close tab browser background shut down automatic server auto',
     'toolbar.sysmonTitle': 'CPU and memory monitor',
     'toolbar.sysmonDesc':
       'Shows, in the top-right corner, how much of the computer’s CPU and memory (RAM) is in use, refreshed every 5 s. Turns red from 85% CPU or 90% RAM. Helps you tell when the machine is at its limit. Applies to this browser only.',
@@ -510,7 +518,7 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continue on its own usage limit ran out back resume chat subscription reset 5h 7d',
     'toolbar.autoRetryTitle': 'Resume on its own when a chat drops on a temporary failure',
     'toolbar.autoRetryDesc':
-      'If an employee’s chat stops on a temporary failure (API overloaded, 5xx error, rate limit, dropped connection) or the process dies in the middle of a turn, it goes on by itself: it waits 30 s, 2 min and 8 min and sends a message asking it to check what is already done and go on (up to 3 attempts per turn; 1 if the cause is unknown). It does not resume on login, billing or refused-request errors or on a usage limit (that one has its own option, in Usage), and it does not repeat an action that touched something outside the project (deploy, push, server command): then it flags it in the “needs me” box. Off, the chat stays stopped until you send a message.',
+      'If an employee’s chat stops on a temporary failure (API overloaded, 5xx error, rate limit, dropped connection) or the process dies in the middle of a turn, it goes on by itself: it waits 30 s, 2 min and 8 min and sends a message asking it to check what is already done and go on (up to 3 attempts per turn; 1 if the cause is unknown). It does not resume on login, billing or refused-request errors or on a usage limit (that one has its own option, in Usage), and it does not repeat an action that touched something outside the project (deploy, push, server command): then it flags it in the “Inbox” box. Off, the chat stays stopped until you send a message.',
     'toolbar.autoRetryKeywords': 'resume on its own temporary failure error chat dropped try again retry 529 503 overloaded backoff continue automatic crash process',
     'toolbar.codexTitle': 'Use Codex (GPT)',
     'toolbar.codexDesc':
@@ -799,6 +807,10 @@ export default defineMessages({
     'toolbar.serverDesc':
       'El servidor es el programa del Club de los Claudios corriendo en tu computadora. Detener cierra las conversaciones abiertas (siguen guardadas) y apaga todo, rutinas incluidas, hasta que vuelva. Reiniciar solo aparece cuando corre en segundo plano (npm run daily:start o el inicio automático).',
     'toolbar.serverKeywords': 'parar apagar cerrar reiniciar stop restart servidor',
+    'toolbar.stopOnTabCloseTitle': 'Detener al cerrar la pestaña',
+    'toolbar.stopOnTabCloseDesc':
+      'Activado, el Club de los Claudios se detiene solo unos 30 segundos después de que se cierre su última pestaña; recargar la página (F5) no lo detiene. Se detiene igual que el botón Detener: las conversaciones en curso se interrumpen (siguen guardadas) y las rutinas solo vuelven cuando lo inicies de nuevo. Desactivado (predeterminado), cerrar el navegador deja el servidor corriendo en segundo plano.',
+    'toolbar.stopOnTabCloseKeywords': 'detener parar cerrar pestaña navegador segundo plano apagar automático servidor stop tab close',
     'toolbar.sysmonTitle': 'Monitor de CPU y memoria',
     'toolbar.sysmonDesc':
       'Muestra en la esquina superior derecha cuánto de la CPU y de la memoria (RAM) del computador está en uso, actualizado cada 5 s. Se pone en rojo desde 85% de CPU o 90% de RAM. Ayuda a saber si la máquina está al límite. Vale solo para este navegador.',
@@ -877,7 +889,7 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continuar solo límite de uso se acabó volver retomar continue conversación suscripción reinicio 5h 7d',
     'toolbar.autoRetryTitle': 'Reanudar solo cuando la conversación se cae por un fallo pasajero',
     'toolbar.autoRetryDesc':
-      'Si la conversación de un empleado se detiene por un fallo pasajero (API sobrecargada, error 5xx, límite de tasa, caída de conexión) o el proceso se cae en medio del turno, sigue sola: espera 30 s, 2 min y 8 min y manda un mensaje pidiendo que compruebe lo que ya se hizo y siga (hasta 3 intentos por turno; 1 si la causa es desconocida). No reanuda errores de acceso, de cobro, pedidos rechazados ni el límite de uso (ese tiene su propia opción, en Consumo), y no repite una acción que tocaba algo fuera del proyecto (deploy, push, comando en un servidor): en ese caso avisa en la caja “me necesita”. Desactivada, la conversación queda detenida hasta que mandes un mensaje.',
+      'Si la conversación de un empleado se detiene por un fallo pasajero (API sobrecargada, error 5xx, límite de tasa, caída de conexión) o el proceso se cae en medio del turno, sigue sola: espera 30 s, 2 min y 8 min y manda un mensaje pidiendo que compruebe lo que ya se hizo y siga (hasta 3 intentos por turno; 1 si la causa es desconocida). No reanuda errores de acceso, de cobro, pedidos rechazados ni el límite de uso (ese tiene su propia opción, en Consumo), y no repite una acción que tocaba algo fuera del proyecto (deploy, push, comando en un servidor): en ese caso avisa en la caja “Inbox”. Desactivada, la conversación queda detenida hasta que mandes un mensaje.',
     'toolbar.autoRetryKeywords': 'reanudar solo fallo pasajero error conversación se cayó intentar de nuevo retry 529 503 sobrecargada backoff continue automático caída proceso',
     'toolbar.codexTitle': 'Usar Codex (GPT)',
     'toolbar.codexDesc':

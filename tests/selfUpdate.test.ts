@@ -2,11 +2,14 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyUpdate, readUpdateStatus, SelfUpdater } from '../server/selfUpdate';
 
 // Um "GitHub" de mentira (repositório bare), o clone em que o Claudio’s Club roda e outro clone que publica
 // as versões (tags).
+
+// Dezenas de chamadas ao git por teste (e o beforeEach clona dois repositórios): sob carga passam dos 5 s padrão.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 let dir: string;
 let app: string;

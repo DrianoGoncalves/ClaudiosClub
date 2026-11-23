@@ -19,7 +19,7 @@ describe('waitWarm', () => {
     expect(TASK_STATUSES.filter(waitWarm)).toEqual(['todo']);
   });
   it('waitClass só põe a classe quando é laranja', () => {
-    expect(waitClass(true)).toBe(' task-wait');
+    expect(waitClass(true)).toBe(' tone-wait');
     expect(waitClass(false)).toBe('');
     expect(waitClass(undefined)).toBe('');
   });
@@ -31,20 +31,20 @@ describe('selos de espera do cartão', () => {
     ['Aguardando recursos', (warm: boolean) => createElement(ResourceWaitBadge, { wait, now: Date.parse(wait.since), warm })],
     ['Dúvida com o gestor', (warm: boolean) => createElement(DoubtBadge, { question, requestedBy: 'g', nameOf, warm })],
   ])('%s: laranja com warm, neutro sem', (_nome, render) => {
-    expect(renderToStaticMarkup(render(true))).toContain('task-wait');
-    expect(renderToStaticMarkup(render(false))).not.toContain('task-wait');
+    expect(renderToStaticMarkup(render(true))).toContain('tone-wait');
+    expect(renderToStaticMarkup(render(false))).not.toContain('tone-wait');
   });
 
   it('sem a prop warm o selo fica neutro', () => {
-    expect(renderToStaticMarkup(createElement(BlockedBadge, { blockers: [blocker] }))).not.toContain('task-wait');
+    expect(renderToStaticMarkup(createElement(BlockedBadge, { blockers: [blocker] }))).not.toContain('tone-wait');
   });
 
   it('dúvida que está com você segue amarela, em qualquer coluna', () => {
     const mine = { id: 'q1', status: 'escalated' } as TaskQuestion;
     for (const warm of [true, false]) {
       const html = renderToStaticMarkup(createElement(DoubtBadge, { question: mine, requestedBy: 'g', nameOf, warm }));
-      expect(html).toContain('is-waiting');
-      expect(html).not.toContain('task-wait');
+      expect(html).toContain('tone-action');
+      expect(html).not.toContain('tone-wait');
     }
   });
 });

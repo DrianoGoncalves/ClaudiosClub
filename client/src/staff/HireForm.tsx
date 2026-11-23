@@ -18,7 +18,8 @@ import {
 import { api, withUsageConfirm, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
-import { t, type MsgKey } from '../i18n';
+import { t } from '../i18n';
+import { worktreeWaitKey } from './worktreeWait';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProtocolBadge';
 import { rosterRows } from './agentRoles';
@@ -44,6 +45,7 @@ import { WeightFlags, type WeightCtx } from './WeightFlag';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
 import { goneSkills, skillIsGone } from './skillGone';
+import { MCP_SCOPE_LABEL, mcpsToSave, normalizeMcps, toggleMcp } from './mcpRefs';
 import { normalizeSkills, parseSkillRef, skillCatalog, SKILL_SCOPE_LABEL, templateSkills } from './skillRefs';
 import { PERSONALITIES, type Personality } from '../../../shared/personality';
 import type { RoleEntry } from '../../../shared/roles';
@@ -116,8 +118,6 @@ const TABS: Array<{ id: Tab; label: string; intro: string }> = [
   { id: 'project', label: t('detail.tabProject'), intro: t('staff.tabProjectIntro') },
 ];
 
-/** De onde vem o MCP, na lista da ficha. */
-const MCP_SOURCE_LABEL = { club: 'staff.sourceClub', user: 'staff.sourceUser', local: 'staff.sourceLocal', project: 'staff.sourceProject' } as const satisfies Record<McpServerInfo['source'], MsgKey>;
 
 export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, codexReview = false, codexBrowser = false, initial, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
@@ -238,12 +238,26 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       (list) => {
         setMcps(list);
         // Editando: ficha sem restrição (null) = todos marcados. Contratando (ou adotando): nenhum marcado.
-        setMcpOn(new Set(editing ? (editing.mcps ?? list.map((m) => m.name)) : []));
+        setMcpOn(new Set(editing ? (editing.mcps ? normalizeMcps(editing.mcps, list) : list.map((m) => m.ref)) : []));
       },
       () => setMcps([]),
     );
     api.servers(projectId).then(setServerList, () => setServerList([]));
   }, [projectId, editing]);
+
+  // Opção do projeto "um escritor por vez": null = lendo, falhou ou servidor sem a rota (o texto não afirma a espera).
+  const [singleWriter, setSingleWriter] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    setSingleWriter(null);
+    api.boardWriter(projectId).then(
+      (c) => live && typeof c?.singleWriter === 'boolean' && setSingleWriter(c.singleWriter),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
 
   // Cargos da empresa (config → Cargos). Contratando, o cargo padrão já vem preenchido.
   const [roles, setRoles] = useState<RoleEntry[] | null>(null);
@@ -321,7 +335,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   };
 
   // Lista vazia ou que não carregou não conta como "todos marcados" (senão gravaria null).
-  const allMcps = mcps !== null && mcps.length > 0 && mcps.every((m) => mcpOn.has(m.name));
+  const allMcps = mcps !== null && mcps.length > 0 && mcps.every((m) => mcpOn.has(m.ref));
 
   /** Escolher um roteiro marca os agents que ele usa e o projeto já tem; os que faltam o Claudio’s Club cria ao abrir a conversa (a lista "Quem ajuda"). */
   const pickPlaybook = (value: '' | Playbook) => {
@@ -346,7 +360,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     // Ficha que estava salva no Codex (sai sem navegador e sem MCPs) voltando ao Claude: recomeça com o padrão dele, tudo ligado.
     if (next === 'claude' && editing?.engine === 'codex') {
       setBrowser(true);
-      setMcpOn(new Set((mcps ?? []).map((m) => m.name)));
+      setMcpOn(new Set((mcps ?? []).map((m) => m.ref)));
     }
   };
 
@@ -381,13 +395,13 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       firstTask: editing?.firstTask ?? '',
       reportsTo: managers,
       autonomy,
-      // O Codex não usa agents, skills nem MCPs: a ficha dele sai sem isso (o quadro não mostra o que ele não tem). O Chrome vale, se ligado nas configurações.
+      // O Codex não usa agents nem skills: a ficha dele sai sem isso (o quadro não mostra o que ele não tem). MCPs valem nos dois motores, pelo arquivo de lançamento da conversa (abaixo). O Chrome vale, se ligado nas configurações.
       agents: codex ? [] : agents,
       skills: codex ? [] : skills,
       // Todos marcados = não restringir (a sessão também recebe os conectores da conta). No simples,
       // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado. Sem lista (vazia ou
       // falhou), editando mantém o que a ficha tinha; contratando, nenhum.
-      mcps: codex || simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : allMcps ? null : [...mcpOn],
+      mcps: simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : mcpsToSave(mcps, mcpOn),
       // Só vai se mudou (ausente mantém o salvo; `{}` limpa).
       ...accessToSend(mcpAccess, editing?.mcpAccess),
       knowledge: lines(knowledge),
@@ -769,8 +783,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             {colleagues.length === 0 && <span className="muted small">{t('staff.noColleagues')}</span>}
             {colleagues.map((m) => (
               <label key={m.id} className="check">
-                <input type="checkbox" checked={managers.includes(m.id)} onChange={() => toggle(managers, setManagers, m.id)} /> {m.name}
-                <span className="muted small"> {m.role}</span>
+                <input type="checkbox" checked={managers.includes(m.id)} onChange={() => toggle(managers, setManagers, m.id)} />
+                <span className="check-text">
+                  <span>{m.name}</span>
+                  <span className="muted small">{m.role}</span>
+                </span>
               </label>
             ))}
           </div>
@@ -796,14 +813,20 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             <div className="checks">
               {agentNames.map((a) => (
                 <label key={`a:${a}`} className="check">
-                  <input type="checkbox" checked={agents.includes(a)} onChange={() => toggle(agents, setAgents, a)} /> {a}
-                  <span className="muted small"> {t('staff.agentTag')} · {modelOf.get(a) ?? t('staff.callerModel')}</span>
+                  <input type="checkbox" checked={agents.includes(a)} onChange={() => toggle(agents, setAgents, a)} />
+                  <span className="check-text">
+                    <span>{a}</span>
+                    <span className="muted small">{t('staff.agentTag')} · {modelOf.get(a) ?? t('staff.callerModel')}</span>
+                  </span>
                 </label>
               ))}
               {skillSet.offered.map((s) => (
                 <label key={`s:${s.ref}`} className="check">
-                  <input type="checkbox" checked={skills.includes(s.ref)} onChange={() => toggle(skills, setSkills, s.ref)} /> {s.name}
-                  <span className="muted small"> {t('staff.skillTag')} · {t(SKILL_SCOPE_LABEL[s.scope])}</span>
+                  <input type="checkbox" checked={skills.includes(s.ref)} onChange={() => toggle(skills, setSkills, s.ref)} />
+                  <span className="check-text">
+                    <span>{s.name}</span>
+                    <span className="muted small">{t('staff.skillTag')} · {t(SKILL_SCOPE_LABEL[s.scope])}</span>
+                  </span>
                 </label>
               ))}
               {gone.map((ref) => {
@@ -811,8 +834,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 const parsed = parseSkillRef(ref);
                 return (
                   <label key={`gone:${ref}`} className="check">
-                    <input type="checkbox" checked={skills.includes(ref)} onChange={() => toggle(skills, setSkills, ref)} /> {parsed?.name ?? ref}
-                    <span className="muted small"> {skillSet.all.get(ref)?.synced ? t('detail.synced') : t('staff.skillTag')}{parsed && ` · ${t(SKILL_SCOPE_LABEL[parsed.scope])}`}</span>
+                    <input type="checkbox" checked={skills.includes(ref)} onChange={() => toggle(skills, setSkills, ref)} />
+                    <span className="check-text">
+                      <span>{parsed?.name ?? ref}</span>
+                      <span className="muted small">{skillSet.all.get(ref)?.synced ? t('detail.synced') : t('staff.skillTag')}{parsed && ` · ${t(SKILL_SCOPE_LABEL[parsed.scope])}`}</span>
+                    </span>
                     {skillIsGone(ref, skillSet) && <span className="badge warn">{t('staff.skillGone')}</span>}
                   </label>
                 );
@@ -821,7 +847,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             {gone.some((ref) => skillIsGone(ref, skillSet)) && <p className="muted small">{t('staff.skillGoneHint')}</p>}
           </fieldset>
         )}
+          </>
+        )}
 
+        {/* Os MCPs valem nos dois motores (o Codex recebe os da ficha pelo arquivo de lançamento da conversa). */}
         <fieldset>
           <legend>MCPs</legend>
           {mcps === null && <p className="muted small">{t('staff.loading')}</p>}
@@ -830,25 +859,22 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             <>
               <div className="checks">
                 {mcps.map((m) => {
-                  const on = mcpOn.has(m.name);
+                  const on = mcpOn.has(m.ref);
                   const level = accessOf(mcpAccess, m.name);
                   return (
-                    <div key={m.name} className={on ? 'check-server has-write' : 'check-server'}>
+                    <div key={m.ref} className={on ? 'check-server has-write' : 'check-server'}>
                       <div className="mcp-row">
                         <label className="check">
                           <input
                             type="checkbox"
                             checked={on}
                             onChange={() => {
-                              const next = new Set(mcpOn);
-                              if (next.has(m.name)) next.delete(m.name);
-                              else next.add(m.name);
-                              setMcpOn(next);
+                              setMcpOn(toggleMcp(mcpOn, m.ref));
                             }}
                           />
-                          <span>
-                            {m.name}
-                            <span className="muted small"> {t(MCP_SOURCE_LABEL[m.source])} · {t('staff.mcpWeightShort')}</span>
+                          <span className="check-text">
+                            <span>{m.name}</span>
+                            <span className="muted small">{t(MCP_SCOPE_LABEL[m.scope])}{m.outOfGit && ` · ${t('mcp.outOfGit')}`} ·{t('staff.mcpWeightShort')}</span>
                           </span>
                         </label>
                         {on && hasAccessKey(m.name) && (
@@ -866,14 +892,12 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 })}
               </div>
               <p className="muted small">{allMcps ? t('staff.mcpAllOn') : t('staff.mcpSomeOff')}</p>
-              {mcps.some((m) => mcpOn.has(m.name)) && <p className="muted small">{t('staff.mcpAccessIntro')}</p>}
+              {mcps.some((m) => mcpOn.has(m.ref)) && <p className="muted small">{t('staff.mcpAccessIntro')}</p>}
             </>
           )}
           {/* O peso por conversa aberta: o do Claude (a base) e o que o Club mesmo põe; o MCP não medido fica sem número. */}
           <WeightFlags ctx={weightCtx} ids={['claude', 'gpt', 'mcps']} />
         </fieldset>
-          </>
-        )}
 
         {/* Servidores valem nos dois motores: o Codex usa só as conexões SSH (pelo MCP myco-ssh); FTP não funciona nele. */}
         {showServers ? (
@@ -908,19 +932,22 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 return (
                   <div key={s.name} className={write ? 'check-server has-write' : 'check-server'}>
                     <label className="check">
-                      <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggleServer(s.name)} />{' '}
-                      <ProtocolBadge protocol={s.protocol} /> {s.name}
-                      <span className="muted small">
-                        {' '}
-                        {s.host}
-                        {s.remoteRoot ? ` · ${s.remoteRoot}` : ''}
+                      <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggleServer(s.name)} />
+                      <span className="check-text">
+                        <span>
+                          <ProtocolBadge protocol={s.protocol} /> {s.name}
+                        </span>
+                        <span className="muted small">
+                          {s.host}
+                          {s.remoteRoot ? ` · ${s.remoteRoot}` : ''}
+                        </span>
                       </span>
                     </label>
                     {write && (
                       <div className="check-write">
                         <label className="check">
-                          <input type="checkbox" checked={sshWrite.includes(s.name)} onChange={() => toggle(sshWrite, setSshWrite, s.name)} />{' '}
-                          {t('staff.sshWrite')}
+                          <input type="checkbox" checked={sshWrite.includes(s.name)} onChange={() => toggle(sshWrite, setSshWrite, s.name)} />
+                          <span className="check-text">{t('staff.sshWrite')}</span>
                         </label>
                         <p className="muted small">{t(codex ? 'staff.sshWriteHintCodex' : 'staff.sshWriteHint')}</p>
                         {sshWrite.includes(s.name) && !editsCode(autonomy) && (
@@ -935,8 +962,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 .filter((n) => serverList && !serverList.some((s) => s.name === n))
                 .map((n) => (
                   <label key={n} className="check">
-                    <input type="checkbox" checked onChange={() => toggleServer(n)} /> {n}
-                    <span className="muted small"> {t('office.hireServerGone')}</span>
+                    <input type="checkbox" checked onChange={() => toggleServer(n)} />
+                    <span className="check-text">
+                      <span>{n}</span>
+                      <span className="muted small">{t('office.hireServerGone')}</span>
+                    </span>
                   </label>
                 ))}
             </div>
@@ -951,7 +981,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
         <div className="check-link">
           <label className="check">
-            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {codex ? t('staff.browserLabelCodex') : t('staff.browserLabel')}
+            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
+            <span className="check-text">{codex ? t('staff.browserLabelCodex') : t('staff.browserLabel')}</span>
           </label>
           <a className="link small" href={codex ? PLAYWRIGHT_BRIDGE_URL : CHROME_EXTENSION_URL} target="_blank" rel="noopener noreferrer">
             {codex ? t('staff.installLinkCodex') : t('staff.installLink')}
@@ -1008,15 +1039,21 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
         </fieldset>
 
         <label className="check">
-          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> {t('staff.worktreeLabel')}
-          <span className="muted small">
-            {' '}
-            {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
+          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
+          <span className="check-text">
+            <span>{t('staff.worktreeLabel')}</span>
+            <span className="muted small">
+              {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
+            </span>
+            <span className="muted small worktree-wait">{t(worktreeWaitKey(worktree, singleWriter))}</span>
           </span>
         </label>
         <label className="check">
-          <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} /> {t('detail.canHire')}
-          <span className="muted small"> {t('detail.canHireHint')}</span>
+          <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} />
+          <span className="check-text">
+            <span>{t('detail.canHire')}</span>
+            <span className="muted small">{t('detail.canHireHint')}</span>
+          </span>
         </label>
         </div>
           </>

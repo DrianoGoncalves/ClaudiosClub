@@ -3,11 +3,11 @@ import type { ProjectRef } from './adapters/claude/projects';
 import { hasStaffFiles } from './staff/store';
 
 // Quais dos projetos que o Claude Code conhece entram no quadro. O Claude Code lembra de toda pasta onde
-// já rodou, e isso polui: no quadro entram só o demo, as pastas abertas pelo "Novo projeto" ou importadas
+// já rodou, e isso polui: no quadro entram só o demo antigo (se ainda existir), as pastas abertas pelo "Novo projeto" ou importadas
 // (config.json → extraProjects) e os projetos que já têm equipe (`.myco/staff`). O resto o usuário importa.
 
 export interface BoardRules {
-  /** Pastas que entram sempre (o demo e as de `extraProjects`). */
+  /** Pastas que entram sempre (o demo antigo e as de `extraProjects`). */
   pinned: () => Promise<string[]>;
   /** O projeto tem fichas de equipe? Padrão: há arquivo de ficha em `.myco/staff`. */
   hasStaff?: (dir: string) => Promise<boolean>;

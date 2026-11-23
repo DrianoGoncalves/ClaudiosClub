@@ -3,7 +3,7 @@ import { draftFrom, draftProblem, groupServers, saveBody, targetLabel, type McpS
 
 const http: McpServer = {
   name: 'n8n',
-  scope: 'user',
+  scope: 'global',
   type: 'http',
   url: 'https://n8n.exemplo.com/mcp',
   env: [],
@@ -15,7 +15,8 @@ const http: McpServer = {
 
 const stdio: McpServer = {
   name: 'db',
-  scope: 'local',
+  scope: 'project',
+  outOfGit: true,
   projectId: 'p1',
   type: 'stdio',
   command: 'npx',
@@ -26,14 +27,14 @@ const stdio: McpServer = {
 };
 
 describe('formulário de MCP: corpo do save', () => {
-  it('novo cadastro sugere o cofre do Club', () => {
-    expect(draftFrom(null).scope).toBe('club');
+  it('novo cadastro começa na Global', () => {
+    expect(draftFrom(null).scope).toBe('global');
   });
 
   it('editar sem tocar nos valores manda null (manter) e não manda removeKeys', () => {
     const body = saveBody(draftFrom(http));
     expect(body).toEqual({
-      scope: 'user',
+      scope: 'global',
       originalName: 'n8n',
       name: 'n8n',
       type: 'http',
@@ -56,7 +57,7 @@ describe('formulário de MCP: corpo do save', () => {
 
   it('argumentos mascarados só vão se o usuário pediu para trocar', () => {
     const d = draftFrom(stdio, 'p1');
-    expect(saveBody(d)).toMatchObject({ scope: 'local', projectId: 'p1', command: 'npx', env: { DB_URL: null } });
+    expect(saveBody(d)).toMatchObject({ scope: 'project', projectId: 'p1', command: 'npx', env: { DB_URL: null } });
     expect(saveBody(d)).not.toHaveProperty('args');
     d.argsTouched = true;
     d.args = '-y\n server-db \n\n--ro';
@@ -103,11 +104,11 @@ describe('formulário de MCP: validação', () => {
 });
 
 describe('lista de MCPs', () => {
-  it('agrupa por origem e mostra comando sem os argumentos ocultos', () => {
-    const g = groupServers([stdio, http, { ...http, name: 'a', scope: 'club' }]);
-    expect(g.club.map((s) => s.name)).toEqual(['a']);
-    expect(g.user.map((s) => s.name)).toEqual(['n8n']);
-    expect(g.local.map((s) => s.name)).toEqual(['db']);
+  it('agrupa em Global e Projeto (o fora do git fica no Projeto) e mostra comando sem os argumentos ocultos', () => {
+    const g = groupServers([stdio, http, { ...http, name: 'a', scope: 'project', projectId: 'p1' }]);
+    expect(g.global.map((s) => s.name)).toEqual(['n8n']);
+    expect(g.project.map((s) => s.name)).toEqual(['a', 'db']);
+    expect(Object.keys(g)).toEqual(['global', 'project']);
     expect(targetLabel(stdio)).toBe('npx …');
     expect(targetLabel({ ...stdio, argsMasked: false })).toBe('npx -y server-db');
   });

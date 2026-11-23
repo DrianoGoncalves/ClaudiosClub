@@ -172,7 +172,7 @@ export function ProjectGuide({
             <p className="muted small">{t('detail.guideNone')}</p>
             {whoPicker()}
             <p className="actions guide-actions">
-              <button className="btn-primary" onClick={() => void create()} disabled={busy !== null}>
+              <button className="btn-secondary" onClick={() => void create()} disabled={busy !== null}>
                 {busy === 'create' ? t('detail.guideCreating') : t('detail.guideCreate')}
               </button>
               {runButton('draft', t('detail.guideDraft'), t('detail.guideDraftHint'), 'btn-secondary')}

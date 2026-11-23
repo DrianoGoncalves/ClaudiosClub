@@ -51,7 +51,7 @@ describe('fallback: aviso sem os campos, lido da frase do servidor (`retryFromTe
     expect(retryFromText({ text })).toBeNull();
   });
 
-  it('desistiu depois das tentativas e não retomou por ação cortada: a frase da caixa "precisa de mim" (sem id)', () => {
+  it('desistiu depois das tentativas e não retomou por ação cortada: a frase da caixa "Inbox" (sem id)', () => {
     expect(retryFromText({ text: capText({ kind: 'retry', why: 'exhausted', attempts: 3, error: 'API sobrecarregada' }) })).toEqual({ state: 'exhausted', label: 'API sobrecarregada', attempts: 3 });
     expect(retryFromText({ text: capText({ kind: 'retry', why: 'exhausted', attempts: 1, error: 'o processo caiu sem aviso' }) })).toEqual({ state: 'exhausted', label: 'o processo caiu sem aviso', attempts: 1 });
     const action = 'git push origin "main"\nsegunda linha';
@@ -176,8 +176,8 @@ describe('desfecho: frase no chat e na caixa', () => {
   const exhausted = { state: 'exhausted', label: 'API sobrecarregada', attempts: 3 } as const;
   const cut = { state: 'cut', label: 'erro 503 da API', action: 'git push' } as const;
 
-  it('no chat diz que a caixa "precisa de mim" foi avisada; na própria caixa não repete', () => {
-    expect(retryNoticeText(exhausted, NOW, 'chat')).toBe('A conversa caiu (API sobrecarregada) e não voltou depois de 3 tentativas automáticas. Mande mensagem para seguir. Avisei na caixa “precisa de mim”.');
+  it('no chat diz que a caixa "Inbox" foi avisada; na própria caixa não repete', () => {
+    expect(retryNoticeText(exhausted, NOW, 'chat')).toBe('A conversa caiu (API sobrecarregada) e não voltou depois de 3 tentativas automáticas. Mande mensagem para seguir. Avisei na caixa “Inbox”.');
     expect(retryNoticeText(exhausted, NOW, 'inbox')).not.toContain('Avisei');
     expect(retryNoticeText({ ...exhausted, attempts: 1 }, NOW, 'inbox')).toContain('1 tentativa automática');
   });
@@ -197,7 +197,7 @@ describe('desfecho: frase no chat e na caixa', () => {
     expect(retryNoticeText({ state: 'cancelled' }, NOW)).toBe('Retomada automática cancelada.');
   });
 
-  it('o item `cap:` da caixa "precisa de mim" sai no idioma da página; outro erro fica como veio', () => {
+  it('o item `cap:` da caixa "Inbox" sai no idioma da página; outro erro fica como veio', () => {
     const summary = capText({ kind: 'retry', why: 'exhausted', attempts: 3, error: 'API sobrecarregada' });
     expect(inboxText({ kind: 'error', summary }, en)).toBe('The chat dropped (API overloaded) and did not come back after 3 automatic attempts. Send a message to continue.');
     expect(inboxText({ kind: 'error', summary: 'Erro qualquer' }, en)).toBe('Erro qualquer');
@@ -261,7 +261,7 @@ describe('selo "Retomando em X" no cartão (Task.retry)', () => {
   it('é selo da fila, sem o laranja de A fazer; no detalhe ganha a frase inteira', () => {
     const card = renderToStaticMarkup(createElement(RetryBadge, { retry: retry(), now: NOW }));
     expect(card).toContain('class="task-queue task-retry small"');
-    expect(card).not.toContain('task-wait');
+    expect(card).not.toContain('tone-wait');
     expect(card).not.toContain('<span class="muted small">'); // a frase inteira fica no title do selo
     const detail = renderToStaticMarkup(createElement(RetryBadge, { retry: retry(), now: NOW, withHint: true }));
     expect(detail).toContain('<span class="muted small">A conversa caiu');

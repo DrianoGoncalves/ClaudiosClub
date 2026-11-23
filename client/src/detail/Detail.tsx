@@ -21,12 +21,14 @@ import { alertError, api, ApiError, isPairingError, type GithubSkillStatus, type
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
+import { pendingOf } from '../inbox/resolved';
 import type { MoreTab } from '../chat/ChatView';
 import type { ChatFocus } from '../chat/chatFocus';
 import { MoreTabs } from '../chat/MoreTabs';
 import { agentBrief, presetDrift, roleTag } from '../staff/agentRoles';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import type { StaffFormTab } from '../staff/HireForm';
+import { TeamTemplateApply } from '../staff/TeamTemplatePicker';
 import { ModelObsoleteNote } from '../staff/ModelObsoleteNote';
 import { StaffHistory } from '../staff/StaffHistory';
 import { TeamFile } from '../staff/TeamFile';
@@ -34,6 +36,7 @@ import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkIm
 import { Attachments } from './Attachments';
 import { type ArchivedConversations, isConversationArchived, splitArchived } from './conversationArchive';
 import { type ConversationTitles, conversationTitle, manualTitle, titleToSave } from './conversationTitle';
+import { ConsultSection } from '../consult/ConsultSection';
 import { ProjectGuide } from './ProjectGuide';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
@@ -44,15 +47,18 @@ import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent,
 import { isLoss, RANKING_PERIODS, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon, TasksIcon, UserPlusIcon } from '../icons';
-import { PausedTag, PauseButton } from '../tasks/ProjectPauseBar';
+import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon } from '../icons';
+import { PausedTag } from '../tasks/ProjectPauseBar';
+import { OpenTerminalButton } from './OpenTerminalButton';
+import { employeeBarPlan, PlanBar, projectBarPlan, useArchiveAction } from './PanelBars';
+import { ActionBar } from '../lib/ActionBar';
 import { closeConversation, runClose } from '../chat/closeConversation';
+import { clearFreshDraft } from '../chat/draftStore';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 import { GithubInstall } from '../skills/GithubInstall';
 import { GithubBadges, GithubOrigin } from '../skills/GithubOrigin';
 import { SkillManage } from './SkillManage';
 import { skillRef } from './skillAccess';
-import { askConfirm } from '../lib/dialogStore';
 
 // A conversa (com o markdown e o remark) carrega ao abrir o painel do funcionário, não no pacote inicial.
 const ChatView = lazy(() => import('../chat/ChatView').then((m) => ({ default: m.ChatView })));
@@ -66,53 +72,6 @@ const ARCHIVED_OPTION = '__archived__';
 const BACK_OPTION = '__back__';
 const OLD_OPTION = '__old__';
 const NO_ARCHIVED: ArchivedConversations = {};
-
-function ArchiveButton({
-  archived,
-  onArchive,
-  what,
-  restoreLabel = t('detail.unarchive'),
-  iconOnly = false,
-  confirm = false,
-}: {
-  archived: boolean;
-  onArchive: (v: boolean) => Promise<void>;
-  what: string;
-  restoreLabel?: string;
-  /** Só o ícone (com o texto no title e no aria-label). */
-  iconOnly?: boolean;
-  /** Pede confirmação antes de arquivar (desarquivar não pergunta) e pinta o botão de vermelho. */
-  confirm?: boolean;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const click = async () => {
-    if (confirm && !archived && !(await askConfirm(t('detail.archiveConfirm', { what })))) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await onArchive(!archived);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <>
-      <button
-        className={['btn-secondary', iconOnly && 'btn-icon', confirm && !archived && 'is-danger'].filter(Boolean).join(' ')}
-        onClick={click}
-        disabled={busy}
-        aria-label={iconOnly ? (archived ? restoreLabel : t('detail.archive')) : undefined}
-        title={archived ? t('detail.showOnBoard', { what }) : t('detail.hideFromBoard', { what })}
-      >
-        {iconOnly ? archived ? <ArchiveRestoreIcon /> : <ArchiveIcon /> : archived ? restoreLabel : t('detail.archive')}
-      </button>
-      {error && <span className="error">{error}</span>}
-    </>
-  );
-}
 
 export function EmployeePanel(props: {
   session: Session | null;
@@ -239,6 +198,8 @@ export function EmployeePanel(props: {
     const l = id !== current ? props.live?.find((x) => x.sessionId === id) : undefined;
     return !!l && idleUnseen(seen, l);
   };
+  // Conversas com pergunta ou ação da caixa esperando: o select as destaca (a aberta também, para o "⚠" não sumir ao escolher).
+  const needsYou = new Set(pendingOf(props.inbox ?? []).map((i) => i.sessionId).filter(Boolean));
   // Sem ficha, a lista é a própria conversa: dá para abrir uma nova (a pesada fica no quadro) e voltar a ela.
   const listed = props.conversations?.length
     ? props.conversations
@@ -273,6 +234,7 @@ export function EmployeePanel(props: {
   const [convBusy, setConvBusy] = useState(false);
   // Uma conversa nova, sem sessão ainda: o chat abre vazio.
   const startFresh = () => {
+    if (project) clearFreshDraft(project.id, staff?.id ?? null); // o texto da nova conversa abandonada não passa para esta
     setFresh(true);
     setFreshId(null);
     setFreshN((n) => n + 1);
@@ -476,7 +438,7 @@ export function EmployeePanel(props: {
             {byDay(inArchive ? archivedList : active).map((g) => (
               <optgroup key={g.label} label={g.label}>
                 {g.items.map(({ c }) => {
-                  const o = conversationOption(c, !!liveOf(c.id)?.alive, unread(c.id));
+                  const o = conversationOption(c, !!liveOf(c.id)?.alive, unread(c.id), needsYou.has(c.id));
                   return (
                     <option key={c.id} value={c.id} className={o.className}>
                       {o.label}
@@ -604,6 +566,22 @@ export function EmployeePanel(props: {
       )}
     </>
   );
+  const archive = useArchiveAction({
+    archived: props.archived,
+    onArchive: props.onArchive,
+    what: t('detail.whatEmployee'),
+    label: t('detail.archiveEmployee'),
+    restoreLabel: t('detail.unarchiveEmployee'),
+    confirm: true,
+  });
+  const employeePlan = employeeBarPlan({
+    hasSheet: !!staff,
+    archived: props.archived,
+    temporary: !!staff?.temporary,
+    canHire: !!staff?.canHire,
+    onHireSub: props.onHireSub,
+    archive: archive.action,
+  });
   const actions = (
     <>
       {staff && project && (
@@ -612,19 +590,7 @@ export function EmployeePanel(props: {
           <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />
         </>
       )}
-      <p className="actions">
-        {staff?.canHire && (
-          <button className="btn-secondary" onClick={props.onHireSub}>
-            {t('detail.hireSub')}
-          </button>
-        )}
-        <ArchiveButton
-          archived={props.archived}
-          onArchive={props.onArchive}
-          what={t('detail.whatEmployee')}
-          restoreLabel={staff?.temporary ? t('detail.restore') : t('detail.unarchive')}
-        />
-      </p>
+      <PlanBar plan={employeePlan} error={archive.error} />
       {!props.archived && <p className="muted small">{t('detail.archiveClosesNote')}</p>}
       {staff && project && (
         <StaffHistory key={staff.updatedAt} projectId={project.id} staffId={staff.id} onRestored={(profile) => props.onRestored?.(profile)} />
@@ -654,7 +620,7 @@ export function EmployeePanel(props: {
           <>
             <p className="muted small">{t(props.ghost ? 'detail.ghostAbout' : 'detail.outsideMyco')}</p>
             <div className="chat-more-row">
-              <button type="button" className="btn-secondary" onClick={() => props.onEdit(current)} title={t('detail.giveProfileTitle')}>
+              <button type="button" className="btn-primary" onClick={() => props.onEdit(current)} title={t('detail.giveProfileTitle')}>
                 {t('detail.giveProfile')}
               </button>
             </div>
@@ -755,7 +721,7 @@ export function EmployeePanel(props: {
         moreTabs={tabs}
         focus={props.focus}
         onFocusDone={props.onFocusDone}
-        awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
+        awaiting={!!opened && !!props.inbox && pendingOf(props.inbox).some((i) => i.sessionId === opened)}
         inbox={props.inbox}
         onDismissAlert={props.onDismissAlert}
         onInboxChanged={props.onInboxChanged}
@@ -787,12 +753,12 @@ function conversationLabel(c: { title: string | null; updatedAt: string | null }
 /**
  * A linha da conversa no seletor. Ativa (processo aberto): "· ativa" no fim, que vale em todo navegador (o celular
  * ignora a cor da opção). Inativa: classe `is-idle`, que o CSS põe em `--muted`; escolher uma inativa a reabre quando você manda mensagem.
- * "● " = ativa e parada que você ainda não viu.
+ * "● " = ativa e parada que você ainda não viu. "⚠ " + `is-needs` (amarelo) = pergunta ou ação da caixa esperando você.
  */
-export function conversationOption(c: { title: string | null; updatedAt: string | null }, alive: boolean, unread: boolean): { label: string; className: string } {
+export function conversationOption(c: { title: string | null; updatedAt: string | null }, alive: boolean, unread: boolean, needs = false): { label: string; className: string } {
   return {
-    label: `${unread ? '● ' : ''}${conversationLabel(c)}${alive ? ` · ${t('detail.convActive')}` : ''}`,
-    className: alive ? 'is-active' : 'is-idle',
+    label: `${needs ? '⚠ ' : unread ? '● ' : ''}${conversationLabel(c)}${alive ? ` · ${t('detail.convActive')}` : ''}`,
+    className: `${alive ? 'is-active' : 'is-idle'}${needs ? ' is-needs' : ''}`,
   };
 }
 
@@ -854,21 +820,16 @@ function TempNotice(props: {
       ) : (
         <span>{t('detail.tempNotice', { hirer, date: formatDate(staff.createdAt), days: TEMP_IDLE_DAYS })}</span>
       )}
-      <span className="temp-notice-actions">
-        {props.archived && (
-          <button className="btn-secondary" disabled={busy} onClick={() => void run(() => props.onArchive(false))} title={t('detail.restoreTempTitle')}>
-            {t('detail.restore')}
-          </button>
-        )}
-        <button
-          className="btn-primary"
-          disabled={busy}
-          onClick={() => void run(() => api.keepStaff(props.projectId, staff.id))}
-          title={t('detail.keepStaffTitle')}
-        >
-          {t('detail.keepStaff')}
-        </button>
-      </span>
+      <ActionBar
+        label={t('detail.tabActions')}
+        moreLabel={t('chat.moreOptions')}
+        secondary={
+          props.archived
+            ? [{ id: 'restore', label: t('detail.restoreEmployee'), title: t('detail.restoreTempTitle'), disabled: busy, onClick: () => void run(() => props.onArchive(false)) }]
+            : []
+        }
+        primary={{ id: 'keep', label: t('detail.keepStaff'), title: t('detail.keepStaffTitle'), disabled: busy, onClick: () => void run(() => api.keepStaff(props.projectId, staff.id)) }}
+      />
       {error && <span className="error">{error}</span>}
     </div>
   );
@@ -907,6 +868,7 @@ export function ProjectPanel({
   onEditAgent,
   onSkillsChanged,
   onTasks,
+  onSchedules,
   onTogglePause,
   onFiles,
   onOpenFile,
@@ -929,6 +891,8 @@ export function ProjectPanel({
   onEditAgent?: (name: string) => void;
   /** Abre o quadro de tarefas do projeto. */
   onTasks?: () => void;
+  /** Abre os agendamentos (despertadores e rotinas) do projeto. */
+  onSchedules?: () => void;
   /** Pausa o projeto (ou o retoma, se `tasks.paused`): o App pergunta ao pausar e relê o resumo. */
   onTogglePause?: () => void;
   /** Abre os arquivos do projeto (árvore + editor). */
@@ -965,10 +929,22 @@ export function ProjectPanel({
   const [error, setError] = useState<string | null>(null);
   // A aba fica ao trocar de projeto (o painel não remonta), como a do ⋯ do funcionário.
   const [tab, setTab] = useState<ProjectTab>('project');
+  // Aviso do modelo de equipe (409: já havia equipe): vive aqui porque a chamada some quando a equipe é relida.
+  const [teamNotice, setTeamNotice] = useState<string | null>(null);
+
+  const archive = useArchiveAction({
+    archived,
+    onArchive,
+    what: t('detail.whatProjectAndStaff'),
+    label: t('detail.archiveProject'),
+    restoreLabel: t('detail.unarchiveProject'),
+    confirm: true,
+  });
 
   useEffect(() => {
     setDetail(null);
     setError(null);
+    setTeamNotice(null);
     api.project(id).then(setDetail, (e: Error) => setError(e.message));
   }, [id]);
 
@@ -979,6 +955,18 @@ export function ProjectPanel({
   const liveById = new Map(live.map((s) => [s.sessionId, s]));
   const sessions = detail.sessions.map((s) => ({ ...s, live: liveById.get(s.id) ?? s.live }));
   const { project } = detail;
+  const barPlan = projectBarPlan({
+    exists: project.exists,
+    archived,
+    paused: !!tasks?.paused,
+    onHire,
+    onTasks,
+    onSchedules,
+    onFiles,
+    onTogglePause,
+    terminal: <OpenTerminalButton projectId={project.id} />,
+    archive: archive.action,
+  });
 
   // Depois de salvar, o detalhe é relido: o cabeçalho mostra o apelido novo.
   const rename = async (name: string | null) => {
@@ -1000,26 +988,6 @@ export function ProjectPanel({
           {!project.exists && <span className="badge warn">{t('detail.folderMissing')}</span>}
           {archived && <span className="badge dim">{t('detail.archived')}</span>}
           {tasks?.paused && <PausedTag pause={tasks.paused} now={Date.now()} className="badge is-paused" />}
-        </p>
-        <p className="actions">
-          {project.exists && (
-            <button className="btn-primary btn-with-icon" onClick={onHire} title={t('detail.hireEmployee')}>
-              <UserPlusIcon />
-              {t('detail.employee')}
-            </button>
-          )}
-          {project.exists && onTasks && (
-            <button className="btn-secondary btn-icon" onClick={onTasks} aria-label={t('detail.tasks')} title={t('detail.boardTasksTitle')}>
-              <TasksIcon size={16} />
-            </button>
-          )}
-          {project.exists && onFiles && (
-            <button className="btn-secondary btn-icon" onClick={onFiles} aria-label={t('files.open')} title={t('files.openTitle')}>
-              <FolderIcon size={16} />
-            </button>
-          )}
-          {project.exists && onTogglePause && <PauseButton paused={!!tasks?.paused} iconOnly onClick={onTogglePause} />}
-          <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} iconOnly confirm />
         </p>
         {tasks && (
           <p className="muted small">
@@ -1056,12 +1024,27 @@ export function ProjectPanel({
               />
             )}
             {project.exists && !project.worktreeOf && office}
+            {project.exists && !project.worktreeOf && <ConsultSection projectId={project.id} projectName={project.name} team={team.map((r) => ({ id: r.staff.id, name: r.staff.name }))} />}
             {project.exists && <Attachments projectId={project.id} />}
           </>
         )}
         {tab === 'team' && (
           <>
             <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
+            {project.exists && !project.worktreeOf && team.length === 0 && (
+              <TeamTemplateApply
+                projectId={project.id}
+                onApplied={(notice) => {
+                  setTeamNotice(notice ?? null);
+                  onTeamImported?.();
+                }}
+              />
+            )}
+            {team.length > 0 && teamNotice && (
+              <p className="error small" role="alert">
+                {teamNotice}
+              </p>
+            )}
             <SessionList
               sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
               costs={cost?.sessions ?? {}}
@@ -1103,6 +1086,7 @@ export function ProjectPanel({
           </>
         )}
       </div>
+      <PlanBar plan={barPlan} error={archive.error} />
     </>
   );
 }

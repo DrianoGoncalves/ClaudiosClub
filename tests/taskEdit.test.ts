@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile, Task } from '../shared/model';
 import { resolveCaller, SessionTokens, type Engine } from '../server/callers';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
-import { TaskConflictError, TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
+import { TaskBusyError, TaskConflictError, TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
 
 // Funcionário edita pela API a tarefa que ainda não começou (Aguardar e A fazer): quem pediu ou o gestor de quem faz, com o token da conversa.
 
@@ -20,7 +20,7 @@ afterAll(async () => {
 const person = (id: string, name: string, reportsTo: string[] = []) => ({ id, name, autonomy: 'acceptEdits', worktree: false, servers: [], reportsTo }) as unknown as StaffProfile;
 
 /** Gio é o gestor; Ana e Bia reportam a ele; Dev é de fora (não reporta a ninguém) e Rui é revisor. */
-function board(dirName: string) {
+function board(dirName: string, opts: { lockDeadlineMs?: number } = {}) {
   const dir = path.join(root, dirName);
   const file = path.join(dir, '.myco', 'tasks.json');
   const people: Record<string, StaffProfile> = {
@@ -58,6 +58,8 @@ function board(dirName: string) {
     notify: async () => {},
     apiUrl: 'http://127.0.0.1:4848',
     sandboxApiUrl: 'http://127.0.0.2:4848',
+    log: () => {},
+    ...opts,
   });
   const finish = async (session: string) => {
     const who = working.get(session) ?? 'ana-1';
@@ -101,6 +103,90 @@ function board(dirName: string) {
   const tryEdit = (id: string, caller: ReturnType<typeof callerOf>, body: unknown) => svc.editFrom('p', id, caller, body).then((t) => t, (e: unknown) => e);
   return { svc, dir, file, sent, working, hooks, finish, make, list, get, settle, raw, edit, as: callerOf, tryEdit };
 }
+
+describe('editar tarefa pela API: sempre responde no prazo', () => {
+  /** Ana com a vez presa (abrindo a conversa de outra tarefa) e o card de Gio em A fazer, na fila dela e bloqueado por outra tarefa: o caso da t-6e58a1. */
+  async function busyAna(dirName: string, opts: { lockDeadlineMs: number }) {
+    const b = board(dirName, opts);
+    const blocker = await b.make('Bloqueadora', { by: null, staff: 'bia-1' });
+    const t = await b.make('Edição presa', { blockedBy: [blocker.id], description: 'texto original' });
+    await b.svc.start('p', t.id); // bloqueada: vai para A fazer, na fila
+    expect(await b.get(t.id)).toMatchObject({ status: 'todo', blockedBy: [blocker.id] });
+    const other = await b.make('Outra da Ana', { by: null });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const reached = new Promise<void>((r) => (entered = r));
+    b.hooks.beforeSend = async () => {
+      entered();
+      await gate;
+    };
+    const starting = b.svc.start('p', other.id);
+    await reached; // a vez da Ana está com a abertura da conversa da outra: tudo dela espera
+    return { b, t, release, starting };
+  }
+
+  it('a vez do responsável presa: a edição (só description, em A fazer com blockedBy) responde 503 no prazo, sem gravar', async () => {
+    const { b, t, release, starting } = await busyAna('prazo-vez', { lockDeadlineMs: 80 });
+    const at = Date.now();
+    const err = await b.tryEdit(t.id, b.as('gio-1'), { description: 'texto novo' });
+    expect(err).toBeInstanceOf(TaskBusyError);
+    expect(err).toBeInstanceOf(TaskError);
+    expect((err as Error).message).toContain('NÃO foi gravada');
+    expect(Date.now() - at).toBeLessThan(1500);
+    expect(await b.get(t.id)).toMatchObject({ status: 'todo', description: 'texto original' });
+    release();
+    await starting;
+    await b.settle();
+    // A vez que chegou depois não grava a edição já recusada.
+    const after = await b.get(t.id);
+    expect(after.description).toBe('texto original');
+    expect(after.history.some((h) => h.note?.startsWith('editada por'))).toBe(false);
+    // Livre, a mesma edição passa.
+    const out = (await b.svc.editFrom('p', t.id, b.as('gio-1'), { description: 'texto novo' })) as Task;
+    expect(out).toMatchObject({ status: 'todo', description: 'texto novo' });
+  });
+
+  it('a vez chega dentro do prazo: a edição grava e responde normalmente', async () => {
+    const { b, t, release, starting } = await busyAna('prazo-cabe', { lockDeadlineMs: 3000 });
+    const editing = b.tryEdit(t.id, b.as('gio-1'), { description: 'texto novo' });
+    await b.settle();
+    release();
+    await starting;
+    expect(await editing).toMatchObject({ status: 'todo', description: 'texto novo' });
+    expect((await b.get(t.id)).description).toBe('texto novo');
+  });
+
+  it('o prazo passa antes da gravação (a ficha demora), com a vez livre: recusa e não grava', async () => {
+    const b = board('prazo-ficha', { lockDeadlineMs: 60 });
+    const t = await b.make('Relatório', { description: 'texto original' });
+    b.hooks.onProfile = async (id) => {
+      if (id !== 'gio-1') return;
+      b.hooks.onProfile = undefined;
+      await new Promise((r) => setTimeout(r, 200));
+    };
+    expect(await b.tryEdit(t.id, b.as('gio-1'), { description: 'texto novo' })).toBeInstanceOf(TaskBusyError);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(await b.get(t.id)).toMatchObject({ description: 'texto original' });
+  });
+
+  it('o prazo passa com a gravação já decidida: a resposta espera por ela, grava e devolve 200 (a edição que grava sempre responde)', async () => {
+    const b = board('prazo-gravando', { lockDeadlineMs: 60 });
+    const t = await b.make('Relatório', { description: 'texto original' });
+    const rename = fs.rename.bind(fs);
+    const slow = vi.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      await new Promise((r) => setTimeout(r, 250));
+      return rename(...args);
+    });
+    try {
+      const out = await b.tryEdit(t.id, b.as('gio-1'), { description: 'texto novo' });
+      expect(out).toMatchObject({ description: 'texto novo' });
+    } finally {
+      slow.mockRestore();
+    }
+    expect((await b.get(t.id)).description).toBe('texto novo');
+  });
+});
 
 describe('editar tarefa pela API: quem pode', () => {
   it('quem pediu edita em Aguardar e em A fazer: troca os campos, não muda a coluna nem a fila, e deixa nota no histórico', async () => {
@@ -485,6 +571,7 @@ describe('a rota e a ficha', () => {
       expect(md, motor).toContain('a resposta é 409');
       expect(md, motor).toContain('(senão 403)');
       expect(md, motor).toContain('edite a tarefa em vez de criar outra com blockedBy');
+      expect(md, motor).toContain('503 é a vez de quem faz a tarefa ocupada e NADA foi gravado');
     }
     // Sem equipe, sem a seção (e sem a linha).
     expect(renderFicha(profile(), { ...ctx('http://127.0.0.1:4848'), team: [] })).not.toContain('edite a tarefa em vez de criar outra');

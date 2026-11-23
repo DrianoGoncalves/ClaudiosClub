@@ -7,6 +7,7 @@ import type {
   AccountUsage,
   AnyConnection,
   BrowserStatus,
+  ConsultStamp,
   EngineOverride,
   FtpConnection,
   LaunchResult,
@@ -42,24 +43,27 @@ import { readUsage } from '../usage';
 import { atMostAutonomy } from '../taskFallback';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { isClosed, TEMP_IDLE_DAYS } from '../../shared/model';
+import { BUILTIN_ROLES, type RoleTemplate } from '../../shared/roles';
 import { codexModelOrNull, codexProfileArgs, sandboxOfAutonomy, type CodexSpawn } from '../chat/codexArgs';
 import type { CodexEnvStatus } from '../codexEnv';
 import { CapabilityError, type CodexCapability } from '../engineCapability';
 import { AGENT_PRESETS, PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import type { CodexModelsResult } from '../codexModels';
 import { readCodexThread } from '../chat/codexProcess';
-import { buildClaudeArgs, capAutonomy } from './ficha';
+import { buildClaudeArgs, buildClaudeConsultArgs, capAutonomy } from './ficha';
 import { mcpAccessOfInput, mergeMcpAccess } from './mcpAccess';
-import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
+import { greeting, prepareCodexRun, prepareConsultRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { attachThreadId, recordSession, type NewRegisteredSession } from '../sessionsRegistry';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
-import { listMcpServers } from './mcp';
+import { convertMcps, duplicateMcpNames, isMcpRef } from '../mcpAccessRefs';
+import { knownMcpNames, listMcpServers } from './mcp';
 import { readSeal, sealViolation, writeSeal } from './seal';
 import {
   archiveVersion,
   createProfile,
   ensureMemory,
   fichaFile,
+  hasStaffFiles,
   listProjectStaff,
   listVersions,
   memoryDir,
@@ -85,6 +89,7 @@ import {
   writeAtomic,
 } from './store';
 import { buildTeamExport, planTeamImport, type TeamFile } from './teamExport';
+import { parseTemplateBody } from './teamTemplate';
 
 /** Uma ficha na lista de todas as empresas (para copiar). Só estes campos: nada de memória, regras ou servidores. */
 export interface StaffDirectoryPerson {
@@ -107,21 +112,31 @@ export interface StaffDirectoryPerson {
 /** Conflito com o estado atual (ex.: a conversa do funcionário está trabalhando): 409 na rota. */
 export class StaffBusyError extends StaffError {}
 
+/** O projeto já tem funcionário: o modelo de equipe nunca soma a uma equipe que existe (dois orquestradores). 409 com `code` na rota. */
+export class StaffTeamExistsError extends StaffBusyError {
+  readonly code = 'team-exists';
+  constructor() {
+    super('este projeto já tem funcionários: o modelo de equipe só vale para um projeto sem equipe');
+  }
+}
+
+/** A vez de aplicar modelo de equipe num projeto (a fila de `withProfileLock`, que só usa o caminho: nenhum arquivo com este nome é criado). */
+const TEAM_TEMPLATE_LOCK = '_modelo-de-equipe';
+
+/** Uma pessoa criada por um modelo de equipe, como a rota devolve. */
+export interface TeamTemplateStaff {
+  id: string;
+  name: string;
+  role: string;
+  reportsTo: string[];
+}
+
 /** O que um cargo preenche na ficha quando o pedido não traz a chave. canHire, servidores e navegador seguem as regras do hire. */
 const ROLE_FIELDS = ['role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'autonomy', 'playbook', 'worktree', 'skills'] as const;
 
-/**
- * Com `roleId`, o cargo entra antes da validação: o que o pedido trouxe (inclusive null ou vazio) ganha do cargo.
- * Cargo que não existe é erro (não se contrata um cargo adivinhado).
- */
-async function withRole(body: unknown): Promise<unknown> {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
-  const raw = body as Record<string, unknown>;
-  if (raw.roleId === undefined || raw.roleId === null) return body;
-  const id = String(raw.roleId);
-  const role = (await listRoles()).find((r) => r.id === id);
-  if (!role) throw new StaffError(`cargo não encontrado: ${id}`);
-  const fromRole: Record<(typeof ROLE_FIELDS)[number], unknown> = {
+/** Os campos da ficha que o cargo preenche (ROLE_FIELDS), no formato do pedido de contratação. */
+function roleFieldsOf(role: RoleTemplate): Record<(typeof ROLE_FIELDS)[number], unknown> {
+  return {
     role: role.role,
     mission: role.mission,
     rules: role.rules,
@@ -134,6 +149,20 @@ async function withRole(body: unknown): Promise<unknown> {
     // Skills Globais do cargo (nome sem escopo) entram marcadas como Globais; o pedido que traz `skills` ganha.
     skills: role.skills?.map((n) => `global:${n}`),
   };
+}
+
+/**
+ * Com `roleId`, o cargo entra antes da validação: o que o pedido trouxe (inclusive null ou vazio) ganha do cargo.
+ * Cargo que não existe é erro (não se contrata um cargo adivinhado).
+ */
+async function withRole(body: unknown): Promise<unknown> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const raw = body as Record<string, unknown>;
+  if (raw.roleId === undefined || raw.roleId === null) return body;
+  const id = String(raw.roleId);
+  const role = (await listRoles()).find((r) => r.id === id);
+  if (!role) throw new StaffError(`cargo não encontrado: ${id}`);
+  const fromRole = roleFieldsOf(role);
   const filled = Object.fromEntries(ROLE_FIELDS.filter((k) => !(k in raw) && fromRole[k] !== undefined).map((k) => [k, fromRole[k]]));
   return { ...filled, ...raw };
 }
@@ -253,6 +282,8 @@ export interface StaffServiceOptions {
    * Não espera e não derruba o salvar. Sem ele, nada é conferido.
    */
   onCodexProfile?: () => void;
+  /** Os projetos que o dono liberou este funcionário a consultar (server/consult/), para a seção Consulta da ficha. Sem ele (ou vazio), a ficha não tem a seção. */
+  consultTargets?: (projectId: string, staffId: string) => Promise<Array<{ projectId: string; projectName: string }>>;
   /** Aviso no log do servidor (padrão console.warn). */
   log?: (line: string) => void;
 }
@@ -368,6 +399,7 @@ export class StaffService {
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
     input.skills = await this.skillRefsOf(project, input.skills);
+    input.mcps = await this.mcpRefsOf(project, input.mcps);
     if (!bodyHasMcps) input.mcps = [];
     // Ficha nova sem `engine` é do Claude: o secundário não pode ser o mesmo motor, e servidor não vai ao secundário Codex.
     // FTP não vai ao Codex (o projeto diz quais são as conexões FTP).
@@ -392,7 +424,7 @@ export class StaffService {
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
       if (hirer.mcps !== null) {
         // Nem MCP que o gestor não usa (se o gestor tem todos, `null`, o pedido vale como veio).
-        const allowed = hirer.mcps;
+        const allowed = (await this.mcpRefsOf(project, hirer.mcps)) ?? [];
         input.mcps = (input.mcps ?? allowed).filter((n) => allowed.includes(n));
       }
       // Quem tem gestor no Codex nasce no Codex (o padrão), com a autonomia dele no máximo e sem servidores nem Chrome. Pedindo
@@ -532,7 +564,7 @@ export class StaffService {
       autonomy: src.autonomy,
       agents: src.agents,
       skills: await this.skillRefsOf(target, src.skills),
-      mcps: src.mcps ?? [], // "todos" da origem não são os MCPs deste projeto; a lista explícita segue
+      mcps: (await this.mcpRefsOf(target, src.mcps)) ?? [], // "todos" da origem não são os MCPs deste projeto; a lista explícita segue
       // O acesso aos MCPs segue junto (pelo nome): copiar não afrouxa.
       ...(src.mcpAccess && { mcpAccess: src.mcpAccess }),
       knowledge: src.knowledge,
@@ -606,7 +638,7 @@ export class StaffService {
     if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
     const project = await this.project(projectId);
     if (!project) return null;
-    const localMcps = ((await this.listMcp(projectId)) ?? []).map((m) => m.name);
+    const localMcps = ((await this.listMcp(projectId)) ?? []).map((m) => m.ref);
     const globalDir = this.opts.globalSkillsDir ?? path.join(defaultLocations().home, 'skills');
     // Conflito com a Global (outro conteúdo) recusa aqui, antes de gravar qualquer coisa.
     const plan = await planTeamImport(body, { globalDir, localMcps });
@@ -643,6 +675,57 @@ export class StaffService {
       throw err;
     }
     return { created, warnings: plan.warnings };
+  }
+
+  /**
+   * Aplica um modelo de equipe (shared/teamTemplates.ts) a um projeto sem nenhum funcionário (só pelo Claudio’s Club): cria as fichas, de cargos
+   * prontos de shared/roles.ts, e a hierarquia (`reportsTo`), nada mais. Nenhuma tarefa, nenhuma conversa e nenhum gasto de cota: as fichas
+   * nascem como na contratação sem `launch`, sem servidores nem Chrome e sem MCPs. Qualquer ficha no projeto (até de quem foi encerrado ou
+   * arquivado) recusa com 409 (`StaffTeamExistsError`): o modelo nunca soma a uma equipe que existe. Tudo ou nada: se algo falhar no meio,
+   * o que já foi criado sai de volta. Duas chamadas juntas esperam a vez: a segunda encontra a equipe da primeira e leva 409.
+   */
+  async applyTeamTemplate(projectId: string, body: unknown, fromBrowser: boolean): Promise<{ templateId: string; staff: TeamTemplateStaff[] } | null> {
+    if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const template = parseTemplateBody(body);
+    const project = await this.project(projectId);
+    if (!project) return null;
+    return withProfileLock(project.path, TEAM_TEMPLATE_LOCK, async () => {
+      if (await hasStaffFiles(project.path)) throw new StaffTeamExistsError();
+      const created: StaffProfile[] = [];
+      const ids = new Map<string, string>();
+      // Um milissegundo entre cada uma: a lista ordena pela data, então a equipe sai na ordem do modelo (o orquestrador primeiro).
+      const base = Date.now();
+      try {
+        for (const [i, m] of template.members.entries()) {
+          const role = BUILTIN_ROLES.find((r) => r.id === m.roleId);
+          if (!role) throw new Error(`cargo pronto ${m.roleId} não existe (modelo ${template.id})`);
+          const input = StaffInputSchema.parse({
+            ...roleFieldsOf(role),
+            name: m.name,
+            reportsTo: m.reportsTo.map((key) => ids.get(key)!),
+            canHire: !!role.canHire,
+            mcps: [],
+            servers: [],
+            browser: false,
+          });
+          input.mcpAccess = mcpAccessOfInput(input);
+          assertProfileRules({ ...input, sshWrite: [] }, []);
+          const profile = await createProfile(project.path, project.id, input, new Date(base + i));
+          created.push(profile);
+          ids.set(m.key, profile.id);
+          await this.seal(project, profile);
+          await ensureMemory(project.path, profile);
+        }
+        // As fichas depois de todas criadas: a do orquestrador já lista a equipe dele.
+        for (const profile of created) await writeFicha(profile, await this.context(project, profile));
+      } catch (err) {
+        for (const p of created) {
+          for (const file of [profileFile(project.path, p.id), fichaFile(project.path, p.id), memoryFile(project.path, p.id)]) await fs.rm(file, { force: true }).catch(() => undefined);
+        }
+        throw err;
+      }
+      return { templateId: template.id, staff: created.map((p) => ({ id: p.id, name: p.name, role: p.role, reportsTo: p.reportsTo })) };
+    });
   }
 
   /**
@@ -712,6 +795,7 @@ export class StaffService {
     delete fields.mcpPolicy;
     delete fields.mcpWrite;
     fields.skills = await this.skillRefsOf(project, fields.skills);
+    fields.mcps = await this.mcpRefsOf(project, fields.mcps);
     if (fields.reportsTo.includes(staffId)) throw new StaffError('um funcionário não pode reportar a si mesmo');
     await this.managers(project.path, fields.reportsTo);
     if (await this.wouldCycle(project.path, staffId, fields.reportsTo)) {
@@ -1194,9 +1278,17 @@ export class StaffService {
     engineOverride?: EngineOverride,
     /** Conversa de revisão de tarefa: sem ferramentas de edição (Claude) nem sandbox de escrita (Codex); só a memória da ficha, pelo MCP. Gravada na conversa: reabrir mantém. */
     reviewOnly = false,
-  ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn } | null> {
+    /** Conversa de consulta de outro projeto (server/consult/): perfil só leitura próprio, sem token, sem MCP (ver `consultSpawn`). Gravada na conversa: reabrir mantém. */
+    consultOpen?: ConsultStamp,
+  ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn; consult?: ConsultStamp } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
+    // Consulta: o perfil vem do pedido na abertura e da entrada da sessão ao reabrir (um carimbo estragado vira vazio, nunca "sessão comum"; ver `readConsultStamp`).
+    // Duplicar (`forkFrom`) também olha a conversa de origem: a cópia de uma consulta não pode virar uma conversa comum.
+    const ref = forkFrom ?? sessionId;
+    const known = ref && staffId ? (await readProfile(project.path, staffId).catch(() => null))?.sessions.find((x) => x.id === ref) : undefined;
+    const consult = consultOpen ?? known?.consult;
+    if (consult && staffId) return this.consultSpawn(project, projectId, staffId, sessionId, consult, !!forkFrom);
     if (!staffId) {
       if (forkFrom) {
         const id = randomUUID();
@@ -1280,6 +1372,7 @@ export class StaffService {
         readOnlyPaths: codexRun.readOnlyPaths,
         sshMcp: codexRun.sshMcp,
         memoriaMcp: codexRun.memoriaMcp,
+        gitMcp: codexRun.gitMcp,
         ...(readOnly && { readOnly: true }),
         chromeMcp: codexRun.chromeMcp,
         cleanMcp: codexRun.cleanMcp,
@@ -1303,6 +1396,89 @@ export class StaffService {
     }
     const args = buildClaudeArgs(effective, { ...run!, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }), ...(readOnly && { readOnly: true }) });
     return { sessionId: id, cwd, args, ...chosen };
+  }
+
+  /**
+   * A conversa de CONSULTA de outro projeto (server/consult/), nos dois motores. Só lê a pasta DO PROJETO (nunca a worktree da ficha, e sem pasta extra): o Claude abre com `--tools Read,Grep,Glob`,
+   * modo `default` (a leitura fora da pasta vira pedido de permissão, que o Club nega na hora), sem MCP, sem agents e sem hook; o Codex, com `read-only`, sem rede (nem a API do Club), sem MCP, sem agents e
+   * com as negações da consulta (ver `CodexConsultPolicy`). Nos dois, a ficha é a compacta (`consultSystemPrompt`, sem `writeFicha`: o `.md` real e a memória não são tocados) e a conversa não recebe
+   * token (ver `ChatManager.ensure`). A entrada da sessão guarda o carimbo (`consult`) e `readOnly`: reabrir e retomar mantêm o perfil.
+   */
+  private async consultSpawn(
+    project: Project,
+    projectId: string,
+    staffId: string,
+    sessionId: string | null,
+    stamp: ConsultStamp,
+    fork: boolean,
+  ): Promise<{ sessionId: string; cwd: string; args: string[]; engine?: 'claude' | 'codex'; codex?: CodexSpawn; consult: ConsultStamp } | null> {
+    if (fork) throw new StaffError('uma conversa de consulta não se duplica');
+    const found = await readProfile(project.path, staffId);
+    if (!found) return null;
+    const profile: StaffProfile = { ...found, projectId };
+    const resume = !!sessionId;
+    const id = resume ? sessionId! : randomUUID();
+    const codex = engineOf(profile) === 'codex';
+    await this.guardSeal(project, profile);
+    if (codex) await this.assertCodexUsable();
+    assertProfileRules(profile, await ftpNames(project.path, this.opts.vault));
+    const ctx = await this.context(project, profile, false);
+    const cwd = project.path;
+    const inside = (dir: string, file: string) => {
+      const rel = path.relative(dir, file);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    };
+    // As pastas dos OUTROS projetos (as que contêm o projeto, ou estão dentro dele, ficam de fora: negar a pasta-mãe negaria o próprio projeto).
+    const otherProjects = (await this.adapter.listProjects())
+      .filter((p) => p.exists && !p.worktreeOf && p.id !== project.id && !inside(project.path, p.path) && !inside(p.path, project.path))
+      .map((p) => p.path);
+    const run = await prepareConsultRun(profile, ctx, id, { otherProjects, engine: codex ? 'codex' : 'claude' });
+    if (!resume) {
+      const now = new Date().toISOString();
+      await withProfileLock(project.path, staffId, async () => {
+        const fresh = (await readProfile(project.path, staffId)) ?? profile;
+        await saveProfile(project.path, { ...fresh, projectId, sessions: [...fresh.sessions, { id, startedAt: now, cwd, readOnly: true, consult: stamp }], updatedAt: now });
+      });
+      await this.registerLaunch({ sessionId: id, engine: codex ? 'codex' : 'claude', projectPath: project.path, cwd, staffId });
+    }
+    const model = profile.model ?? profile.lastModel ?? null;
+    const effective: StaffProfile = { ...profile, model, effort: profile.effort ?? profile.lastEffort ?? null };
+    if (codex) {
+      const threadFile = path.join(ctx.runDir, id, 'codex-thread.json');
+      const spawn: CodexSpawn = {
+        // `manual` (leitura): o modo mostrado e a sandbox dizem a mesma coisa; o que garante é `consult` (buildCodexArgs não olha a autonomia).
+        autonomy: 'manual',
+        model: codexModelOrNull(effective.model),
+        effort: effective.effort,
+        instructions: run.instructions,
+        writableRoots: [],
+        readOnlyPaths: [],
+        sshMcp: null,
+        memoriaMcp: null,
+        gitMcp: null,
+        readOnly: true,
+        consult: { otherProjects },
+        chromeMcp: null,
+        cleanMcp: null,
+        extraMcps: [],
+        mcpSnapshotFile: null,
+        agents: [],
+        heavyGuard: null,
+        secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
+        threadId: resume ? await readCodexThread(threadFile) : null,
+        threadFile,
+        onThread: (threadId) => {
+          const file = this.opts.sessionsFile;
+          if (file) void attachThreadId(id, threadId, file).catch((err) => this.warnRegistry(id, err));
+        },
+        mycoUrl: ctx.mycoUrl,
+        // Consulta não pesquisa na web, qualquer que seja a configuração.
+        internetAccess: async () => false,
+      };
+      return { sessionId: id, cwd, args: [], engine: 'codex', codex: spawn, consult: stamp };
+    }
+    const args = buildClaudeConsultArgs(effective, { sessionId: id, resume, systemPromptFile: run.systemPromptFile, mcpConfigPath: run.mcpConfigPath, deny: run.deny });
+    return { sessionId: id, cwd, args, consult: stamp };
   }
 
   /**
@@ -1450,6 +1626,7 @@ export class StaffService {
       const inWorktree = worktree ? await listSkillDirs(path.join(worktree.path, '.claude', 'skills')) : [];
       await this.convertOpenedSkills(project, profile, { ...sources, projectSkills: [...sources.projectSkills, ...inWorktree] });
     }
+    await this.convertOpenedMcps(project, profile);
     return {
       company: config.companyName,
       // O workspace do projeto (aba do quadro) entra na ficha como contexto (cliente, área…).
@@ -1482,7 +1659,48 @@ export class StaffService {
         .filter((s) => s.id !== profile.id && s.reportsTo.includes(profile.id) && !s.ended)
         .map((s) => ({ id: s.id, name: s.name, role: s.role, mission: s.mission, ...(s.temporary && { temporary: true }) })),
       ...(roles && { roles }),
+      // A seção Consulta da ficha: só com vínculo liberado a ele (o dono ligou, pela tela); sem vínculo ou sem a leitura, a ficha sai como antes.
+      ...(await this.consultFicha(project, profile)),
     };
+  }
+
+  /**
+   * Nomes antigos (sem escopo) de MCP viram refs ao salvar (contratar, editar, copiar): Projeto se existe lá, senão Global (ver resolveLegacyMcp).
+   * `null` (todos) não muda. Se não der para ler os MCPs, recusa: converter no escuro mandaria um nome do projeto para a Global. O mesmo nome
+   * na Global e no Projeto também recusa: a conversa sobe um servidor por nome.
+   */
+  private async mcpRefsOf(project: Project, mcps: string[] | null): Promise<string[] | null> {
+    if (mcps === null) return null;
+    let out = mcps;
+    if (mcps.some((m) => !isMcpRef(m))) {
+      const known = await knownMcpNames(project.path, this.opts.claudeConfigFile).catch(() => {
+        throw new StaffError('não consegui ler os MCPs agora: tente de novo');
+      });
+      out = convertMcps(mcps, known).mcps ?? [];
+    }
+    const dup = duplicateMcpNames(out);
+    if (dup.length) throw new StaffError(`MCP ${dup.join(', ')}: marcado na Global e no Projeto; marque só um (a conversa sobe um servidor por nome)`);
+    return out;
+  }
+
+  /**
+   * A ficha aberta numa conversa, com nome antigo de MCP (ainda não migrada): converte e grava só o que mudou. Sem conseguir ler os MCPs, deixa
+   * como está (o lançamento entende o nome antigo do mesmo jeito, ver loadedOf). Lê a ficha do disco de novo para não regravar por cima de uma
+   * edição mais nova; o `profile` de quem chama também recebe as refs.
+   */
+  private async convertOpenedMcps(project: Project, profile: StaffProfile): Promise<void> {
+    if (!profile.mcps?.some((m) => !isMcpRef(m))) return;
+    const known = await knownMcpNames(project.path, this.opts.claudeConfigFile).catch(() => null);
+    if (!known) return;
+    const fresh = await readProfile(project.path, profile.id);
+    if (fresh?.mcps?.some((m) => !isMcpRef(m))) await saveProfile(project.path, { ...fresh, mcps: convertMcps(fresh.mcps, known).mcps });
+    profile.mcps = convertMcps(profile.mcps, known).mcps;
+  }
+
+  /** Os projetos que o dono liberou a `profile` consultar, para a ficha (ver `FichaContext.consult`). Falha na leitura: sem a seção. */
+  private async consultFicha(project: Project, profile: StaffProfile): Promise<Pick<LaunchContext, 'consult'>> {
+    const targets = await this.opts.consultTargets?.(project.id, profile.id).catch(() => []);
+    return targets?.length ? { consult: { targets } } : {};
   }
 
   /**
@@ -1515,6 +1733,13 @@ export class StaffService {
     const fresh = await readProfile(project.path, profile.id);
     if (fresh && fresh.skills.some((s) => !isSkillRef(s))) await saveProfile(project.path, { ...fresh, skills: convertSkills(fresh.skills, knownNamesOf(sources)).skills });
     profile.skills = converted;
+  }
+
+  /** A conversa está na ficha de alguém deste projeto? Vale também a de worktree do mesmo projeto, cujo transcript fica em outra pasta. */
+  async ownsSession(projectId: string, sessionId: string): Promise<boolean> {
+    const project = await this.project(projectId);
+    if (!project) return false;
+    return (await listProjectStaff(project.path, project.id)).some((s) => s.sessions.some((x) => x.id === sessionId));
   }
 
   /**

@@ -18,6 +18,8 @@ export const GPT_MCP_CORE_BUNDLE = path.join(ROOT, 'dist', 'gpt-mcp-core.mjs');
 export const SSH_MCP_BUNDLE = path.join(ROOT, 'dist', 'ssh-mcp.mjs');
 /** MCP da memória da própria ficha (server/staff/memoriaMcp.ts acha o pacote aqui). */
 export const MEMORIA_MCP_BUNDLE = path.join(ROOT, 'dist', 'memoria-mcp.mjs');
+/** MCP de git (server/staff/gitMcp.ts acha o pacote aqui; o launch o copia para a pasta da conversa). */
+export const GIT_MCP_BUNDLE = path.join(ROOT, 'dist', 'git-mcp.mjs');
 /** Proxy preguiçoso do MCP do navegador limpo (server/navegadorMcp.ts acha o pacote aqui). */
 export const NAVEGADOR_MCP_BUNDLE = path.join(ROOT, 'dist', 'navegador-mcp.mjs');
 /** Lançador dos MCPs da biblioteca (server/staff/mcpLaunch.ts acha o pacote aqui). */
@@ -46,8 +48,11 @@ export function bundleInputs(out: string): string[] | null {
   }
 }
 
-/** Gera o pacote de `entry` (relativo à raiz) em `out`. Síncrono: não deixa um processo do esbuild aberto. */
-export async function bundle(entry: string, out: string): Promise<void> {
+/**
+ * Gera o pacote de `entry` (relativo à raiz) em `out`. Síncrono: não deixa um processo do esbuild aberto. `inline`: as dependências entram no
+ * pacote (o do MCP de git é COPIADO para a pasta da conversa, onde não há node_modules para achá-las).
+ */
+export async function bundle(entry: string, out: string, o: { inline?: boolean } = {}): Promise<void> {
   const { buildSync } = await import('esbuild');
   const result = buildSync({
     absWorkingDir: ROOT,
@@ -57,7 +62,7 @@ export async function bundle(entry: string, out: string): Promise<void> {
     platform: 'node',
     format: 'esm',
     target: 'node22',
-    packages: 'external',
+    packages: o.inline ? 'bundle' : 'external',
     metafile: true,
     logLevel: 'warning',
   });
@@ -72,6 +77,7 @@ export async function bundleAll(): Promise<void> {
   await bundle('server/staff/gptMcp.ts', GPT_MCP_CORE_BUNDLE);
   await bundle('server/ssh-mcp.ts', SSH_MCP_BUNDLE);
   await bundle('server/memoria-mcp.ts', MEMORIA_MCP_BUNDLE);
+  await bundle('server/git-mcp.ts', GIT_MCP_BUNDLE, { inline: true });
   await bundle('server/mcp-launch.ts', MCP_LAUNCH_BUNDLE);
   await bundle('server/navegador-mcp.ts', NAVEGADOR_MCP_BUNDLE);
 }

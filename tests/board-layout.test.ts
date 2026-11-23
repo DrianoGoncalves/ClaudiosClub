@@ -645,6 +645,27 @@ describe('buildGraph', () => {
     expect(proj(graph([]), 'p:a')?.awaiting).toBe(0);
   });
 
+  it('selo "precisa de você": funcionário e projeto levam `needs` (tom action da caixa), nulo sem item; aviso que não é decisão não conta', () => {
+    const b = board();
+    b.staff = [staffProfile('ana', ['s-a1'])];
+    const plan: InboxItem = { id: 'plan:s-a1', kind: 'plan', projectId: 'a', projectName: 'a', sessionId: 's-a1', staffId: 'ana', name: 'ANA', summary: 'plano', at: null };
+    const stuck: InboxItem = {
+      id: 'stuck:t1', kind: 'stuck', projectId: 'a', projectName: 'a', sessionId: '', staffId: 'ana', name: 'ANA', summary: 'parada', at: null,
+      stuck: { taskId: 't1', taskTitle: 'T1', reason: 'r', selfHeals: false, humanAction: 'review', since: '2026-10-29T10:00:00.000Z' },
+    };
+    const error: InboxItem = { ...plan, id: 'error:s-a1', kind: 'error' };
+    const data = (inbox: InboxItem[]) => {
+      const nodes = buildGraph(b, { inbox }).nodes;
+      const emp = nodes.find((n) => n.id === 'h:a:ana');
+      const proj = nodes.find((n) => n.id === 'p:a');
+      return { emp: emp?.type === 'employee' ? emp.data.needs : undefined, proj: proj?.type === 'project' ? proj.data.needs : undefined };
+    };
+    expect(data([])).toEqual({ emp: null, proj: null });
+    expect(data([error])).toEqual({ emp: null, proj: null });
+    // A tarefa parada tem o staffId do responsável: o selo dele a conta (o cartão amarelo, não: ver o teste abaixo).
+    expect(data([plan, stuck])).toEqual({ emp: { count: 2, reasons: ['plan', 'stuck'] }, proj: { count: 2, reasons: ['plan', 'stuck'] } });
+  });
+
   it('tarefa bloqueada na caixa não pinta o cartão do dono da tarefa: não há conversa esperando você', () => {
     const b = board();
     b.staff = [staffProfile('ana', ['s-a1'])];

@@ -9,7 +9,7 @@ import { agentNotes, PlanImpasseNote } from '../client/src/staff/PlanImpasseNote
 
 const READ = ['Read', 'Grep', 'Glob'];
 const EDIT = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'PowerShell'];
-const mcp = (name: string, tools?: McpServerInfo['tools']): McpServerInfo => ({ name, source: 'club', transport: 'stdio', ...(tools && { tools }) });
+const mcp = (name: string, tools?: McpServerInfo['tools']): McpServerInfo => ({ name, ref: `global:${name}`, scope: 'global', source: 'user', transport: 'stdio', ...(tools && { tools }) });
 
 const ctx = (over: Partial<PlanImpasseCtx> = {}): PlanImpasseCtx => ({
   autonomy: 'plan',
@@ -98,14 +98,14 @@ describe('impasse "Só planeja" × agent que edita', () => {
 
   it('Codex: a lista de agents e os MCPs não valem (a ficha sai sem eles); o roteiro vale, na mesma sandbox só leitura', () => {
     const agentFiles = [{ name: 'executor', tools: EDIT }];
-    expect(planImpasse(ctx({ engine: 'codex', agents: ['executor'], agentFiles, mcps: [mcp('x')], mcpOn: new Set(['x']) }))).toBeNull();
+    expect(planImpasse(ctx({ engine: 'codex', agents: ['executor'], agentFiles, mcps: [mcp('x')], mcpOn: new Set(['global:x']) }))).toBeNull();
     expect(planImpasse(ctx({ engine: 'codex', playbook: 'plan-big-execute-small' }))).toEqual({ agents: ['executor', 'executor-rapido'], playbookAgents: ['executor', 'executor-rapido'], mcps: [], browser: false });
   });
 });
 
 describe('impasse "Só planeja" × MCP Livre', () => {
   const list = [mcp('github'), mcp('lido', { total: 4, write: 0 }), mcp('grava', { total: 6, write: 2 }), mcp('fechado'), mcp('desmarcado')];
-  const on = new Set(['github', 'lido', 'grava', 'fechado']);
+  const on = new Set(['global:github', 'global:lido', 'global:grava', 'global:fechado']);
 
   it('Livre (o padrão, sem chave no mapa) e marcado: entra; o testado sem ferramenta de escrita não tem o que travar', () => {
     expect(planImpasse(ctx({ mcps: list, mcpOn: on }))?.mcps).toEqual(['github', 'grava', 'fechado']);
@@ -123,7 +123,7 @@ describe('impasse "Só planeja" × MCP Livre', () => {
   });
 
   it('agent e MCP juntos: os dois vêm no mesmo aviso', () => {
-    expect(planImpasse(ctx({ agents: ['executor'], mcps: list, mcpOn: new Set(['github']) }))).toEqual({ agents: ['executor'], playbookAgents: [], mcps: ['github'], browser: false });
+    expect(planImpasse(ctx({ agents: ['executor'], mcps: list, mcpOn: new Set(['global:github']) }))).toEqual({ agents: ['executor'], playbookAgents: [], mcps: ['github'], browser: false });
   });
 });
 

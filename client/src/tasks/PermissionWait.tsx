@@ -1,7 +1,7 @@
 import type { InboxItem, PermissionWait, Task } from '../../../shared/model';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
-import { waitClass } from './waitTone';
+import { cardTone } from '../inbox/alertTone';
 
 // A conversa da tarefa espera VOCÊ responder um pedido de permissão (`Task.permissionWait`, derivado do processo no servidor).
 // Passados 15 min o servidor marca `stuck` e a tarefa conta como parada. O motivo em pt-BR que ele monta (`stuckState`) não vai na listagem:
@@ -48,13 +48,13 @@ export function permissionTarget(task: Pick<Task, 'id' | 'staffId' | 'sessionId'
 }
 
 /**
- * Selo do cartão (família do "na fila"): sempre laranja, porque aqui o laranja é "precisa de você" e a espera só existe em Fazendo, onde o resto da fila é neutro.
+ * Selo do cartão (família do "na fila"): sempre amarelo (tom owner, o mesmo de permission na caixa): a permissão espera o dono decidir.
  * Parada (`is-stuck`): borda grossa e fundo mais forte, além da palavra "Parada" no texto.
  */
 export function PermissionWaitBadge({ text }: { text: PermissionText | null }) {
   if (!text) return null;
   return (
-    <span className={`task-queue task-permission${waitClass(true)}${text.stuck ? ' is-stuck' : ''} small`} title={text.hint}>
+    <span className={`task-queue task-permission ${cardTone('owner')}${text.stuck ? ' is-stuck' : ''} small`} title={text.hint}>
       {text.head}
     </span>
   );
@@ -64,24 +64,19 @@ export function PermissionWaitBadge({ text }: { text: PermissionText | null }) {
 export function PermissionGo({ onOpen }: { onOpen?: () => void }) {
   if (!onOpen) return null;
   return (
-    <button className="btn-secondary task-perm-go" onClick={onOpen} title={t('tasks.permOpenTitle')}>
+    <button className="btn-primary task-perm-go" onClick={onOpen} title={t('tasks.permOpenTitle')}>
       {t('tasks.permOpen')}
     </button>
   );
 }
 
-/** Bloco do topo do detalhe: o que espera, a regra e o botão que abre o cartão do pedido no chat. */
-export function PermissionWaitBlock({ text, onOpen }: { text: PermissionText | null; onOpen?: () => void }) {
+/** Cartão do pedido no detalhe: o que espera e a regra. O botão que abre o cartão do pedido no chat fica no rodapé fixo do painel. */
+export function PermissionWaitBlock({ text }: { text: PermissionText | null }) {
   if (!text) return null;
   return (
     <div className={`task-perm${text.stuck ? ' is-stuck' : ''}`}>
       <b>{text.head}</b>
       <p className="small">{text.hint}</p>
-      {onOpen && (
-        <button className="btn-primary" onClick={onOpen} title={t('tasks.permOpenTitle')}>
-          {t('tasks.permOpen')}
-        </button>
-      )}
     </div>
   );
 }

@@ -56,7 +56,7 @@ O símbolo e o texto dizem o estado; a cor só reforça. Valem para o histórico
 
 Antes de salvar, a prévia mostra "Roda … Próximas: …". Se não houver execução futura, avisa para conferir as datas.
 
-**A cada N minutos** aceita 5, 10, 15, 20 ou 30 (os que dividem a hora certinho) e roda sempre nos mesmos minutos de cada hora: de 30 em 30 é :00 e :30, e não "30 minutos depois de salvar". **A cada N horas** aceita de 1 a 12 e roda no minuto 0, contando da meia-noite (de 2 em 2 horas: 00:00, 02:00, 04:00…; de 5 em 5: 00:00, 05:00, 10:00, 15:00, 20:00 e de novo 00:00). Por dentro as duas são um cron (`*/N * * * *` e `0 */N * * *`), então rotinas antigas com esse cron abrem direto nessas opções ao **Editar**.
+**A cada N minutos** aceita 5, 6, 10, 12, 15, 20 ou 30 (os que dividem a hora certinho) e roda sempre nos mesmos minutos de cada hora: de 30 em 30 é :00 e :30, e não "30 minutos depois de salvar". **A cada N horas** aceita de 1 a 12 e roda no minuto 0, contando da meia-noite (de 2 em 2 horas: 00:00, 02:00, 04:00…; de 5 em 5: 00:00, 05:00, 10:00, 15:00, 20:00 e de novo 00:00). Por dentro as duas são um cron (`*/N * * * *` e `0 */N * * *`), então rotinas antigas com esse cron abrem direto nessas opções ao **Editar**.
 
 Cron tem 5 campos: minuto, hora, dia do mês, mês e dia da semana. Ex.: `*/30 * * * *` = a cada 30 minutos; `0 8 * * 1-5` = dias úteis às 08:00. Um cron de passo que não repete de N em N (por exemplo `*/45 * * * *`, que roda no minuto 0 e no 45 de cada hora, ou `0 */13 * * *`) abre no Cron (avançado), com o texto que estava, e um aviso curto; confira as "Próximas" antes de salvar.
 
@@ -111,6 +111,8 @@ Quando uma tarefa troca de motor (ver 06), o despertador e o "continue" da conve
 
 Abra pelo botão **Arquivos** no painel do projeto ("Ver e editar os arquivos do projeto"). O título é "Arquivos de {projeto}".
 
+Para o terminal, o painel do projeto tem o botão **Abrir terminal** (ícone de janela com `>_`, "Abrir um terminal na pasta do projeto"): abre um terminal do computador onde o Claudio’s Club roda, já dentro da pasta do projeto. Só funciona pela tela do Club e em computador com tela (Windows e Linux; no Mac, abra o terminal à mão). Sem tela, sem terminal instalado ou com a pasta apagada, aparece um aviso ao lado do botão.
+
 - À esquerda, a árvore. Clique numa pasta para abrir; clique num arquivo para editar.
 - À direita, o editor.
 - **Salvar** (ou Ctrl+S) grava o arquivo. Nada é salvo sozinho.
@@ -133,8 +135,9 @@ Abra pelo botão **Arquivos** no painel do projeto ("Ver e editar os arquivos do
 
 ### Limites e casos especiais
 
-- Arquivo de segredo aparece com cadeado e fica oculto: "Arquivo de segredo: Por padrão, esses dados estão ocultos. Para visualizar clique aqui."
-- **clique aqui** mostra o texto do segredo, só para leitura: não tem **Salvar** e nada é gravado. **Ocultar** ou abrir outro arquivo esconde de novo (o texto não fica guardado na tela). Só vale na tela do Claudio’s Club, num navegador pareado: funcionário (agente) pela API não consegue ler segredo. `.git`, `node_modules` e as outras pastas escondidas continuam fechadas. Os limites de 1 MB e de binário valem também aqui.
+- Arquivo de segredo (`.env`, chaves) aparece com cadeado, e o Club nunca mostra o conteúdo: "Arquivo de segredo: o Club não mostra o conteúdo. Para abrir no editor de texto do seu computador, clique aqui."
+- **clique aqui** abre o arquivo **fora do Club**, no editor de texto do computador onde o Claudio’s Club roda (Bloco de Notas no Windows, TextEdit no Mac, o editor gráfico de `VISUAL` ou `EDITOR` no Linux). O texto não passa pela tela do Club e não há como mostrá-lo nem ocultá-lo aqui; troque o valor e salve no seu editor. Só vale na tela do Claudio’s Club, num navegador pareado: funcionário (agente) pela API não abre segredo. O mesmo acontece com o botão **Corrigir** do aviso de segredo no chat (ver `03-chat.md`). `.git`, `node_modules` e as outras pastas escondidas continuam fechadas.
+- Se o arquivo não abrir, a tela diz por quê, em linguagem simples: o Club não está neste computador (a página foi aberta de outra máquina: abra o arquivo no seu editor), roda sem tela, o computador não tem editor de texto com janela configurado (Linux: defina `VISUAL` ou `EDITOR` com um editor gráfico, como `gedit`, e reinicie o Club), o arquivo mudou enquanto abria, não existe mais ou o sistema não conseguiu abrir o editor.
 - Para editar, o limite é 1 MB. Acima disso: "Arquivo grande demais para editar aqui (mais de 1 MB)."
 - Arquivo binário não edita como texto. Imagem só aparece para ver, até 10 MB.
 - Conflito: se o arquivo mudou no disco (por exemplo, um funcionário editou), nada é sobrescrito. Escolha **Recarregar do disco** ou **Manter o meu e salvar por cima**.
@@ -158,7 +161,7 @@ No quadro, o selo do projeto mostra **{n} sem commit** (ou **limpo**). Clique no
 
 | Sintoma | O que fazer |
 | --- | --- |
-| Arquivo não abre | Segredo fica oculto até você clicar em **clique aqui**. Passou de 1 MB ou é binário: ver os limites acima. |
+| Arquivo não abre | Segredo nunca aparece no Club: **clique aqui** o abre no editor de texto do seu computador. Passou de 1 MB ou é binário: ver os limites acima. |
 | "Erro ao salvar" | Clique em **Tentar de novo**. |
 | Aparece o aviso de conflito | Escolha **Recarregar do disco** para ver a versão do disco, ou **Manter o meu e salvar por cima**. |
 | "Não deu para cancelar" | Tente de novo. Se a linha sumir da lista, o agendamento já aconteceu ou foi cancelado. |

@@ -4,6 +4,7 @@
 import app from './app';
 import board from './board';
 import chat from './chat';
+import consult from './consult';
 import detail from './detail';
 import extension from './extension';
 import files from './files';
@@ -25,11 +26,12 @@ export const LOCALES: { id: Locale; label: string }[] = [
 ];
 
 const STORAGE_KEY = 'myco.locale';
-const AREAS = [app, board, chat, detail, extension, files, office, schedules, settingsSimple, skillgh, staff, tasks, toolbar];
+const AREAS = [app, board, chat, consult, detail, extension, files, office, schedules, settingsSimple, skillgh, staff, tasks, toolbar];
 
 type Messages = (typeof app)['pt-BR'] &
   (typeof board)['pt-BR'] &
   (typeof chat)['pt-BR'] &
+  (typeof consult)['pt-BR'] &
   (typeof detail)['pt-BR'] &
   (typeof extension)['pt-BR'] &
   (typeof files)['pt-BR'] &

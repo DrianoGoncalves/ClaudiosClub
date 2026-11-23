@@ -56,9 +56,9 @@ O quadro mostra só **trabalho de código**: um card é uma entrega em arquivos 
 - A **posição na fila** ("2º na fila de Beakman") não é aviso: fica no visual padrão, sem laranja, em qualquer coluna.
 - O "Esperando: …" some quando a tarefa de que ela depende é aprovada pelo revisor (mesmo que ainda falte mesclar a worktree): sobra só a posição na fila. A tarefa só começa quando a dependência fica **Finalizada**.
 - Se a conversa parar no meio do trabalho (por exemplo, o servidor reiniciou), o Club retoma uma vez. Se parar de novo, a tarefa vai para **Revisão** com "conversa parou sem terminar" no histórico.
-- Exceção: se ela parou no meio de uma ação que mexe fora do projeto (push, deploy, comando no servidor, MCP que escreve), o Club não retoma sozinho, porque não dá para saber se a ação aconteceu. A tarefa vai para **Aguardar** com o motivo, e a conversa aparece em **precisa de mim**. Confira e mande uma mensagem para seguir.
+- Exceção: se ela parou no meio de uma ação que mexe fora do projeto (push, deploy, comando no servidor, MCP que escreve), o Club não retoma sozinho, porque não dá para saber se a ação aconteceu. A tarefa vai para **Aguardar** com o motivo, e a conversa aparece em **Inbox**. Confira e mande uma mensagem para seguir.
 - Fora o reinício do servidor (acima), se a conversa cair por falha passageira (API sobrecarregada, erro 5xx, limite de taxa, queda de conexão) ou o processo cair no meio do turno, o Club retoma sozinho, com espera crescente (30 s, 2 min e 8 min, com uma variação de até 20%) e até 3 tentativas (1, quando o processo caiu sem causa conhecida). Se o próprio erro pede uma espera maior, vale a maior, até 15 min; acima disso não é falha passageira e não retoma. Enquanto a retomada está marcada, a tarefa fica em **Fazendo** e o cartão ganha o selo **Retomando em 42s · 2/3** (a tentativa 2 de 3). Passou da hora e ainda aparece: **Retomando agora**, o envio está em curso. O selo não é laranja: o laranja é só da coluna **A fazer**. Passando o mouse, o selo traz o motivo e a hora; no detalhe da tarefa, a frase inteira.
-- O selo some quando a retomada sai, quando você manda uma mensagem na conversa (isso cancela a retomada) ou quando as tentativas acabam. Acabando as tentativas, ou se a conversa parou no meio de uma ação que mexe fora do projeto, a tarefa vai para **Aguardar** como na exceção acima, e a conversa aparece em **precisa de mim**. O que é e o que não é retomado sozinho, e o aviso no chat, estão no capítulo 03 (**Retomada automática**). Para desligar: **Configurações** → **Conversa** → **Retomar sozinho quando a conversa cair por falha passageira** (nível **Avançado**; padrão ligado).
+- O selo some quando a retomada sai, quando você manda uma mensagem na conversa (isso cancela a retomada) ou quando as tentativas acabam. Acabando as tentativas, ou se a conversa parou no meio de uma ação que mexe fora do projeto, a tarefa vai para **Aguardar** como na exceção acima, e a conversa aparece em **Inbox**. O que é e o que não é retomado sozinho, e o aviso no chat, estão no capítulo 03 (**Retomada automática**). Para desligar: **Configurações** → **Conversa** → **Retomar sozinho quando a conversa cair por falha passageira** (nível **Avançado**; padrão ligado).
 - O responsável só pode ser trocado antes de começar. Depois, aparece "A tarefa já começou com este funcionário".
 
 ## Ordem da fila
@@ -86,7 +86,8 @@ Fila grande e você quer o time parado para focar em outro projeto? **Pausar pro
 - **Onde pausar**: no quadro de tarefas, o botão **Pausar projeto** fica ao lado do título (no celular, só o ícone de pausa, as duas barras). No painel do projeto, o ícone de pausa fica entre Arquivos e Arquivar.
 - **Onde retomar**: os mesmos dois (o botão vira **Retomar projeto**) e o botão de play no cabeçalho da sala no quadro, ao lado do selo de tarefas. Esse botão só aparece com o projeto pausado.
 - **Confirmação**: ao pausar, o Club pergunta e explica o que vai acontecer. Retomar não pergunta.
-- **O que para**: nada novo começa sozinho. A fila de cada funcionário, a revisão automática, as rotinas, os despertadores, o "continue" do limite de uso, a retomada depois do reinício do servidor e a troca de motor esperam. Mensagens de um funcionário ou de uma decisão automática para outro (reprovação da revisão, resposta do gestor) também esperam.
+- **O que para**: nada novo começa sozinho. A fila de cada funcionário, as rotinas, os despertadores, o "continue" do limite de uso, a retomada depois do reinício do servidor e a troca de motor esperam. Mensagens de um funcionário ou de uma decisão automática para outro (o ajuste de uma reprovação, a resposta do gestor) também esperam.
+- **A revisão continua**: a entrega que já chegou em **Revisão** é revisada normalmente, mesmo pausado, e o veredito fica gravado. Só o ajuste de uma reprovação espera para ir ao funcionário; ao retomar, ele segue.
 - **O que está rodando**: termina o turno atual e para ali. Nada é interrompido no meio e a tarefa fica onde está (em **Fazendo**, por exemplo).
 - **O que continua valendo**: as suas ações. Conversar com um funcionário, mover um cartão e **Começar** seguem funcionando.
 - **Como aparece**: faixa azul no topo do quadro ("Projeto pausado desde hoje às 14:32" e o que isso faz), selo **Pausado** no cabeçalho da sala no quadro (abaixo do nome) e no painel do projeto, e o botão vira **Retomar projeto** (ícone de play, em azul cheio). O selo também aparece com o projeto sem nenhuma tarefa aberta.
@@ -104,6 +105,19 @@ Se a ficha do funcionário está em **Só planeja**, ao começar a tarefa vai pa
 | **Aprovar e executar** | Vai para **Fazendo** e executa. O plano fica guardado no cartão (**Plano aprovado**). |
 | **Pedir mudanças** | Continua só planejando. Escreva o que mudar. |
 | **Recusar plano** | Não executa. A tarefa vai para **Aguardar**, e quem pediu a tarefa é avisado. |
+
+### Plano primeiro (card que pede o plano antes de editar)
+
+Quem cria a tarefa pela API manda `"planFirst": true` (ou `false` para dispensar; o campo também se edita antes de a tarefa começar). Sem o campo, o Club reconhece na descrição frases como "comece pelo plano" ou "plano primeiro". O funcionário, em qualquer ficha que edita e nos dois motores (Claude e Codex), termina o turno com o plano escrito e sem editar arquivos. Esse plano **não é uma entrega**: o card vai para **Planejando** com o plano pendente de quem pediu, sem abrir revisão, sem contar rodada e sem registrar reprovação.
+
+- **Pedida por um gestor:** o plano chega na conversa em que ele pediu, com os dois caminhos. Ele decide com `POST /api/projects/<projeto>/tasks/<id>/plan`: `{"decision": "approve"}` (o card segue em **Fazendo**, no mesmo card, com o plano guardado em **Plano aprovado**; `note` opcional acrescenta uma observação) ou `{"decision": "reject", "reason": "<o que ajustar>"}` (o motivo vai ao funcionário, o card volta a **Fazendo** e ele entrega o plano de novo). Só quem pediu e o usuário decidem (403 para os outros; 409 se o card não espera plano).
+- **Pedida por você, ou se o aviso ao gestor não chegou em 30 minutos:** o plano vira um item de **card parado** na caixa de entrada, com o começo do plano. A decisão é a mesma rota (a tela de botões para este caso é uma tarefa à parte).
+- Uma mensagem na conversa do card também devolve o funcionário ao trabalho, mas só a aprovação grava o plano. O card segue ocupando o funcionário até a decisão, como o cartão de plano de cima.
+- Quem só planeja (**Só planeja**) continua pelo cartão de plano do chat, como acima.
+
+## Selo "Precisa de você" no cartão
+
+Cartão parado por uma ação sua na caixa de entrada ganha o selo amarelo **Precisa de você**, com o motivo ao passar o mouse e para leitores de tela (plano para aprovar, pedido de permissão, dúvida, revisão que não andou, ajuste que não chega ao funcionário, card sem código, espera por outra tarefa parada). É o mesmo amarelo dos avisos de "precisa de você" da caixa. Clicar no cartão abre o detalhe, onde está a ação. O selo some sozinho quando você resolve o item. Ação que é do gestor (dúvida por opções antes de chegar a você) não mostra o selo; aviso da caixa que não trava o cartão também não. O mesmo selo aparece no cabeçalho do projeto (com a contagem de tudo da sala que espera você) e no cartão do funcionário (só ponto e número, com o motivo ao passar o mouse): vêm dos avisos da caixa que pedem uma decisão sua (plano, permissão, resposta, dúvida, tarefa parada, follow-up); erro, segredo e rotina não contam. Com um plano esperando, a ação principal do painel da tarefa abre a conversa onde você o aprova.
 
 ## Esperando sua permissão
 
@@ -125,11 +139,20 @@ Quando a conversa de uma tarefa em **Fazendo** pede uma permissão e espera voc�
 
 Na seção **Revisão**, escolha **Quem revisa** e clique em **Delegar revisão** (ou **Delegar nova revisão**). O revisor responde com APROVADO ou REPROVADO na primeira linha.
 
-Quando a revisão automática para (o item **parada** em **precisa de mim**), o mesmo pedido sai da caixa, sem abrir o cartão: **Delegar revisão** no item abre o seletor com os mesmos funcionários do cartão (o responsável da tarefa não entra), e o botão **Delegar revisão** faz o mesmo pedido. Se já há uma revisão pedida e sem resposta, o cartão não deixa escolher outro revisor, e a caixa também não mostra o atalho.
+Quando a revisão automática para (o item **parada** em **Inbox**), o mesmo pedido sai da caixa, sem abrir o cartão: o link **Delegar revisão** no item abre o seletor com os mesmos funcionários do cartão (o responsável da tarefa não entra), e o botão **Delegar revisão** dentro do seletor faz o pedido. Cada caso tem o seu botão: revisão parada → **Revisar** (abre o cartão) e **Delegar revisão** (pede ali mesmo); ajuste que não chegou ao funcionário → **Reenviar ajuste**, sem atalho de revisão. Se já há uma revisão pedida e sem resposta, o cartão não deixa escolher outro revisor, e a caixa também não mostra o atalho; uma revisão substituída por uma entrega nova não conta como pedida.
 
 - Aprovada: vai para **Finalizado**. Se o código ainda está numa worktree sem mesclar, fica em **Revisão** ("aprovada; falta mesclar a worktree").
 - Reprovada: os ajustes voltam para quem fez, e a tarefa volta para **Fazendo**. Se ele estiver ocupado, o ajuste fica guardado e a tarefa segue em **Revisão**.
 - O revisor não muda o código: só revisa.
+
+#### Como a reprovação chega (itens numerados)
+
+- **Itens numerados**: o revisor que reprova lista cada bloqueador (🔴) numa linha própria, com id fixo (**R1**, **R2**…), o `arquivo:linha`, o problema e **como provar** que foi corrigido. Quem fez a tarefa recebe esses itens no topo do ajuste, como lista para conferir, e o texto do revisor vem depois. Nenhum 🔴 é cortado do texto do revisor; só trecho sem 🔴 sai se o texto for grande, e o aviso diz quanto. Na lista guardada no card, cada campo do item é resumido (arquivo até 200 caracteres; problema e prova até 600), sem aviso.
+- **Resposta item a item**: o Club pede que, ao terminar, o funcionário responda uma linha por item (`R1: feito — onde e a prova` ou `R1: não feito — por quê`), sem pular nenhum. O Club guarda essa resposta na tarefa para a próxima revisão e avisa o revisor de qual item ficou sem citação. Sem a lista (veja **Sem o bloco**), a linha começa pelo `arquivo:linha` do 🔴 em vez do id.
+- **Dúvida sobre um item**: se um item é ambíguo ou contradiz o pedido, o funcionário não o implementa; faz o que não depende dele e termina com `DÚVIDA: R2 — …`. Essa dúvida vai ao **revisor que reprovou**, e só ele responde (mantém o item ou o reformula; se a decisão é sua, ele pode passá-la a você); ela não vai a quem pediu a tarefa. Só vai ao revisor se a dúvida **começa** pelo id do item (sem a lista, pelo 🔴) e acontece no turno de ajuste, antes da resposta; se o revisor é quem pediu a tarefa, a dúvida já ia a ele.
+- **Rodada seguinte**: na nova revisão, o Club entrega ao revisor os itens anteriores e a resposta do funcionário, e **pede que ele confira esses primeiro** (`R1: RESOLVIDO` ou `NÃO RESOLVIDO`). O Club pede também que item não resolvido volte com o **mesmo id** e que os novos sigam a numeração (se um id já usado e fechado reaparecer, o Club só anota um aviso). A regra de item **novo** é um **pedido ao revisor**, não um filtro do Club: ele deve reprovar por item novo só se for bug, regressão, falha de segurança ou critério de aceite descumprido, e tratar preferência nova (estilo, outro jeito de fazer) como follow-up. O Club não recusa nem separa os 🔴 por tipo.
+- **Sem o bloco**: se o revisor não trouxer a lista, ou ela vier fora do formato, o texto dele segue como escreveu, com o motivo, e os 🔴 são os que aparecem nele. A reprovação vale do mesmo jeito.
+- O card guarda as últimas **10** reprovações.
 
 ### Revisão automática
 
@@ -166,7 +189,7 @@ Quando um funcionário altera código do projeto numa conversa que não é de ne
 Quando o revisor aprova e ainda vê uma melhoria (uma limpeza, um risco menor, uma ideia que merece outra tarefa), ele registra um **follow-up** na tarefa. É só um registro: **nada vira card sozinho**.
 
 - **Quando o revisor usa**: só para melhoria **posterior**, que não invalida a aprovação. Falha que invalida a aprovação (bug, regressão, critério não cumprido) continua sendo **reprovar**, não follow-up.
-- **Quem decide**: o gestor que pediu a tarefa, pela conversa dele, ou você, pela tela. O follow-up vai para você quando foi você quem pediu a tarefa, quando o gestor saiu do projeto ou quando o aviso a ele não chegou em 30 minutos. O autor não decide o próprio follow-up.
+- **Quem decide**: o gestor que pediu a tarefa, pela conversa dele, ou você, pela tela. O follow-up vai para você quando foi você quem pediu a tarefa, quando o gestor saiu do projeto ou quando o aviso a ele não chegou em 30 minutos. O autor não decide o próprio follow-up. Pela tela você decide também o que está com o gestor (o servidor aceita os dois); vale quem decidir primeiro, e o outro recebe o aviso de que já foi decidido.
 - **Na conversa**: quando foi você quem pediu a tarefa e ela tem conversa, o follow-up aparece como **balão na conversa de trabalho da tarefa**, depois da última mensagem. Só você o vê: não é mensagem da conversa e o funcionário nunca o lê. O balão traz o que importa para decidir:
   - o selo **Vale fazer** ou **Opcional** (o "vale fazer" vem antes);
   - o título em linguagem simples e **Se não fizer:** (o que acontece sem o ajuste);
@@ -174,12 +197,12 @@ Quando o revisor aprova e ainda vê uma melhoria (uma limpeza, um risco menor, u
   - **Detalhes técnicos**, fechado: o achado e o plano do revisor.
 - **Na caixa**: o item **follow-up** mostra a recomendação e **abre essa conversa** ao clicar. Follow-up de tarefa que um gestor pediu, ou de tarefa sem conversa, abre o card.
 - **No quadro**: o cartão não mostra o texto do follow-up, só um selo: **N follow-ups, M vale fazer** (sem nenhum "vale fazer", **N follow-ups abertos**; amarelo quando algum espera você). Enquanto houver follow-up aberto, o selo **Aprovada** do cartão não aparece, porque a tarefa não está toda resolvida; quando todos forem decididos, ele volta. O detalhe da tarefa traz o resumo no topo e o botão **Abrir conversa**, que leva ao balão (sem conversa, o detalhe mostra o follow-up e as saídas ali mesmo).
-- **Follow-up antigo**, sem os campos acima (título, recomendação, "se não fizer", tamanho), aparece com o texto, como antes.
-- **No detalhe da tarefa**, cada follow-up traz quem achou (ou **revisão**, se a ficha dele saiu do projeto; a caixa chama do mesmo jeito), quando, com quem está (ou quem decidiu e quando) e o selo **Aberto**, **Virou card** ou **Descartado**. Cada decisão também entra no **Histórico** da tarefa.
+- **Follow-up antigo**, sem os campos acima (título, recomendação, "se não fizer", tamanho), aparece com o texto, como antes. Um e outro seguem a mesma regra para as saídas: no detalhe, enquanto estiver aberto e não esperar na conversa, você vê **Criar card** e **Descartar** (ou **Revisar** e **Concluir**), mesmo que esteja com o gestor (a nota diz quem pediu a tarefa).
+- **No detalhe da tarefa**, cada follow-up traz quem achou (ou **revisão**, se a ficha dele saiu do projeto; a caixa chama do mesmo jeito), quando, com quem está (ou quem decidiu e quando) e o selo **Aberto**, **Virou card** ou **Descartado**. Depois de decidido, o follow-up que tem os campos acima continua mostrando o selo da recomendação, o título e o **Se não fizer:**, e não só o texto. Cada decisão também entra no **Histórico** da tarefa.
 
 Em cada follow-up aberto (no balão, na caixa ou no detalhe) há duas saídas:
 
-- **Criar card**: um clique para confirmar, com **Responsável**, **Título** e **Descrição** já preenchidos e editáveis (o responsável é o que o revisor sugeriu; a descrição é o achado inteiro). O card nasce em **Aguardar**: você manda começar depois, no quadro. O follow-up passa a mostrar um link para ele.
+- **Criar card**: são dois toques. O primeiro abre o formulário, com **Responsável**, **Título** e **Descrição** já preenchidos e editáveis (o responsável é o que o revisor sugeriu; a descrição é o achado inteiro); o segundo, em **Criar card** dentro dele, confirma. O card nasce em **Aguardar**: você manda começar depois, no quadro. O follow-up passa a mostrar um link para ele.
 - **Descartar**: não vira card. Escolha o motivo: **Não vale o custo**, **Já resolvido**, **Fora do escopo** ou **Outro motivo** (texto livre, uma linha). O motivo aparece no follow-up.
 
 Quando a tarefa de origem já está **Finalizado** (a aprovação costuma fechá-la), o balão e o item da caixa mostram o selo **Finalizado**, e as saídas passam a ser:
@@ -189,6 +212,8 @@ Quando a tarefa de origem já está **Finalizado** (a aprovação costuma fechá
 
 **Criar card**, **Revisar** e **Descartar** pedem confirmação; **Concluir** age na hora. **Decidido não se reabre**: quem tentar decidir de novo (você pela tela e o gestor pela conversa, por exemplo) recebe o aviso de que já foi decidido. Depois de decidir, a tela diz o que foi feito (por exemplo, "Card t-… criado em Aguardar"), porque o balão e o item da caixa somem.
 
+As saídas só ligam depois que a tarefa de origem é lida (ela diz se está **Finalizado** e traz o achado inteiro): até lá a tela mostra **Lendo a tarefa de origem**. Se a leitura falha, as saídas continuam desligadas e a tela tenta de novo a cada 20 segundos.
+
 ### Card sem código
 
 Card é para trabalho de código. Se o funcionário **termina o turno sem editar nenhum arquivo** (e sem ter pedido subtarefa), o card **não vai para revisão**: fica em **Fazendo**, com o selo **Sem código**, e deixa de ocupar o funcionário (a fila dele anda).
@@ -196,7 +221,8 @@ Card é para trabalho de código. Se o funcionário **termina o turno sem editar
 - **Quem decide**: quem pediu o card. O gestor, pela conversa dele; ou você, quando foi você quem pediu (também quando o gestor saiu do projeto ou o aviso a ele não chegou em 30 minutos). Com você, o selo fica amarelo.
 - **No detalhe**: o bloco **Terminou sem editar código** mostra o que o funcionário disse ao terminar (a análise ou a resposta costuma estar aí) e, quando é com você, **Cancelar** (abre o diálogo de cancelar, com o motivo) e **Devolver ao responsável**.
 - **Na caixa** (rótulo **parada**): a frase diz que o card terminou sem editar código, **ver o que ele disse** abre o resumo, e os botões são **Cancelar** (pede o motivo) e **Devolver ao responsável**.
-- **Devolver ao responsável** manda uma mensagem na conversa de trabalho dele: o card sai de "sem código" e ele volta a trabalhar. Se a conversa não existe mais, o aviso diz para cancelar o card.
+- **Devolver ao responsável** manda uma mensagem na conversa de trabalho dele: o card sai de "sem código" e ele volta a trabalhar. Se a conversa não existe mais, o aviso diz para cancelar o card. Se a mensagem ficou guardada (o funcionário está ocupado em outra tarefa e a recebe quando terminar), a tela avisa em texto comum, sem ser erro: não mande de novo.
+- No diálogo de **Cancelar**, o card sem código diz que o turno já terminou (não há o que interromper), em vez do aviso de tarefa em andamento.
 - Mover o card de coluna também desfaz a marca.
 - Para perguntar ou pedir uma análise, converse com o funcionário em vez de criar um card.
 
@@ -279,7 +305,7 @@ Se o principal bate o limite e a ficha tem motor secundário, a tarefa segue nel
 
 Regras da troca e da volta: `06-consumo-e-motores.md`.
 
-### O que aparece em "precisa de mim"
+### O que aparece em "Inbox"
 
 Cada item abre o cartão da tarefa e traz a ação. Sem **×**: o item some sozinho quando o problema acaba.
 
@@ -310,8 +336,15 @@ A suíte completa de testes e o `tsc` do projeto inteiro gastam memória e proce
 - **A espera não conta nos 10 minutos** dos testes do Club nem no tempo mostrado no cartão.
 - **Limite da espera**: 30 minutos nos testes do Club e 13 no terminal do funcionário. Passou disso, o comando roda mesmo assim, sem trava. Trava de um processo que morreu ou que passou do prazo vale como esquecida e é ignorada.
 - **Em segundo plano não**: no terminal do funcionário, a suíte completa tem de rodar em primeiro plano; em segundo plano o comando é negado.
-- **Onde aparece a espera**: o quadro ainda não mostra que uma validação está esperando a vez. No terminal do funcionário aparece "Esperei N s a vez: outra validação pesada rodava…", e o Club registra `[fila] … esperando a vez` no log do servidor. Um **Rodar testes** que demora a começar costuma ser isso.
+- **Onde aparece a espera**: no quadro, uma bolinha laranja no topo de **Fazendo** diz, ao passar o mouse ou tocar, "testes de … esperando a vez (a suíte de … roda agora)", desde que horas e quantos cartões esperam atrás (veja **Estado da fila de cada funcionário**, abaixo). No terminal do funcionário aparece "Esperei N s a vez: outra validação pesada rodava…", e o Club registra `[fila] … esperando a vez` no log do servidor.
 
+### Estado da fila de cada funcionário
+
+No topo das colunas **Fazendo** e **Revisão**, o quadro mostra uma bolinha por funcionário ocupado, para você ver por que a fila dele não anda sem investigar. Passe o mouse, use o teclado (Tab) ou toque na bolinha para ler a frase; toque fora, `Esc` ou rolar a fecha. Com o filtro por funcionário, só a dele. Atualiza sozinho a cada poucos segundos.
+
+- **Bolinha normal** (andamento): em **Fazendo**, quem trabalha num cartão ou numa conversa e quem tem uma entrega recém-começada; em **Revisão**, quem está revisando um cartão (o pedido de revisão ainda sem resposta). A frase diz o que a pessoa faz e quantos cartões esperam atrás.
+- **Bolinha laranja com halo** (a fila está parada, visível sem passar o mouse), em **Fazendo**: **esperando a máquina folgar** (com o motivo, ex.: pouca memória), **parada pelo limite de consumo**, **testes esperando a vez** (outra suíte pesada roda; diz quem) e **entrega em processamento há mais de 3 minutos** (resumo e commit; a fila só anda quando terminar). Cada uma traz "desde HH:MM" e o motivo.
+- **Sem bolinha**: funcionário livre e projeto pausado (a faixa azul de cima já avisa).
 ### Commit automático
 
 No topo do quadro, dentro de **Revisão automática do quadro**, o botão **Commit automático** (desligado por padrão, por projeto, só pela tela). Ligado, quando uma tarefa vai para **Finalizado** o Club faz **um commit local** com os arquivos que ela alterou. **Nunca faz push.** A mensagem é sempre `<título da tarefa> (<id>)`, sem IA, e os hooks do repositório rodam como num commit seu.
@@ -322,9 +355,21 @@ No topo do quadro, dentro de **Revisão automática do quadro**, o botão **Comm
   - arquivo que **você gravou no editor do Club depois** da última edição da tarefa (**editado por você**);
   - arquivo de segredo (`.env`, chaves), de dependência ou build, e arquivo em conflito ou que você deixou *staged* com mudança nova por cima.
 - **O seu índice não muda**: o commit sai de um índice à parte. O que você deixou *staged* não entra e continua *staged*; o `git status` não fica ao contrário.
-- **Resultado no cartão**: o **SHA** (`commit 1a2b3c4`) quando tudo entrou, ou **commit parcial** quando sobrou arquivo (o detalhe lista cada um com o motivo). **Falhou** (hook que recusou, identidade do git, `index.lock`) ou **parcial** vira um item em "precisa de mim" (ele leva o motivo; o **×** o dispensa, e o cartão segue mostrando o resultado). A tarefa fica pronta do mesmo jeito: falha de commit nunca trava nada.
+- **Resultado no cartão**: o **SHA** (`commit 1a2b3c4`) quando tudo entrou, ou **commit parcial** quando sobrou arquivo (o detalhe lista cada um com o motivo). **Falhou** (hook que recusou, identidade do git, `index.lock`) ou **parcial** vira um item em "Inbox" (ele leva o motivo; o **×** o dispensa, e o cartão segue mostrando o resultado). A tarefa fica pronta do mesmo jeito: falha de commit nunca trava nada.
 - **Quando não commita** (e diz o motivo): sem lista de arquivos (edição só por terminal não é vista), lista no limite de 300 arquivos (pode estar cortada), repositório no meio de merge ou rebase, HEAD destacado, projeto que não é repositório git. Tarefa de **worktree** tem o fluxo de mesclar e fica de fora. Ligar depois não commita tarefas que já estavam prontas, e a mesma entrega nunca gera dois commits.
 - **Limite conhecido**: o Club só sabe o que foi gravado pelo **editor do Club** (aba de arquivos). Edição feita em **outro editor** (VS Code, vim…) ou pelo terminal não é detectada: o arquivo entra no commit da tarefa como se fosse dela. Se você edita o mesmo arquivo fora do Club, desligue o commit automático ou revise com `git show`.
+
+### Um card escrevendo por vez (opção "um escritor por vez")
+
+Opção do projeto, **desligada por padrão**. Liga e desliga só pela tela: no quadro de tarefas, abra o painel recolhível **Revisão automática do quadro**; lá, a linha **Um card escrevendo por vez** tem um botão **Ligada** / **Desligada** e, embaixo, o texto da regra. Ligada, só **um card por vez** edita código no checkout principal (a pasta do próprio projeto).
+
+- **Por quê**: o commit automático por tarefa só leva os arquivos do próprio card. Com dois cards editando a mesma pasta ao mesmo tempo, os arquivos se misturam e o commit de um fica parcial (veja "O que fica de fora" acima). Com um card por vez, cada commit sai limpo.
+- **Quem espera**: funcionário **sem** **Trabalhar numa worktree própria** edita direto no projeto. Se outro funcionário já tem um card editando, o card dele fica na fila e só começa quando o do outro fechar. O card que acabou de ficar pronto segura a vaga até a tentativa de commit terminar.
+- **Quem não espera**: funcionário **com** **Trabalhar numa worktree própria** trabalha em paralelo numa cópia só dele. Também passam direto o card só de plano (ainda não edita) e o card criado automaticamente.
+- **Mesma pessoa**: a fila de cada funcionário já anda um card por vez; a regra vale entre funcionários diferentes.
+- **No quadro**: o card que espera mostra o selo **Aguardando recursos: a vaga de escrita deste projeto está com “{título}” ({id}, fazendo)**. O texto diz quem ocupa a vaga e em que fase está (fazendo, em revisão, em Aguardar ou pronto com o commit automático ainda rodando). Ele começa sozinho quando a vaga libera ou a opção é desligada.
+- **Na ficha** (aba **Ficha**, ao lado de **Trabalhar numa worktree própria**): um aviso diz o efeito. Sem worktree e opção ligada: "Sem worktree, edita direto no projeto e espera…". Sem worktree e opção desligada: "…junto com os outros". Com worktree: "Com worktree própria, trabalha em paralelo numa cópia só dele, sem esperar ninguém."
+- **Quando ligar a worktree**: quando dois ou mais funcionários costumam editar ao mesmo tempo e esperar um pelo outro custa caro. Ela pesa disco, não memória, e o projeto precisa ser repositório git. Mas tarefa de worktree tem o fluxo de **Mesclar** e não entra no commit automático.
 
 ## Cancelar tarefa
 

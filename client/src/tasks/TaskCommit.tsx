@@ -1,5 +1,6 @@
 import type { Task, TaskCommitLeft } from '../../../shared/model';
 import { t } from '../i18n';
+import { cardTone } from '../inbox/alertTone';
 
 // O commit automático da tarefa pronta (`Task.commit`, ver server/autoCommit.ts): selo no cartão (o SHA, "commit parcial" ou "sem commit") e, no detalhe, o que entrou e o que ficou de fora
 // e por quê. É sempre um commit LOCAL: o Club nunca faz push. Os motivos chegam como código (`TaskCommitLeft.why`) e saem aqui no idioma da página; a `note` do servidor é texto em pt-BR.
@@ -16,7 +17,7 @@ export const whyText = (l: TaskCommitLeft): string => t(`tasks.commitWhy.${l.why
 export function CommitBadge({ task }: { task: CommitTask }) {
   const c = task.commit;
   if (!c || task.status !== 'done') return null;
-  const warm = c.alert && !c.ack ? ' is-waiting' : '';
+  const warm = c.alert && !c.ack ? ` ${cardTone('owner')}` : '';
   if (c.status === 'committed' && c.sha) {
     return (
       <span className="task-badge task-commit small" title={t('tasks.commitHint', { sha: c.sha, n: c.files.length })}>

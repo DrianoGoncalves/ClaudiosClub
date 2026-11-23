@@ -324,7 +324,7 @@ describe('contratação por gestor que roda no Codex', () => {
     expect(await readSeal(path.join(root, 'run'), projectPath, hired.id)).toBeNull(); // sem selo: o caminho Claude → Claude não muda
     // Pedindo `engine: "claude"` o gestor do Claude também não muda nada: autonomia limitada à dele, sem trava de manual.
     const pediu = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Pediu Claude', reportsTo: [boss.id], engine: 'claude', mcps: ['github'] }, false))!.profile;
-    expect(pediu).toMatchObject({ engine: 'claude', autonomy: 'auto', mcps: ['github'] });
+    expect(pediu).toMatchObject({ engine: 'claude', autonomy: 'auto', mcps: ['global:github'] });
     expect(await readSeal(path.join(root, 'run'), projectPath, pediu.id)).toBeNull();
     expect((await svc.chatSpawn('proj-id', null, hired.id))!.engine).toBeUndefined();
     // Pelo navegador (o dono), qualquer motor e autonomia, como antes.

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { t } from '../i18n';
 import { pollVisible } from '../usePoll';
 import { inboxText, inboxWho } from './inboxText';
+import { isResolved } from './resolved';
 
 // A caixa "precisa de mim": o que espera você em todas as salas, lida a cada poucos segundos.
 // Com "avisar no sistema" ligado, cada item novo vira uma notificação do sistema (só o que é novo:
@@ -70,7 +71,7 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
       setItems((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       // Na primeira leitura nada é "novo": avisar de tudo ao abrir a página seria só barulho.
       if (seen.current && notifyRef.current) {
-        for (const item of next) if (!seen.current.has(item.id)) show(item, open.current);
+        for (const item of next) if (!seen.current.has(item.id) && !isResolved(item)) show(item, open.current);
       }
       seen.current = new Set(next.map((i) => i.id));
     };

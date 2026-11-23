@@ -91,21 +91,23 @@ describe('o quadro de tarefas: onde o selo, o atalho e o bloco são ligados', ()
     return { card: html.slice(0, at), detail: html.slice(at) };
   };
 
-  it('pendente: selo laranja (task-wait) no cartão com o atalho fora do botão; o detalhe tem o bloco e o botão', () => {
+  it('pendente: selo amarelo (tone-action, o mesmo da caixa) no cartão com o atalho fora do botão; o detalhe tem o bloco e o botão', () => {
     const { card, detail } = board();
-    expect(card).toMatch(/<span class="task-queue task-permission task-wait small" title="[^"]+">Esperando sua permissão: Bash · há [^<]+<\/span>/);
+    expect(card).toMatch(/<span class="task-queue task-permission tone-action small" title="[^"]+">Esperando sua permissão: Bash · há [^<]+<\/span>/);
     expect(card).not.toContain('is-stuck');
     // O atalho é irmão do botão do cartão: depois do </button> do cartão, nunca dentro dele.
     const closeCard = card.indexOf('</button>');
     expect(card.indexOf('task-perm-go')).toBeGreaterThan(closeCard);
-    expect(card).toMatch(/<button class="btn-secondary task-perm-go"[^>]*>Responder no chat<\/button>/);
+    expect(card).toMatch(/<button class="btn-primary task-perm-go"[^>]*>Responder no chat<\/button>/);
     expect(detail).toContain('<div class="task-perm">');
-    expect(detail).toMatch(/<button class="btn-primary"[^>]*>Responder no chat<\/button>/);
+    // O botão é a ação principal do rodapé fixo (uma vez só), não mais um botão dentro do cartão do pedido.
+    expect(detail.match(/<button type="button" class="btn-primary"[^>]*>Responder no chat<\/button>/g)).toHaveLength(1);
+    expect(detail.indexOf('Responder no chat</button>')).toBeGreaterThan(detail.indexOf('task-detail-foot'));
   });
 
   it('parada (passou de 15 min): o cartão e o detalhe marcam is-stuck e dizem "Parada"', () => {
     const { card, detail } = board({ permissionWait: wait({ since: agoReal(17), stuck: true }) });
-    expect(card).toContain('task-permission task-wait is-stuck small');
+    expect(card).toContain('task-permission tone-action is-stuck small');
     expect(card).toContain('Parada: esperando sua permissão: Bash · há 17min');
     expect(detail).toContain('<div class="task-perm is-stuck">');
   });
@@ -157,12 +159,12 @@ describe('idiomas e CSS', () => {
     expect(es.permissionText(wait({ tool: 'ExitPlanMode' }), 'Ana', NOW)!.head).toContain('aprobar el plan');
   });
 
-  it('o CSS do selo só usa tokens (nenhuma cor solta) e o laranja é o do --warn / --wait-ink', () => {
+  it('o CSS do selo só usa tokens (nenhuma cor solta) e o amarelo é o do --tone-action', () => {
     const css = readFileSync('client/src/styles.css', 'utf8');
     const lines = css.split('\n').filter((l) => /\.task-permission|\.task-perm-go|\.task-perm\b/.test(l));
     expect(lines.length).toBeGreaterThanOrEqual(6);
     for (const l of lines) expect(l).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(/);
-    expect(lines.join('\n')).toContain('var(--warn)');
-    expect(lines.join('\n')).toContain('var(--wait-ink)');
+    expect(lines.join('\n')).toContain('var(--tone-action)');
+    expect(lines.join('\n')).toContain('var(--tone-action-ink)');
   });
 });

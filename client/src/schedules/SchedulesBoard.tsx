@@ -8,7 +8,7 @@ import { type CalEntry, calendarEntries, dayAfterMonthChange, monthStart, shiftM
 import { RoutineForm, type StaffChoice } from './RoutineForm';
 import { type RoutineAsk, RoutineItem } from './RoutineList';
 import { type RoutineDraft, ROUTINES_PER_STAFF_MAX, draftChanged, draftFromRoutine, newDraft } from './routineDraft';
-import { cancelSchedule, enableRoutine, escapeStep, readSchedules, removeRoutine, runRoutineNow, saveDraft, type Settled } from './scheduleFlows';
+import { cancelFormStep, cancelSchedule, enableRoutine, escapeStep, readSchedules, removeRoutine, runRoutineNow, saveDraft, type Settled } from './scheduleFlows';
 import { ScheduleCalendar } from './ScheduleCalendar';
 import { countdown, type Schedule, scheduleKey, sortRoutines, whenParts } from './scheduleView';
 
@@ -124,15 +124,11 @@ const formOf = (draft: RoutineDraft): FormState => ({ draft, opened: draft, erro
 
 /** A tela que o App usa: só leva as props de produção. */
 export function SchedulesBoard(props: Props) {
-  return <Board {...props} />;
+  return <SchedulesBoardCore {...props} />;
 }
 
-/** Só em teste: a mesma tela já com dados e hora (fora da API que o App usa). */
-export function SchedulesBoardSeeded(props: Props & { seed: Seed }) {
-  return <Board {...props} />;
-}
-
-function Board({ projectId, projectName, staff, onClose, onOpenConversation, onOpenTasks, onChanged, seed }: Props & { seed?: Seed }) {
+/** O corpo da tela, com o `seed` que só o teste passa (`tests/support/seededBoard.ts`); o App usa `SchedulesBoard`. */
+export function SchedulesBoardCore({ projectId, projectName, staff, onClose, onOpenConversation, onOpenTasks, onChanged, seed }: Props & { seed?: Seed }) {
   const [data, setData] = useState<SchedulesResponse | null>(seed?.data ?? null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => seed?.now ?? Date.now());
@@ -339,7 +335,7 @@ function Board({ projectId, projectName, staff, onClose, onOpenConversation, onO
                   confirmDiscard={form.discarding ? { onDiscard: () => setForm(null), onKeep: () => setForm((f) => f && { ...f, discarding: false }) } : null}
                   onChange={(draft) => setForm((f) => f && { ...f, draft, discarding: false })}
                   onSubmit={() => void save()}
-                  onCancel={() => setForm(null)}
+                  onCancel={() => (cancelFormStep(draftChanged(form.draft, form.opened)) === 'ask-discard' ? setForm((f) => f && { ...f, discarding: true }) : setForm(null))}
                 />
               </>
             ) : (

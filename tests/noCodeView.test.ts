@@ -66,9 +66,9 @@ describe('selo do cartão', () => {
   it('"Sem código", só texto (o cartão é um botão); amarelo só quando espera você', () => {
     const owner = badge(marked());
     expect(owner).toContain('Sem código');
-    expect(owner).toContain('is-waiting');
+    expect(owner).toContain('tone-action');
     expect(owner).not.toContain('<button');
-    expect(badge(marked({ to: 'manager' }))).not.toContain('is-waiting');
+    expect(badge(marked({ to: 'manager' }))).not.toContain('tone-action');
   });
 
   it('sem a marca (ou fora de "fazendo"), nada', () => {
@@ -78,23 +78,25 @@ describe('selo do cartão', () => {
 });
 
 describe('bloco do detalhe', () => {
-  const block = (t: Task) => html(createElement(NoCodeBlock, { task: t, nameOf, onCancel: noop, onGiveBack: noop }));
+  const block = (t: Task) => html(createElement(NoCodeBlock, { task: t, nameOf }));
 
-  it('com você: por que parou, o que o responsável disse e as duas saídas', () => {
+  it('com você: por que parou e o que o responsável disse; as saídas (Devolver, Cancelar) ficam no rodapé fixo, não no cartão', () => {
     const out = block(marked());
     expect(out).toContain('Terminou sem editar código');
     expect(out).toContain('Espera você: cancelar com motivo ou devolver ao responsável.');
     expect(out).toContain('Li o código: o helper de data tem duas cópias');
     expect(out).toContain('O que o responsável disse ao terminar');
-    expect(out).toContain('Cancelar</button>');
-    expect(out).toContain('Devolver ao responsável</button>');
+    expect(out).not.toContain('<button');
   });
 
-  it('enquanto a mensagem é enviada os dois botões ficam desligados (o clique repetido mandaria duas mensagens)', () => {
-    const idle = block(marked());
-    expect(idle).not.toContain('disabled');
-    const sending = html(createElement(NoCodeBlock, { task: marked(), nameOf, busy: true, onCancel: noop, onGiveBack: noop }));
-    expect(sending.match(/disabled=""/g)).toHaveLength(2);
+  it('mensagem guardada: aviso neutro (role status, sem a classe de erro), não um alerta; sem a nota, nada', () => {
+    const held = giveBackHeldNote({ held: 'Beto está em “Exportar CSV”' })!;
+    const out = html(createElement(NoCodeBlock, { task: marked(), nameOf, note: held }));
+    expect(out).toContain('role="status"');
+    expect(out).toContain('A mensagem ficou guardada');
+    expect(out).not.toContain('role="alert"');
+    expect(out).not.toContain('class="error');
+    expect(block(marked())).not.toContain('task-nocode-note');
   });
 
   it('com o gestor: diz quem decide e não oferece as saídas (ele decide pela conversa dele)', () => {
@@ -129,6 +131,7 @@ describe('no quadro', () => {
     expect(card).toContain('Sem código');
     expect(detail).toContain('task-nocode-box');
     expect(detail).toContain('Devolver ao responsável');
+    expect(detail.match(/Devolver ao responsável<\/button>/g)).toHaveLength(1);
     const plain = render(task());
     expect(plain.card).not.toContain('Sem código');
     expect(plain.detail).not.toContain('task-nocode-box');

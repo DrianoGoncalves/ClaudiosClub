@@ -198,7 +198,7 @@ describe('bloco do detalhe', () => {
     expect(out).not.toContain('Virou card');
     // Ainda aberta, "Criar card" e "Descartar".
     const aberta = block(task([fu()], { status: 'doing' }));
-    expect(aberta).toContain('Criar card');
+    expect(aberta).toContain('Revisar e criar card');
     expect(aberta).toContain('Descartar');
     expect(aberta).not.toContain('Concluir');
     // A regra de ouro do revisor: falha que invalida a aprovação é reprovação, não follow-up.
@@ -257,11 +257,52 @@ describe('as duas saídas', () => {
   const decide = (props: Partial<Parameters<typeof FollowUpDecide>[0]> = {}) =>
     html(createElement(FollowUpDecide, { projectId: 'p-1', taskId: 't-aaaaaa', followUp: { id: 'f-a1b2c3', text: 'achado' }, onDone: noop, ...props }));
 
-  it('tarefa aberta, só os botões: "Criar card" e "Descartar"; o formulário abre ao tocar (decidido uma vez, não se desfaz)', () => {
+  // O bug: ao expandir, o botão de abrir ficava na tela com o mesmo rótulo do que cria, e só o de baixo fazia algo. Agora cada estado tem uma primária.
+  it('fechado: "Revisar e criar card" só abre o rascunho (não é submit) e não há nenhum "Criar card" que crie', () => {
     const out = decide();
-    expect(out).toContain('Criar card');
+    expect(out).toContain('Revisar e criar card</button>');
+    expect(out).not.toContain('>Criar card<');
+    // A ordem do ActionBar: a primária é a última (à direita no desktop, embaixo e em largura inteira no celular).
+    expect(out.indexOf('Descartar')).toBeLessThan(out.indexOf('Revisar e criar card'));
+    expect(out).toMatch(/<button[^>]*class="btn-primary is-main"[^>]*>Revisar e criar card<\/button><\/p>/);
+    expect(out).not.toContain('type="submit"');
+    expect(out).not.toContain('<form');
+  });
+
+  it('expandir não duplica: aberto, há um só "Criar card", é o submit do formulário, e os botões do estado fechado somem', () => {
+    const out = decide({ startMode: 'card' });
+    expect(out.match(/Criar card</g)).toHaveLength(1);
+    expect(out).not.toContain('Revisar e criar card');
+    expect(out).not.toContain('Descartar');
+    expect(out).not.toContain('task-fu-actions');
+    expect(out.match(/<button[^>]*type="submit"[^>]*>Criar card<\/button>/g)).toHaveLength(1);
+    expect(out.match(/<form[\s\S]*type="submit"[\s\S]*<\/form>/)).not.toBeNull();
+    // "Voltar" fica antes da primária (a primária é a última, embaixo no celular).
+    expect(out.indexOf('Voltar')).toBeLessThan(out.indexOf('Criar card<'));
+    // Nenhum botão sem efeito: todos habilitados, e são só os dois do formulário.
+    expect(out.match(/<button/g)).toHaveLength(2);
+    expect(out).not.toContain('disabled');
+  });
+
+  it('descartar aberto: um só submit ("Descartar follow-up", desligado sem motivo) e os botões fechados somem', () => {
+    const out = decide({ startMode: 'discard' });
+    expect(out).toContain('Descartar follow-up</button>');
+    expect(out).not.toContain('task-fu-actions');
+    expect(out.match(/type="submit"/g)).toHaveLength(1);
+    expect(out.match(/<button[^>]*type="submit"[^>]*disabled=""/)).not.toBeNull();
+  });
+
+  it('Finalizada, aberto: o submit é "Criar card de ajuste" e "Revisar" some', () => {
+    const out = decide({ startMode: 'card', task: { status: 'done', staffId: 'beto' } });
+    expect(out).toContain('Criar card de ajuste</button>');
+    expect(out).not.toContain('task-fu-actions');
+  });
+
+  it('tarefa aberta, só os botões: "Revisar e criar card" e "Descartar"; o formulário abre ao tocar (decidido uma vez, não se desfaz)', () => {
+    const out = decide();
+    expect(out).toContain('Revisar e criar card');
     expect(out).toContain('Descartar');
-    expect(out).not.toContain('Revisar');
+    expect(out).not.toContain('>Revisar<');
     expect(out).not.toContain('Concluir');
     expect(out).not.toContain('<form');
     expect(out).not.toContain('Abrir card');
@@ -285,7 +326,7 @@ describe('as duas saídas', () => {
   it('na caixa: "Abrir card" vem junto, com as mesmas saídas dos botões cheios', () => {
     const out = decide({ compact: true, onOpenCard: noop });
     expect(out).toContain('Abrir card');
-    expect(out).toContain('Criar card');
+    expect(out).toContain('Revisar e criar card');
     expect(out).toContain('Descartar');
     expect(out.match(/<button/g)).toHaveLength(3);
     // Sem o `onOpenCard` o atalho não existe: o botão de abrir o card é do item da caixa, não de toda saída.
@@ -432,6 +473,23 @@ describe('enviar a decisão', () => {
       expect(await submit(discard())).toEqual([...START, 'decided:Follow-up descartado.', 'busy:false']);
     });
 
+    // O botão desliga na próxima pintura; um segundo envio nesse intervalo (Enter repetido) criaria o card duas vezes. A trava (`lock`) o barra, e solta ao fim (falhe o que falhar).
+    it('envio em curso: um segundo envio (mesma trava) não chama o servidor de novo; terminado, a trava solta e dá para tentar outra vez', async () => {
+      const fetch = stubServer(ok);
+      const lock = { current: false };
+      const set: SubmitSetters = { setBusy: vi.fn(), setError: vi.fn(), lock };
+      const first = submitDecision(discard(), set);
+      expect(lock.current).toBe(true);
+      await submitDecision(discard(), set);
+      await first;
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(set.setBusy).toHaveBeenCalledTimes(2); // true e false do primeiro; o segundo nem ocupou
+      expect(lock.current).toBe(false);
+      stubServer(() => Promise.reject(new TypeError('Failed to fetch')));
+      await submitDecision(discard(), set);
+      expect(lock.current).toBe(false);
+    });
+
     it('queda de rede: o erro fica sob o formulário (não vai ao pai, não diz que foi feito) e o ocupado volta', async () => {
       stubServer(() => Promise.reject(new TypeError('Failed to fetch')));
       const onDone = vi.fn();
@@ -496,9 +554,9 @@ describe('enviar a decisão', () => {
     });
 
     it('a caixa usa a mesma nota, fora da lista: com a lista vazia ainda mostra o aviso', () => {
-      expect(html(createElement(FollowUpGoneNote, { message: tasksMsgs['pt-BR']['tasks.fuErrDecided'], className: 'inbox-fu-gone' }))).toBe(
-        `<p class="error small inbox-fu-gone" role="alert">${tasksMsgs['pt-BR']['tasks.fuErrDecided']}</p>`,
-      );
+      const out = html(createElement(FollowUpGoneNote, { message: tasksMsgs['pt-BR']['tasks.fuErrDecided'], className: 'inbox-fu-gone' }));
+      expect(out).toContain('role="alert"');
+      expect(out).toContain(tasksMsgs['pt-BR']['tasks.fuErrDecided']);
       expect(html(createElement(FollowUpGoneNote, { message: null, className: 'inbox-fu-gone' }))).toBe('');
     });
   });
@@ -532,7 +590,7 @@ describe('textos nos 3 idiomas', () => {
     }
   };
 
-  it('en e es têm todas as chaves do follow-up do quadro', () => parity(tasksMsgs, /^tasks\.fu[A-Z]/, 69));
+  it('en e es têm todas as chaves do follow-up do quadro', () => parity(tasksMsgs, /^tasks\.fu[A-Z]/, 70));
 
   it('a dica do selo nos 3 idiomas diz a frase inteira: quem pediu a tarefa OU o dono decide, e o que a decisão pode ser', () => {
     expect(tasksMsgs['pt-BR']['tasks.fuBadgeHint']).toContain('Quem pediu a tarefa, ou você, decide: vira card ou é descartada.');

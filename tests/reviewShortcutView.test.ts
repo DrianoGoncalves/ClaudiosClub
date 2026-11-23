@@ -17,8 +17,7 @@ import { askReview, reviewShortcutOf, type AskReviewIo } from '../client/src/inb
 import { ReviewShortcutForm } from '../client/src/inbox/ReviewShortcut';
 import { alertAction } from '../client/src/inbox/taskAlerts';
 import { ReviewDelegate } from '../client/src/tasks/ReviewDelegate';
-import { canPickReviewer, reviewerChoice, reviewersOf } from '../client/src/tasks/reviewPick';
-import { byHierarchy } from '../client/src/tasks/TasksBoard';
+import { byHierarchy, canPickReviewer, reviewerChoice, reviewersOf, reviewInProgress } from '../client/src/tasks/reviewPick';
 import { t } from '../client/src/i18n';
 
 const taskReview = vi.mocked(api.taskReview);
@@ -78,6 +77,20 @@ describe('reviewShortcutOf (quando há atalho e quem entra)', () => {
     expect(reviewShortcutOf(stuck(), task({ review: { ...open, doneAt: '2026-11-19T11:00:00.000Z' } }), TEAM)).not.toBeNull(); // respondeu sem veredito: dá para pedir outra
     expect(canPickReviewer(task({ review: open }))).toBe(false);
     expect(canPickReviewer(task())).toBe(true);
+  });
+
+  it('revisão superseded (ou anterior à última entrega) não conta como em andamento: painel e atalho deixam pedir de novo, como o servidor (liveReview)', () => {
+    const open = { staffId: 'rev', sessionId: 's', at: '2026-11-19T10:00:00.000Z' };
+    const old = task({ review: { ...open, superseded: true } });
+    expect(reviewInProgress(old)).toBe(false);
+    expect(canPickReviewer(old)).toBe(true);
+    expect(reviewShortcutOf(stuck(), old, TEAM)).not.toBeNull();
+    const redelivered = task({ review: open, delivery: { at: '2026-11-19T12:00:00.000Z', summary: '' } as Task['delivery'] });
+    expect(reviewInProgress(redelivered)).toBe(false);
+    expect(reviewInProgress(task({ review: open, delivery: { at: '2026-11-19T09:00:00.000Z', summary: '' } as Task['delivery'] }))).toBe(true);
+    // O painel mostra o seletor quando o atalho mostra.
+    const html = renderToStaticMarkup(createElement(ReviewDelegate, { projectId: 'p1', task: old, staff: TEAM.slice(0, 3), onChanged: () => {}, onOpenStaff: () => {} }));
+    expect(html).toContain('<select');
   });
 
   it('sem ninguém para revisar a lista vem vazia (o seletor mostra o "contrate um revisor", como o painel)', () => {
@@ -201,5 +214,10 @@ describe('ligações (sem DOM: só conferidas no código)', () => {
     expect(src).toContain('reviewShortcutOf(item, stuckTask, staff)');
     expect(src).toMatch(/aria-expanded=\{delegating === item\.id\}/);
     expect(src).toContain('<ReviewShortcutForm');
+    expect(src).toContain('aria-controls={`inbox-review-${item.id}`}');
+    expect(src).toContain('id={`inbox-review-${item.id}`}');
+    expect(src).toContain('setReviewReadError('); // falha da releitura vai para o topo do menu
+    const dr = readFileSync(new URL('../client/src/inbox/delegateReview.ts', import.meta.url), 'utf8');
+    expect(dr).not.toContain('TasksBoard');
   });
 });

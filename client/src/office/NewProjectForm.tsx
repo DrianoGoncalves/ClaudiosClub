@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Workspace } from '../../../shared/model';
-import { api, type ImportableProject } from '../api';
+import { api, ApiError, type ImportableProject } from '../api';
 import { t } from '../i18n';
+import { TeamTemplatePicker } from '../staff/TeamTemplatePicker';
 import { FolderField, useFolderPicker } from './FolderField';
 import { isLocalPage } from './folderPick';
 
@@ -26,6 +27,8 @@ export function NewProjectForm({ workspaces, workspaceId, onClose, onCreated }: 
   const [folder, setFolder] = useState('');
   const [git, setGit] = useState(true);
   const [workspace, setWorkspace] = useState(workspaceId ?? '');
+  // Modelo de equipe (opcional; null = sem equipe, o padrão).
+  const [template, setTemplate] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Importar: os projetos do Claude Code fora do quadro (null = ainda carregando) e os marcados (pelo caminho).
@@ -90,14 +93,16 @@ export function NewProjectForm({ workspaces, workspaceId, onClose, onCreated }: 
         else onClose();
         return;
       }
+      const tpl = template ? { templateId: template } : {};
       const r = await api.newProject(
         mode === 'create'
-          ? { mode, parent: parent.trim(), name: name.trim(), git, workspaceId: workspaceIdOrNull }
-          : { mode, path: folder.trim(), workspaceId: workspaceIdOrNull },
+          ? { mode, parent: parent.trim(), name: name.trim(), git, workspaceId: workspaceIdOrNull, ...tpl }
+          : { mode, path: folder.trim(), workspaceId: workspaceIdOrNull, ...tpl },
       );
       onCreated(r.projectId);
     } catch (err) {
-      setError((err as Error).message);
+      // 409: a pasta já tem equipe; o texto do servidor vem em pt, então a frase sai pelo status.
+      setError(err instanceof ApiError && err.status === 409 && template ? t('tpl.errExists') : (err as Error).message);
       setBusy(false);
       if (mode === 'import') setFound(null);
     }
@@ -181,6 +186,13 @@ export function NewProjectForm({ workspaces, workspaceId, onClose, onCreated }: 
               ))}
             </div>
           </>
+        )}
+
+        {mode !== 'import' && (
+          <div className="tpl-field">
+            <span>{t('tpl.npLabel')}</span>
+            <TeamTemplatePicker value={template} onChange={setTemplate} allowNone />
+          </div>
         )}
 
         {workspaces.length > 0 && (

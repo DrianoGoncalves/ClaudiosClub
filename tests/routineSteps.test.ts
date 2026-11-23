@@ -25,7 +25,7 @@ const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.g
 
 describe('o passo e o cron', () => {
   it('as opções: só os minutos que dividem a hora; horas de 1 a 12', () => {
-    expect(MINUTE_STEPS).toEqual([5, 10, 15, 20, 30]);
+    expect(MINUTE_STEPS).toEqual([5, 6, 10, 12, 15, 20, 30]);
     expect(HOUR_STEPS).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     for (const n of MINUTE_STEPS) expect(60 % n).toBe(0);
   });
@@ -45,6 +45,8 @@ describe('o passo e o cron', () => {
   it('cabe nas opções só com N da lista', () => {
     expect(stepFits({ unit: 'minutes', n: 30 })).toBe(true);
     expect(stepFits({ unit: 'minutes', n: 45 })).toBe(false);
+    expect(stepFits({ unit: 'minutes', n: 6 })).toBe(true);
+    expect(stepFits({ unit: 'minutes', n: 12 })).toBe(true);
     expect(stepFits({ unit: 'minutes', n: 2 })).toBe(false); // divide 60, mas o formulário não oferece
     expect(stepFits({ unit: 'hours', n: 12 })).toBe(true);
     expect(stepFits({ unit: 'hours', n: 13 })).toBe(false);
@@ -95,6 +97,8 @@ describe('formulário ↔ cron (ida e volta)', () => {
   it('o resto do cron segue no cron avançado, com o texto que estava', () => {
     expect(draftFromRoutine('ana', like(cron('0 8 * * 1-5')), NOW)).toMatchObject({ freq: 'cron', cron: '0 8 * * 1-5' });
     expect(draftFromRoutine('ana', like(cron('*/2 * * * *')), NOW)).toMatchObject({ freq: 'cron', cron: '*/2 * * * *' }); // certo, mas fora das opções
+    expect(draftFromRoutine('ana', like(cron('*/12 * * * *')), NOW)).toMatchObject({ freq: 'minutes', minutes: '12' });
+    expect(draftFromRoutine('ana', like(cron('*/6 * * * *')), NOW)).toMatchObject({ freq: 'minutes', minutes: '6' });
     expect(draftFromRoutine('ana', like(cron('30 */2 * * *')), NOW)).toMatchObject({ freq: 'cron', cron: '30 */2 * * *' });
   });
 
@@ -110,8 +114,10 @@ describe('formulário ↔ cron (ida e volta)', () => {
       const out = checkDraft(draft(over));
       return out.ok ? null : out.error;
     };
-    expect(err({ freq: 'minutes', minutes: '7' })).toBe('Minutos: escolha 5, 10, 15, 20 ou 30.');
-    expect(err({ freq: 'minutes', minutes: '' })).toBe('Minutos: escolha 5, 10, 15, 20 ou 30.');
+    expect(err({ freq: 'minutes', minutes: '7' })).toBe('Minutos: escolha 5, 6, 10, 12, 15, 20 ou 30.');
+    expect(err({ freq: 'minutes', minutes: '' })).toBe('Minutos: escolha 5, 6, 10, 12, 15, 20 ou 30.');
+    expect(err({ freq: 'minutes', minutes: '6' })).toBeNull();
+    expect(err({ freq: 'minutes', minutes: '12' })).toBeNull();
     expect(err({ freq: 'hours', hours: '13' })).toBe('Horas: use um número inteiro de 1 a 12.');
     expect(err({ freq: 'hours', hours: '0' })).toBe('Horas: use um número inteiro de 1 a 12.');
     expect(err({ freq: 'hours', hours: '1.5' })).toBe('Horas: use um número inteiro de 1 a 12.');

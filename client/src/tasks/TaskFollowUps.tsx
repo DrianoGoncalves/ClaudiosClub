@@ -3,6 +3,7 @@ import type { FollowUp, FollowUpCardResult, Task } from '../../../shared/model';
 import { ApiError, api } from '../api';
 import { formatAgo } from '../format';
 import { locale, t } from '../i18n';
+import { cardTone } from '../inbox/alertTone';
 import { FollowUpFieldsView } from './FollowUpFields';
 import { decisionErrorText, followUpAuthor, followUpState, followUpsOf, openFollowUps, type FollowUpDecision } from './followUp';
 import {
@@ -37,7 +38,7 @@ export function FollowUpBadge({ task }: { task: Pick<Task, 'followUps'> }) {
   if (!open.length) return null;
   const mine = open.some((f) => f.to === 'owner');
   return (
-    <span className={`task-badge task-followup small${mine ? ' is-waiting' : ''}`} title={t(mine ? 'tasks.fuBadgeMineHint' : 'tasks.fuBadgeHint')}>
+    <span className={`task-badge task-followup small${mine ? ` ${cardTone('owner')}` : ''}`} title={t(mine ? 'tasks.fuBadgeMineHint' : 'tasks.fuBadgeHint')}>
       {followUpSummary(open)}
     </span>
   );
@@ -97,13 +98,18 @@ export interface SubmitSetters {
   setError: (error: string | null) => void;
   onGone?: (message: string | null) => void;
   onDecided?: (message: string | null) => void;
+  /** Trava de envio fora do estado: o `setBusy` só desliga o botão na próxima pintura, e um segundo envio nesse intervalo (Enter repetido, toque duplo) criaria o card duas vezes. */
+  lock?: { current: boolean };
 }
 
 /**
  * O que o formulário faz ao confirmar, com os setters de fora (como `sendDecision`, para se testar sem tela): ocupado e avisos limpos; roda `go`; o 409 (`gone`) sobe como aviso para o pai
  * (`onGone`), e sem `onGone` fica sob o formulário; outro erro fica sob o formulário; deu certo, a frase do que foi feito sobe por `onDecided`. Ocupado volta ao fim, falhe o que falhar.
+ * Com `lock` já tomado (há um envio em curso) não faz nada.
  */
 export async function submitDecision(go: () => Promise<DecisionOutcome & { note?: string }>, set: SubmitSetters): Promise<void> {
+  if (set.lock?.current) return;
+  if (set.lock) set.lock.current = true;
   set.setBusy(true);
   set.setError(null);
   set.onGone?.(null);
@@ -115,6 +121,7 @@ export async function submitDecision(go: () => Promise<DecisionOutcome & { note?
     else set.onDecided?.(out.note ?? null);
   } finally {
     set.setBusy(false);
+    if (set.lock) set.lock.current = false;
   }
 }
 
@@ -154,19 +161,23 @@ interface DecideProps {
   onOpenCard?: () => void;
   /** Na caixa: botões de texto (`link`) no lugar de botões cheios. */
   compact?: boolean;
-  /** A tarefa de origem ainda está sendo lida: sem ela não se sabe se está Finalizada (as saídas mudam) nem o achado inteiro. As saídas esperam a primeira leitura (dê certo ou não). */
+  /** A tarefa de origem ainda não foi lida (ou a leitura falhou): sem ela não se sabe se está Finalizada (as saídas mudam) nem o achado inteiro. As saídas esperam uma leitura que dê certo. */
   loading?: boolean;
+  /** Já abre no formulário de criar card ou de descartar (o estado inicial; sem ele, só os botões). */
+  startMode?: 'card' | 'discard';
 }
 
 /**
- * As saídas de um follow-up aberto. Tarefa aberta: "Criar card" (responsável, título e descrição já preenchidos e editáveis; um clique em confirmar) e "Descartar" (motivos prontos, ou texto
- * livre). Tarefa Finalizada: "Revisar" (o mesmo card, para o responsável da tarefa) e "Concluir" (um clique: encerra sem card, pela rota de descarte com o motivo "concluído sem ajuste").
+ * As saídas de um follow-up aberto. Dois estados, uma ação primária em cada: fechado, "Revisar e criar card" (abre o rascunho, não cria) e "Descartar"; aberto, só o formulário, com o único
+ * "Criar card" (confirma) e "Voltar". Os botões do estado fechado somem com o formulário aberto: o mesmo rótulo duas vezes, uma delas sem efeito, era o bug.
+ * Tarefa aberta: o card sai com responsável, título e descrição já preenchidos e editáveis. Ao abrir o foco vai ao primeiro campo; ao voltar, ao botão que abriu.
+ * Tarefa Finalizada: "Revisar" (o mesmo card, para o responsável da tarefa) e "Concluir" (um clique: encerra sem card, pela rota de descarte com o motivo "concluído sem ajuste").
  * Decidido uma vez não se desfaz (409). Com 409 (já decidido por outro caminho) roda `onDone` também e o aviso sobe por `onGone` (com `null` ao tentar de novo): o erro daqui sumiria junto
  * com este componente, que a releitura desmonta. Sem `onGone`, o aviso fica aqui mesmo. Os outros erros (rede, recusa) ficam sob o formulário, que segue aberto.
  */
-export function FollowUpDecide({ projectId, taskId, followUp, task = null, team = [], onDone, onGone, onDecided, onOpenCard, compact = false, loading = false }: DecideProps) {
+export function FollowUpDecide({ projectId, taskId, followUp, task = null, team = [], onDone, onGone, onDecided, onOpenCard, compact = false, loading = false, startMode }: DecideProps) {
   const finished = taskFinished(task);
-  const [mode, setMode] = useState<'card' | 'discard' | null>(null);
+  const [mode, setMode] = useState<'card' | 'discard' | null>(startMode ?? null);
   const [edits, setEdits] = useState<Partial<{ staffId: string; title: string; description: string }>>({});
   const [reason, setReason] = useState<DiscardReason | null>(null);
   const [other, setOther] = useState('');
@@ -175,6 +186,9 @@ export function FollowUpDecide({ projectId, taskId, followUp, task = null, team 
   const btn = compact ? 'link small' : 'btn-secondary';
   const main = compact ? 'link small' : 'btn-primary';
   const form = useRef<HTMLFormElement>(null);
+  const openers = useRef<Record<'card' | 'discard', HTMLButtonElement | null>>({ card: null, discard: null });
+  const opener = useRef<'card' | 'discard' | null>(null);
+  const lock = useRef(false);
   const ref: Ref = { projectId, taskId, followUpId: followUp.id };
 
   // O que o dono ainda não mexeu acompanha o que chega depois (a tarefa e a equipe podem ser lidas com o formulário já aberto).
@@ -187,13 +201,24 @@ export function FollowUpDecide({ projectId, taskId, followUp, task = null, team 
     if (mode) form.current?.scrollIntoView?.({ block: 'nearest' });
   }, [mode, reason]);
 
+  // Foco: ao abrir, o primeiro campo (os botões que abriram saem de cena); ao voltar, o botão que abriu (que acabou de voltar). Só depois de uma troca, nunca na montagem.
+  useEffect(() => {
+    if (mode) {
+      form.current?.querySelector<HTMLElement>('select, input, textarea')?.focus({ preventScroll: true });
+    } else if (opener.current) {
+      openers.current[opener.current]?.focus();
+      opener.current = null;
+    }
+  }, [mode]);
+
   const pick = (next: 'card' | 'discard') => {
+    if (mode) opener.current = mode;
     setMode(mode === next ? null : next);
     setError(null);
   };
 
   /** Roda o envio: erro e 409 no lugar certo, e a frase do que foi feito sobe para o pai. */
-  const send = (go: () => Promise<DecisionOutcome & { note?: string }>) => submitDecision(go, { setBusy, setError, onGone, onDecided });
+  const send = (go: () => Promise<DecisionOutcome & { note?: string }>) => submitDecision(go, { setBusy, setError, onGone, onDecided, lock });
 
   const createCard = async (e: FormEvent) => {
     e.preventDefault();
@@ -212,32 +237,46 @@ export function FollowUpDecide({ projectId, taskId, followUp, task = null, team 
 
   return (
     <div className={`task-fu-decide${compact ? ' is-compact' : ''}`}>
-      <p className="task-fu-actions">
-        {onOpenCard && (
-          <button type="button" className={btn} title={t('tasks.fuOpenCardTitle')} onClick={onOpenCard}>
-            {t('tasks.fuOpenCard')}
+      {!mode && (
+        <p className="task-fu-actions">
+          {onOpenCard && (
+            <button type="button" className={btn} title={t('tasks.fuOpenCardTitle')} onClick={onOpenCard}>
+              {t('tasks.fuOpenCard')}
+            </button>
+          )}
+          {finished ? (
+            <button type="button" className={btn} title={t('tasks.fuConcludeTitle')} disabled={busy || loading} onClick={() => void conclude()}>
+              {t('tasks.fuConcludeBtn')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              ref={(el) => {
+                openers.current.discard = el;
+              }}
+              className={btn}
+              title={t('tasks.fuDiscardTitle')}
+              disabled={busy || loading}
+              onClick={() => pick('discard')}
+            >
+              {t('tasks.fuDiscardBtn')}
+            </button>
+          )}
+          <button
+            type="button"
+            ref={(el) => {
+              openers.current.card = el;
+            }}
+            className={`${main} is-main`}
+            title={t(finished ? 'tasks.fuReviewTitle' : 'tasks.fuCreateTitle')}
+            disabled={busy || loading}
+            onClick={() => pick('card')}
+          >
+            {t(finished ? 'tasks.fuReviewBtn' : 'tasks.fuCreateBtn')}
           </button>
-        )}
-        <button
-          type="button"
-          className={main}
-          aria-expanded={mode === 'card'}
-          title={t(finished ? 'tasks.fuReviewTitle' : 'tasks.fuCreateTitle')}
-          disabled={busy || loading}
-          onClick={() => pick('card')}
-        >
-          {t(finished ? 'tasks.fuReviewBtn' : 'tasks.fuCreateBtn')}
-        </button>
-        {finished ? (
-          <button type="button" className={btn} title={t('tasks.fuConcludeTitle')} disabled={busy || loading} onClick={() => void conclude()}>
-            {t('tasks.fuConcludeBtn')}
-          </button>
-        ) : (
-          <button type="button" className={btn} aria-expanded={mode === 'discard'} title={t('tasks.fuDiscardTitle')} disabled={busy || loading} onClick={() => pick('discard')}>
-            {t('tasks.fuDiscardBtn')}
-          </button>
-        )}
-      </p>
+        </p>
+      )}
+      {loading && <p className="muted small">{t('tasks.fuLoading')}</p>}
       {mode === 'card' && (
         <form ref={form} className="task-fu-form" onSubmit={(e) => void createCard(e)}>
           <label className="task-doubt-field">
@@ -261,11 +300,11 @@ export function FollowUpDecide({ projectId, taskId, followUp, task = null, team 
           </label>
           <p className="muted small">{t('tasks.fuCreateHint')}</p>
           <p className="actions">
-            <button type="submit" className="btn-primary" disabled={busy || !draft.title.trim()}>
-              {t(finished ? 'tasks.fuReviewConfirm' : 'tasks.fuCreateConfirm')}
-            </button>
             <button type="button" className="btn-secondary" disabled={busy} onClick={() => pick('card')}>
               {t('tasks.fuBack')}
+            </button>
+            <button type="submit" className="btn-primary" disabled={busy || !draft.title.trim()} aria-busy={busy || undefined}>
+              {busy ? t('actionBar.sending') : t(finished ? 'tasks.fuReviewConfirm' : 'tasks.fuCreateConfirm')}
             </button>
           </p>
         </form>
@@ -283,11 +322,11 @@ export function FollowUpDecide({ projectId, taskId, followUp, task = null, team 
           {reason === 'other' && <input value={other} maxLength={300} placeholder={t('tasks.fuReasonPlaceholder')} aria-label={t('tasks.fuReasonOther')} disabled={busy} onChange={(e) => setOther(e.target.value)} />}
           <p className="muted small">{t('tasks.fuDiscardHint')}</p>
           <p className="actions">
-            <button type="submit" className="btn-primary" disabled={busy || !discardReasonText(reason, other)}>
-              {t('tasks.fuDiscardConfirm')}
-            </button>
             <button type="button" className="btn-secondary" disabled={busy} onClick={() => pick('discard')}>
               {t('tasks.fuBack')}
+            </button>
+            <button type="submit" className="btn-primary" disabled={busy || !discardReasonText(reason, other)} aria-busy={busy || undefined}>
+              {busy ? t('actionBar.sending') : t('tasks.fuDiscardConfirm')}
             </button>
           </p>
         </form>
@@ -318,14 +357,15 @@ interface ItemProps {
 }
 
 /**
- * Um follow-up da lista. Antigo (sem os campos do revisor): como sempre, com o texto e as saídas. Com os campos: o selo, o título e o "se não fizer" (o texto técnico fica recolhido);
- * se espera na conversa de trabalho, o detalhe só aponta para lá; se o aviso está com o gestor, diz com quem está; se espera você e não há conversa, decide-se aqui, com as mesmas saídas do balão.
+ * Um follow-up da lista. Antigo (sem os campos do revisor): o texto. Com os campos (aberto ou já decidido): o selo, o título e o "se não fizer" (o texto técnico fica recolhido).
+ * Aberto, a regra é uma só para os dois: o servidor deixa decidir quem pediu a tarefa OU você, pela tela, então se espera na conversa de trabalho o detalhe só aponta para lá; senão
+ * decide-se aqui, com as mesmas saídas do balão, e se o aviso está com o gestor a nota diz que ele também pode decidir.
  */
 function FollowUpItem({ task, followUp: f, tasks, team, nameOf, now, projectId, inChat, onOpenTask, onChanged, onGone, onDecided }: ItemProps) {
   const state = followUpState(f, { requestedBy: task.requestedBy, nameOf, now });
   const card = f.cardId ? tasks.find((x) => x.id === f.cardId) : undefined;
   const open = state.kind === 'open';
-  const structured = open && hasFields(f);
+  const structured = hasFields(f);
   const decide = (
     <FollowUpDecide projectId={projectId} taskId={task.id} followUp={f} task={task} team={team} onDone={onChanged} onGone={onGone} onDecided={onDecided} />
   );
@@ -339,7 +379,7 @@ function FollowUpItem({ task, followUp: f, tasks, team, nameOf, now, projectId, 
             {formatAgo(now - Date.parse(f.at))}
           </span>
         </span>
-        <span className={`task-badge small${open && f.to === 'owner' ? ' is-waiting' : ''}`}>{state.badge}</span>
+        <span className={`task-badge small${open && f.to === 'owner' ? ` ${cardTone('owner')}` : ''}`}>{state.badge}</span>
       </div>
       {structured ? (
         <FollowUpFieldsView
@@ -370,9 +410,9 @@ function FollowUpItem({ task, followUp: f, tasks, team, nameOf, now, projectId, 
         ) : (
           <p className="muted small">{t('tasks.fuCardNoId')}</p>
         ))}
-      {open && structured && inChat && <p className="muted small">{t('tasks.fuInChat')}</p>}
-      {open && structured && !inChat && f.to === 'manager' && <p className="muted small">{t('tasks.fuAtManager')}</p>}
-      {open && (!structured || (!inChat && f.to === 'owner')) && decide}
+      {open && inChat && <p className="muted small">{t('tasks.fuInChat')}</p>}
+      {open && !inChat && f.to === 'manager' && <p className="muted small">{t('tasks.fuAtManager')}</p>}
+      {open && !inChat && decide}
     </li>
   );
 }

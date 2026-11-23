@@ -9,7 +9,7 @@ const bia = { id: 'bia', name: 'Bia', projectId: 'loja', sessions: [{ id: 's-bia
 // `projects` é a lista do quadro; `offBoard` são os ids do que o Claude Code conhece e ficou fora dele.
 const board = [project('loja', '/w/loja'), project('loja-wt', '/w/loja/.claude/worktrees/myco-bia', { worktreeOf: '/w/loja' })];
 
-describe('caixa "precisa de mim" e avisos de turno', () => {
+describe('caixa "Inbox" e avisos de turno', () => {
   it('sessão de projeto que o Claude Code conhece e está fora do quadro fica escondida (worktree dele também)', () => {
     const off = new Set(['-w-fora', '-w-fora--claude-worktrees-x']);
     const { where, hidden } = sessionPlaces(board, [bia], new Set(), off);

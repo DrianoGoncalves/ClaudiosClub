@@ -150,7 +150,7 @@ describe('ficha aberta: a lista de skills', () => {
     );
   };
   /** A linha da skill: o <label> que traz o nome; marcada = o checkbox dele vem `checked`. */
-  const rows = (html: string, name: string) => html.match(new RegExp(`<label class="check"><input type="checkbox"[^>]*> ${name}<span[^]*?</label>`, 'g')) ?? [];
+  const rows = (html: string, name: string) => html.match(new RegExp(`<label class="check"><input type="checkbox"[^>]*><span class="check-text"><span>${name}</span><span[^]*?</label>`, 'g')) ?? [];
   const row = (html: string, name: string) => rows(html, name)[0] ?? '';
 
   it('global:motion-design: a linha normal vem marcada e sem selo (era o falso "não existe mais")', () => {
@@ -159,7 +159,7 @@ describe('ficha aberta: a lista de skills', () => {
     expect(line).toContain('checked');
     expect(line).toContain('skill · Global');
     expect(html).not.toContain('não existe mais');
-    expect(html.match(/> motion-design</g)).toHaveLength(1);
+    expect(html.match(/<span>motion-design</g)).toHaveLength(1);
   });
 
   it('project:relatorio: marcada com o escopo Projeto à vista', () => {

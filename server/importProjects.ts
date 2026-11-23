@@ -6,7 +6,7 @@ import type { ToolAdapter } from './adapters/types';
 import { addExtraProject, readConfig, setArchived, setProjectWorkspace } from './config';
 import { ProjectError } from './newProject';
 
-// "Importar": o quadro só mostra o que tem equipe, o demo e as pastas de `extraProjects`.
+// "Importar": o quadro só mostra o que tem equipe, o demo antigo (se ainda existir) e as pastas de `extraProjects`.
 // Importar é pôr a pasta nessa lista (a mesma do "Novo projeto"); nada é copiado nem alterado no projeto.
 // Fontes: o que o Claude Code conhece e o que o Codex conhece (config.toml e rollouts).
 
@@ -38,7 +38,7 @@ const later = (a: string | null, b: string | null): string | null => (!a ? b : !
 
 /**
  * Os importáveis de todas as fontes, por pasta. "Fora do quadro" é o mesmo do Claude Code: fora da lista do quadro
- * (`listProjects`), que também traz o demo, as de `extraProjects` e as que têm equipe.
+ * (`listProjects`), que também traz o demo antigo, as de `extraProjects` e as que têm equipe.
  */
 async function importState(adapter: Source, opts: ImportOptions) {
   const [claude, board, codex] = await Promise.all([

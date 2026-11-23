@@ -5,8 +5,8 @@ Para o funcionário: responda a dúvida de uso com base nestas páginas; se não
 | Página | Conteúdo |
 | --- | --- |
 | [01-comecando.md](01-comecando.md) | Instalar, abrir, parear o navegador, primeiro projeto e workspaces. |
-| [02-funcionarios.md](02-funcionarios.md) | Contratar, cargos prontos, a ficha, memória, gestor e equipe, organograma, RH, MCPs e skills. |
-| [03-chat.md](03-chat.md) | Conversar com o funcionário, "precisa de mim", arquivo citado, despertador, retomada automática e conversa nova. |
+| [02-funcionarios.md](02-funcionarios.md) | Contratar, cargos prontos, a ficha, memória, gestor e equipe, consulta entre projetos, organograma, RH, MCPs (Global e Projeto) e skills. |
+| [03-chat.md](03-chat.md) | Conversar com o funcionário, "Inbox", arquivo citado, despertador, retomada automática e conversa nova. |
 | [04-tarefas.md](04-tarefas.md) | Quadro de tarefas, fila, plano para aprovar ou recusar, revisão, delegar a revisão e mesclar a entrega. |
 | [05-agendamentos-e-arquivos.md](05-agendamentos-e-arquivos.md) | Despertadores e continuações agendadas, navegador de arquivos e mudanças sem commit. |
 | [06-consumo-e-motores.md](06-consumo-e-motores.md) | Consumo de 5 h e 7 dias, ranking, motor Claude ou Codex, troca para o secundário, revisão de custo e segunda opinião do Codex. |

@@ -1,7 +1,6 @@
 import type { InboxItem, StaffProfile, Task } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
-import { canPickReviewer, reviewersOf } from '../tasks/reviewPick';
-import { byHierarchy } from '../tasks/TasksBoard';
+import { byHierarchy, canPickReviewer, reviewersOf } from '../tasks/reviewPick';
 import { stuckOf } from './taskAlerts';
 
 // "Delegar revisão" no aviso de tarefa parada (item `stuck` com a ação Revisar): atalho para o seletor que o card já tem, sem abrir o card.

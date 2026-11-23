@@ -477,6 +477,73 @@ fs.appendFileSync(log, 'start ' + Date.now() + '\\n'); setTimeout(() => { fs.app
     await expect(withHeavyLock('npm test', async () => Promise.reject(new Error('quebrou')), { label: 'teste', leaseMs: 60_000 })).rejects.toThrow('quebrou');
     expect(await currentHolder(heavyLockDir())).toBeNull();
   });
+
+  // t-3f52ea: a espera da suíte já foi só para o log; `onWait` a entrega a quem pediu (o estado da fila do funcionário, ver `TaskService.queueStates`).
+  it('onWait: avisa quando começa a esperar a vez (com quem segura) e quando a espera acaba; sem espera, só o fim', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const free: Array<unknown> = [];
+      await withHeavyLock('npm test', async () => 'rodou', { label: 'teste', leaseMs: 60_000, onWait: (w) => free.push(w) });
+      expect(free).toEqual([null]);
+
+      await hold(heavyLockDir(), { label: 'testes de Outra' });
+      const events: string[] = [];
+      const pending = withHeavyLock('npm test', async () => (events.push('rodou'), 'ok'), { label: 'teste', leaseMs: 60_000, onWait: (w) => events.push(w ? `espera:${w.holder}` : 'fim') });
+      await sleep(300);
+      expect(events).toEqual(['espera:testes de Outra']);
+      await release(heavyLockDir(), 'outra');
+      expect(await pending).toBe('ok');
+      expect(events).toEqual(['espera:testes de Outra', 'fim', 'rodou']);
+    } finally {
+      log.mockRestore();
+      await release(heavyLockDir(), 'outra');
+    }
+  });
+
+  it('onWait: esgotado o limite de espera avisa o fim e roda; observador que lança não derruba a validação', async () => {
+    await hold(heavyLockDir(), {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const events: string[] = [];
+      const res = await withHeavyLock('npm test', async () => 'rodou', { label: 'teste', leaseMs: 60_000, maxWaitMs: 150, onWait: (w) => events.push(w ? 'espera' : 'fim') });
+      expect(res).toBe('rodou');
+      expect(events).toEqual(['espera', 'fim']);
+      const quebrado = await withHeavyLock('npm test', async () => 'rodou', {
+        label: 'teste',
+        leaseMs: 60_000,
+        maxWaitMs: 150,
+        onWait: () => {
+          throw new Error('o observador quebrou');
+        },
+      });
+      expect(quebrado).toBe('rodou');
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+      await release(heavyLockDir(), 'outra');
+    }
+  });
+
+  it('runTests leva o onWait até a fila: a suíte esperando a vez avisa, e roda quando ela chega', async () => {
+    const dir = path.join(tmp, 'onwait-run');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'onwait', scripts: { test: 'node -e "process.exit(0)"' } }));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await hold(heavyLockDir(), { label: 'testes de Outra' });
+      const events: string[] = [];
+      const pending = runTests(dir, 'npm test', 30_000, 'npm test', (w) => events.push(w ? `espera:${w.holder}` : 'fim'));
+      await sleep(300);
+      expect(events).toEqual(['espera:testes de Outra']);
+      await release(heavyLockDir(), 'outra');
+      expect((await pending).ok).toBe(true);
+      expect(events).toEqual(['espera:testes de Outra', 'fim']);
+    } finally {
+      log.mockRestore();
+      await release(heavyLockDir(), 'outra');
+    }
+  }, 60_000);
 });
 
 describe('Codex: a fila no terminal (o mesmo hook, ligado por -c hooks.*)', () => {
