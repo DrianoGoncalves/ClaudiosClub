@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { Project } from '../shared/model';
+import { TAREFA_MCP_NAME, type Project } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
 import { updateConfig } from '../server/config';
 import { StaffService } from '../server/staff/service';
@@ -54,8 +54,8 @@ async function open(name: string, engine?: 'codex') {
 describe('codexReview até o perguntar_gpt', () => {
   it('desligado (padrão): sem MCP do GPT, roteiro como sempre', async () => {
     const r = await open('Ana');
-    expect(r.mcp).toBeNull();
-    expect(r.args).not.toContain('--mcp-config');
+    // O mcp.json existe por causa do MCP de tarefa (cancelar; entra em toda conversa do Claude, ver tarefaMcp.test.ts): o do GPT é que não está nele.
+    expect(Object.keys(r.mcp?.mcpServers ?? {})).toEqual([TAREFA_MCP_NAME]);
     expect(r.ficha).not.toContain('perguntar_gpt');
   });
 
@@ -80,7 +80,7 @@ describe('codexReview até o perguntar_gpt', () => {
   it('desligar de novo: a conversa seguinte volta sem o MCP', async () => {
     await updateConfig({ codexReview: false });
     const r = await open('Duda');
-    expect(r.mcp).toBeNull();
+    expect(Object.keys(r.mcp?.mcpServers ?? {})).toEqual([TAREFA_MCP_NAME]); // só o de tarefa (ver acima)
     expect(r.ficha).not.toContain('perguntar_gpt');
   });
 });
