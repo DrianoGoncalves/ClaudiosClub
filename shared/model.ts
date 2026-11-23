@@ -656,6 +656,8 @@ export const ACK_CANCELLED_DAYS = 7;
 export const AUTO_REVIEW_ROUNDS = 3;
 /** Teto da lista de arquivos de um card automático (`Task.changedFiles`); passando disso, os arquivos novos não entram na lista. */
 export const CHANGED_FILES_MAX = 300;
+/** Quantos commits de entrega o card guarda (`Task.checkpoints`): o card reprovado tantas vezes assim já parou no limite de revisões. */
+export const CHECKPOINTS_MAX = 20;
 
 /** Teto de `Task.fileOverlaps` por tarefa; passando disso, o par novo não é registrado (nem avisado). */
 export const FILE_OVERLAPS_MAX = 50;
@@ -1116,6 +1118,11 @@ export interface Task {
    * vem depois é da próxima tarefa dele, que já pode ter começado na mesma worktree.
    */
   checkpoint?: { sha: string; at: string } | null;
+  /**
+   * Todos os commits de entrega deste card (o mais novo é o de `checkpoint`; no máximo `CHECKPOINTS_MAX`). `checkpoint` é sobrescrito a cada entrega, e o card reprovado que entrega de novo
+   * perde o commit da entrega reprovada, que segue no branch: a mescla automática (ver `TaskService.mergeSoon`) usa esta lista para saber de quem é cada commit do caminho.
+   */
+  checkpoints?: string[];
   /** Entrega (quando foi para revisão): o resumo da conversa e, se a ficha pediu, o porquê de cada arquivo. */
   delivery?: TaskDelivery;
   /** Dúvida do funcionário numa tarefa pedida por gestor: vai para o gestor (ou, escalada, para você). A mais recente. */

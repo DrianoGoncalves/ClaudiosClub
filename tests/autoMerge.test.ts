@@ -277,6 +277,50 @@ describe('mescla automática na aprovação', () => {
     expect(p.clean()).toBe('');
   });
 
+  it('card do meio reprovado que entrega de novo depois do seguinte: o commit da entrega reprovada não vai sem a correção, e o seguinte espera o card ser aprovado', async () => {
+    const p = await proj('reprovado-reentrega', { policy: 'auto' });
+    const a = await p.deliver('ana-1', 'Tarefa A', { 'a.txt': 'do A, versão reprovada\n' });
+    const b = await p.deliver('ana-1', 'Tarefa B', { 'b.txt': 'do B\n' });
+    const before = p.head();
+
+    // O B é aprovado primeiro e espera: o commit do A (em revisão) está no caminho dele.
+    await p.approve(b);
+    await p.settle();
+    expect(await p.get(b.id)).toMatchObject({ status: 'review', autoMerge: { wait: { why: 'open-card' } } });
+
+    // O A é reprovado, volta ao trabalho e entrega de novo DEPOIS do B (o `checkpoint` dele passa a ser o commit novo, fora do caminho do B).
+    p.texts.set(a.review, 'REPROVADO\n\n🔴 R1 · a.txt — a versão tem erro\n  Como provar: ler a.txt');
+    await p.svc.onTurnDone(a.review);
+    await until(async () => (await p.get(a.id)).status === 'doing');
+    await fs.writeFile(path.join(p.wts.get('ana-1')!, 'a.txt'), 'do A, corrigido\n');
+    await p.svc.onTurnDone(a.work);
+    await until(async () => {
+      const t = await p.get(a.id);
+      return t.status === 'review' && t.review?.sessionId !== a.review;
+    });
+    const again = await p.get(a.id);
+    expect(again.checkpoint?.sha).not.toBe(a.sha);
+    expect(again.checkpoints).toEqual([a.sha, again.checkpoint!.sha]);
+
+    // Com o A reprovado/sem aprovação da entrega nova, o B segue esperando: o commit reprovado do A não entra no principal.
+    await p.sweep(new Date(Date.now() + 3_600_000));
+    const waiting = await p.get(b.id);
+    expect(waiting).toMatchObject({ status: 'review', autoMerge: { wait: { why: 'open-card' } } });
+    expect(waiting.autoMerge?.retry).toBeUndefined();
+    expect(p.head()).toBe(before);
+    expect(existsSync(path.join(p.dir, 'a.txt'))).toBe(false);
+    expect(existsSync(path.join(p.dir, 'b.txt'))).toBe(false);
+
+    // O A é aprovado (a entrega nova): a mescla dele leva os commits do meio e o B, aprovado, fecha junto. O que entra do A é a versão corrigida.
+    p.texts.set(again.review!.sessionId, 'APROVADO\n\nCorrigido.');
+    await p.svc.onTurnDone(again.review!.sessionId);
+    await p.settle();
+    await until(async () => (await p.get(a.id)).status === 'done' && (await p.get(b.id)).status === 'done');
+    expect(await fs.readFile(path.join(p.dir, 'a.txt'), 'utf8')).toBe('do A, corrigido\n');
+    expect(await fs.readFile(path.join(p.dir, 'b.txt'), 'utf8')).toBe('do B\n');
+    expect(p.clean()).toBe('');
+  });
+
   it('o card do meio do caminho foi cancelado: fail closed, a mescla para para o dono decidir (esperar não resolveria)', async () => {
     const p = await proj('card-cancelado', { policy: 'auto' });
     const a = await p.deliver('ana-1', 'Tarefa A', { 'a.txt': 'do A\n' });

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
+import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, CHECKPOINTS_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
 import { commitMessage, commitPaths, commitTaskFiles, leftText, summarize, type SharedHold, type SlotFound } from './autoCommit';
 import { leftoversPreview, planLeftovers, withCommitLeft } from './commitLeft';
@@ -5272,7 +5272,7 @@ export class TaskService {
     const due = (await readTasks(dir))
       .filter((t) => t.status === 'review' && t.autoMerge && !t.autoMerge.stopped && mergeDue(t.autoMerge, now.getTime()))
       .sort((a, b) => a.autoMerge!.since.localeCompare(b.autoMerge!.since));
-    const jobs: Array<Promise<void>> = [];
+    const jobs: Array<Promise<boolean>> = [];
     for (const t of due) {
       const key = `${projectId}:${t.id}`;
       if (this.mergeQueued.has(key)) continue;
@@ -5280,19 +5280,20 @@ export class TaskService {
       jobs.push(
         this.inProjectQueue(dir, () => this.autoMergeOne(projectId, dir, t.id, now))
           // O que sai da vez do projeto (gravar o desfecho, avisar quem pediu, mandar o ajuste à conversa) espera fora dela: não segura o commit nem a mescla seguinte.
-          .then((after) => after?.())
-          .catch(() => {})
+          .then(async (after) => (await after?.()) === true)
+          .catch(() => false)
           .finally(() => this.mergeQueued.delete(key)),
       );
     }
-    await Promise.all(jobs);
+    // Um card entrou no principal: quem esperava por ele (o commit dele estava no caminho) já pode seguir, sem esperar o próximo tick. Só se andou, então não há laço.
+    if ((await Promise.all(jobs)).some(Boolean)) this.mergeSoon(projectId, now);
   }
 
   /**
    * Uma mescla automática, já na vez do projeto: lê o card de novo (o que valia ao enfileirar pode ter mudado) e decide pelo estado gravado. Só o que toca o checkout principal (conferir o que já está
    * nele, desfazer o resto de uma queda, mesclar e testar) roda aqui; o desfecho volta como função para sair da vez (ver `sweepMerges`).
    */
-  private async autoMergeOne(projectId: string, dir: string, taskId: string, now: Date): Promise<(() => Promise<void>) | void> {
+  private async autoMergeOne(projectId: string, dir: string, taskId: string, now: Date): Promise<(() => Promise<boolean | void>) | void> {
     if (this.deps.closing?.()) return;
     const all = await readTasks(dir);
     const task = all.find((t) => t.id === taskId);
@@ -5317,14 +5318,14 @@ export class TaskService {
     const already = await integratedSha(dir, sha).catch(() => null);
     if (already) {
       const base = (await locateCode(dir, null, false).catch(() => null))?.branch ?? 'o principal';
-      return async () => void (await this.finishMerge(projectId, taskId, { sha: already, base, branch: place.branch ?? '', tests: null }, valid));
+      return async () => (await this.finishMerge(projectId, taskId, { sha: already, base, branch: place.branch ?? '', tests: null }, valid))?.status === 'done';
     }
     // Os commits do meio do caminho (os que a mescla traz além dos do próprio card) têm de ser de cards já aprovados ou integrados.
     const inRange = new Set(await commitsToMerge(dir, sha).catch(() => [] as string[]));
-    const open = all.filter((o) => o.id !== task.id && o.checkpoint?.sha && o.checkpoint.sha !== sha && inRange.has(o.checkpoint.sha) && !approvedOrIntegrated(o));
+    const open = all.filter((o) => o.id !== task.id && blocksMerge(o, sha, inRange));
     if (open.length) {
       const cancelled = open.filter((o) => o.status === 'cancelled');
-      const names = open.map((o) => `“${titleOf(o)}” (id ${o.id}, ${o.status === 'cancelled' ? 'cancelada' : o.status})`).join(', ');
+      const names = open.map((o) => `“${titleOf(o)}” (id ${o.id}, ${o.status === 'cancelled' ? 'cancelada' : o.status}${approvedOrIntegrated(o) ? ', a versão aprovada ainda não está no caminho' : ''})`).join(', ');
       if (cancelled.length) return () => this.stopMerge(projectId, task, am, `o commit de card cancelado está no meio do caminho: ${names}; mescle pelo card ou resolva antes`);
       return () => this.waitMerge(projectId, task, am, 'open-card', `espera o card ainda não aprovado que está no meio do caminho: ${names}`);
     }
@@ -5337,7 +5338,7 @@ export class TaskService {
     );
     if ('err' in result) return () => this.mergeFailed(projectId, task, am, result.err, now);
     // Cancelada no meio da mescla (o código entrou, e o histórico diz): `finishMerge` lança o conflito, e não há mais nada a fazer aqui.
-    return async () => void (await this.finishMerge(projectId, taskId, result.merged, valid).catch(() => {}));
+    return async () => (await this.finishMerge(projectId, taskId, result.merged, valid).catch(() => null))?.status === 'done';
   }
 
   /** O desfecho de uma mescla que não entrou (ver `mergeSoon`): cada tipo de falha tem o seu caminho. */
@@ -6268,7 +6269,8 @@ export class TaskService {
     if (!dir || (!profile?.worktree && task.codeAt?.where !== 'worktree')) return;
     const place = await locateTaskCode(dir, task, true).catch(() => null);
     const sha = place ? await checkpoint(place, task.title).catch(() => null) : null;
-    if (sha) await this.change(projectId, task.id, (t) => noted({ ...t, checkpoint: { sha, at: new Date().toISOString() } }, `entrega no commit ${sha.slice(0, 7)}`));
+    // O `checkpoint` é só o último; a lista guarda todos, para a mescla automática saber de quem é o commit da entrega reprovada que segue no branch (ver `Task.checkpoints`).
+    if (sha) await this.change(projectId, task.id, (t) => noted({ ...t, checkpoint: { sha, at: new Date().toISOString() }, checkpoints: [...new Set([...(t.checkpoints ?? []), sha])].slice(-CHECKPOINTS_MAX) }, `entrega no commit ${sha.slice(0, 7)}`));
   }
 
   /**
@@ -7645,6 +7647,21 @@ const mergeDue = (am: TaskAutoMerge, at: number): boolean => am.wait?.why === 'o
 
 /** O card do meio do caminho (o commit dele entra com a mescla de outro) é de uma entrega já aprovada ou integrada? Pronto, mesclado ou em revisão com o veredito aprovado desta entrega. */
 const approvedOrIntegrated = (t: Task): boolean => t.status === 'done' || !!t.merged || (t.status === 'review' && liveReview(t)?.verdict === 'approved');
+
+/**
+ * O card `o` impede mesclar até `end`? Os commits dele que a mescla traria (`inRange`: tudo o que `HEAD..end` tem; o `checkpoint` sozinho perde a entrega reprovada que seguiu no branch, ver
+ * `Task.checkpoints`) só entram se a entrega que vale dele (a última, `checkpoint`) vem junto na mescla E ele está aprovado. Reprovado (ou aberto) que entregou de novo depois: o commit velho,
+ * reprovado, estaria indo sem a correção, e a mescla espera o card ser aprovado e mesclado por conta própria (ele leva os commits que estão no meio, aprovados). Pronto/mesclado sem commit no caminho: não impede.
+ */
+function blocksMerge(o: Task, end: string, inRange: ReadonlySet<string>): boolean {
+  const last = o.checkpoint?.sha;
+  const shas = new Set([...(o.checkpoints ?? []), ...(last ? [last] : [])]);
+  shas.delete(end);
+  const inWay = [...shas].some((s) => inRange.has(s));
+  if (!inWay) return false;
+  const lastComes = !!last && (last === end || inRange.has(last));
+  return !lastComes || !approvedOrIntegrated(o);
+}
 
 /** A mescla automática parada nesta entrega (só o que o dono destrava): ver `stuckState`. */
 const stoppedMerge = (t: Task) => (t.status === 'review' && t.autoMerge?.stopped && t.autoMerge.verdict.deliveryAt === (t.delivery?.at ?? null) ? t.autoMerge.stopped : undefined);
