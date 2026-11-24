@@ -1302,6 +1302,11 @@ export interface TaskAutoMerge {
   retry?: RetryState;
   /** A mescla automática parou e só o dono segue (mescla pelo card): o motivo e quando. */
   stopped?: { detail: string; at: string };
+  /**
+   * O pedido é do DONO ("Aprovar entrega" num card de worktree por card): vale sem veredito de revisão nem a política de conclusão por IA, e a junção que não pôde rodar (principal sujo nos arquivos
+   * do card, testes cortados) espera aqui, com o motivo em `wait`, e roda sozinha depois; `verdict` é só o da revisão que havia (pode não existir).
+   */
+  byOwner?: true;
 }
 
 /** A espera pela aprovação do dono (`Task.ownerGate`). */

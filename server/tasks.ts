@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, CHECKPOINTS_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardCardWorktreeConfig, BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
+import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, CHECKPOINTS_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardCardWorktreeConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
 import { commitMessage, commitPaths, commitTaskFiles, leftText, ownerWrote, summarize, type SharedHold, type SlotFound } from './autoCommit';
 import { autoLeft } from './commitAuto';
@@ -32,7 +32,7 @@ import { CapabilityError } from './engineCapability';
 import { StateBusyError } from './atomicWrite';
 import { writeAtomic } from './staff/store';
 import { cancelWith, tarefaMcpOn, tarefaToolName } from './staff/tarefaText';
-import { abortStaleMerge, checkpoint, CodeError, codeTouchedSince, commitsToMerge, detectTest, formatLimit, integratedSha, locateCode, mergeCode, readCode, runTests, type CodePlace } from './taskCode';
+import { abortStaleMerge, checkpoint, CodeError, codeTouchedSince, commitsToMerge, detectTest, formatLimit, integratedSha, locateCode, mergeCode, readCode, runTests, unresolvedFiles, type CodePlace } from './taskCode';
 import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
 import { UsageStopError } from './usageStop';
@@ -1014,15 +1014,16 @@ export class TaskService {
     if (cur?.status === 'cancelled' && patch.status !== undefined) throw new TaskConflictError('a tarefa foi cancelada: reabra antes de mudar de coluna');
     // Portão de "pronto" da política de fluxo (ver `flowOf`): com a conclusão reservada ao dono, só o pedido dele pela tela leva a tarefa a "pronto".
     if (patch.status === 'done' && cur?.status !== 'done' && !byOwner) await this.needOwnerToFinish(projectId);
-    // Código na worktree do card ainda fora do principal: "pronto" só com ele junto. Quem mexe a coluna (o "Aprovar entrega" do dono, a API) passa pela junção; se ela não puder rodar, o card NÃO vai a "pronto"
-    // e quem pediu recebe o motivo (409 em `CodeError`/`TaskConflictError`). Com a junção feita (`finishMerge` leva a "pronto"), o resto do patch segue sobre o card já pronto.
+    // Código na worktree do card ainda fora do principal: "pronto" só com ele junto. Quem mexe a coluna (o "Aprovar entrega" do dono, a API) passa pela junção (`approveCardByOwner`): se ela não puder rodar
+    // (principal sujo nos arquivos do card, testes cortados), o card NÃO vai a "pronto": fica em "revisão" com o motivo e a junção roda sozinha depois; conflito devolve o card ao responsável; o que não
+    // se resolve esperando (sem testes, sem commit de entrega) é 409 com o motivo. Com a junção feita (`finishMerge` leva a "pronto"), o resto do patch segue sobre o card já pronto.
     if (patch.status === 'done' && cur && dir && cur.status !== 'done' && cur.status !== 'cancelled' && cur.codeAt?.card && !cur.merged) {
       const place = await locateTaskCode(dir, cur, true).catch(() => null);
       // Sem a pasta não há como conferir nem juntar o código: fail closed.
       if (!place) throw new TaskConflictError(`a worktree do card não existe mais: não dá para conferir nem juntar o código (o branch \`${cur.codeAt.branch ?? '?'}\`, se ainda existe, o guarda). Recupere-o ou cancele o card`);
       // Card sem nenhuma mudança de código (análise, pesquisa): não há o que juntar, vai a "pronto" e a worktree sai.
       if (!(await this.cardEmpty(dir, cur, place))) {
-        const merged = await this.merge(projectId, taskId, false, byOwner);
+        const merged = await this.approveCardByOwner(projectId, dir, cur, byOwner);
         if (merged?.status !== 'done') return merged;
         const { status: _status, ...rest } = patch;
         return Object.keys(rest).length ? this.update(projectId, taskId, rest, byOwner) : merged;
@@ -3874,6 +3875,31 @@ export class TaskService {
     }
   }
 
+  /**
+   * "Aprovar entrega" do dono num card de worktree por card: o clique é a aprovação e grava o pedido (`TaskAutoMerge.byOwner`, vale sem veredito nem política de conclusão); a junção roda já, na vez do
+   * projeto (`mergeOne`), e devolve o card como ficou: "pronto" (juntou), "fazendo" (conflito ou teste vermelho: voltou ao responsável com os arquivos) ou "revisão" com o motivo em `autoMerge.wait` e
+   * numa nota (principal sujo nos arquivos do card, testes cortados): o pedido fica gravado e a varredura do tick, e o fim de cada commit automático, tentam de novo sozinhos. Sem testes no projeto, ou sem commit de
+   * entrega, esperar não resolve: 409 com o motivo (os testes se confirmam pela mescla do card). Fora de "revisão" não há entrega aprovável: segue a junção antiga, que recusa com o motivo.
+   */
+  private async approveCardByOwner(projectId: string, dir: string, cur: Task, byOwner: boolean): Promise<Task | null> {
+    if (cur.status !== 'review') return this.merge(projectId, cur.id, false, byOwner);
+    if (!(await detectTest(dir))) throw new CodeError('não achei testes neste projeto (npm test, composer test ou phpunit)', 'no-tests');
+    const now = new Date();
+    const asked = await this.change(projectId, cur.id, (t) => {
+      if (t.status !== 'review') return t;
+      const prior = t.autoMerge;
+      const mark: TaskAutoMerge = prior
+        ? { ...prior, byOwner: true, stopped: undefined, retry: undefined, wait: undefined }
+        : { verdict: { sessionId: t.review?.sessionId ?? '', deliveryAt: t.delivery?.at ?? null }, sha: deliveredAt(t), by: 'o dono', since: now.toISOString(), byOwner: true };
+      return noted({ ...t, autoMerge: mark }, 'aprovada pelo dono; a junção do código vem a seguir');
+    });
+    if (!asked || asked.status !== 'review') return asked;
+    await this.mergeOne(projectId, dir, cur.id, now);
+    const after = (await readTasks(dir)).find((t) => t.id === cur.id) ?? null;
+    if (after?.autoMerge?.stopped) throw new TaskConflictError(after.autoMerge.stopped.detail);
+    return after;
+  }
+
   /** O tick refaz a limpeza do que ficou pendente (pasta em uso na hora): cards `done`/`cancelled` com `codeAt.cleanup`. Uma de cada vez, sem esperar. */
   private async retryCleanups(projectId: string, tasks: Task[]): Promise<void> {
     for (const t of tasks) {
@@ -4735,6 +4761,12 @@ export class TaskService {
     for (const s of new Set((await readTasks(dir)).filter((t) => t.resourceWait?.holder && t.staffId && !isClosed(t)).map((t) => t.staffId!))) void this.kick(projectId, s);
   }
 
+  /** Um commit acabou no principal: a junção de card que esperava ficar limpo (`autoMerge.wait.why === 'main-dirty'`) tenta já, sem esperar o tick. Registro, não trava. */
+  private async mergeAfterClean(projectId: string): Promise<void> {
+    const dir = await this.deps.projectPath(projectId);
+    if (dir && (await readTasks(dir)).some((t) => t.status === 'review' && t.autoMerge?.wait?.why === 'main-dirty' && !t.autoMerge.stopped)) this.mergeSoon(projectId);
+  }
+
   /** Os commits automáticos que ainda estão rodando; resolve quando não há mais nenhum (os testes e o desligamento esperam por isto). */
   async commitsSettled(): Promise<void> {
     while (this.commitRuns.size) await Promise.all([...this.commitRuns]);
@@ -4747,6 +4779,8 @@ export class TaskService {
     const run: Promise<void> = this.autoCommit(projectId, taskId)
       .catch(() => {}) // registro, não trava: nada aqui derruba quem deixou a tarefa pronta
       .then(() => this.dropSlotPhotos(projectId, taskId)) // a foto da vaga serviu a esta entrega (ou o commit não ia sair): não sobra para a próxima
+      .then(() => this.mergeAfterClean(projectId)) // o principal pode ter ficado limpo: a junção de card que esperava por isso tenta de novo
+      .catch(() => {})
       .finally(() => {
         this.commitRuns.delete(run);
         this.committing.delete(key);
@@ -5587,20 +5621,28 @@ export class TaskService {
       .filter((t) => t.status === 'review' && t.autoMerge && !t.autoMerge.stopped && mergeDue(t.autoMerge, now.getTime()))
       .sort((a, b) => a.autoMerge!.since.localeCompare(b.autoMerge!.since));
     const jobs: Array<Promise<boolean>> = [];
-    for (const t of due) {
-      const key = `${projectId}:${t.id}`;
-      if (this.mergeQueued.has(key)) continue;
-      this.mergeQueued.add(key);
-      jobs.push(
-        this.inProjectQueue(dir, () => this.autoMergeOne(projectId, dir, t.id, now))
-          // O que sai da vez do projeto (gravar o desfecho, avisar quem pediu, mandar o ajuste à conversa) espera fora dela: não segura o commit nem a mescla seguinte.
-          .then(async (after) => (await after?.()) === true)
-          .catch(() => false)
-          .finally(() => this.mergeQueued.delete(key)),
-      );
-    }
+    for (const t of due) jobs.push(this.mergeOne(projectId, dir, t.id, now));
     // Um card entrou no principal: quem esperava por ele (o commit dele estava no caminho) já pode seguir, sem esperar o próximo tick. Só se andou, então não há laço.
     if ((await Promise.all(jobs)).some(Boolean)) this.mergeSoon(projectId, now);
+  }
+
+  /**
+   * Uma tentativa de mescla do card `taskId` na vez do projeto (a da varredura e a do "Aprovar entrega" do dono, ver `approveCardByOwner`). Um card não entra duas vezes: se já está em andamento devolve
+   * falso, e a marca gravada decide o que a tentativa em andamento (ou a próxima) faz. Devolve se o card foi a "pronto".
+   */
+  private async mergeOne(projectId: string, dir: string, taskId: string, now: Date): Promise<boolean> {
+    const key = `${projectId}:${taskId}`;
+    if (this.mergeQueued.has(key)) return false;
+    this.mergeQueued.add(key);
+    try {
+      const after = await this.inProjectQueue(dir, () => this.autoMergeOne(projectId, dir, taskId, now));
+      // O que sai da vez do projeto (gravar o desfecho, avisar quem pediu, mandar o ajuste à conversa) espera fora dela: não segura o commit nem a mescla seguinte.
+      return (await after?.()) === true;
+    } catch {
+      return false;
+    } finally {
+      this.mergeQueued.delete(key);
+    }
   }
 
   /**
@@ -5614,12 +5656,13 @@ export class TaskService {
     const am = task?.autoMerge;
     if (!task || !am || am.stopped || task.status !== 'review') return;
     // A aprovação vale para ESTA entrega: entrega nova (ou outra revisão) não é a que o revisor aprovou, e a marca sai sem mesclar nada.
-    if (!isVerdictOf(task, am.verdict) || am.sha !== deliveredAt(task)) {
+    if (!verdictHolds(task, am) || am.sha !== deliveredAt(task)) {
       return async () => {
-        await this.change(projectId, taskId, (t) => (t.autoMerge && !(isVerdictOf(t, am.verdict) && am.sha === deliveredAt(t)) ? noted({ ...t, autoMerge: undefined }, 'mescla automática descartada: a entrega mudou desde a aprovação') : t));
+        await this.change(projectId, taskId, (t) => (t.autoMerge && !(verdictHolds(t, am) && am.sha === deliveredAt(t)) ? noted({ ...t, autoMerge: undefined }, 'mescla automática descartada: a entrega mudou desde a aprovação') : t));
       };
     }
-    if (!(await this.autoMergeOn(projectId))) return () => this.stopMerge(projectId, task, am, 'a política de fluxo do projeto não manda mais a IA concluir: a mescla fica com você');
+    // O pedido do dono ("Aprovar entrega") não depende da política de conclusão: o clique é a aprovação.
+    if (!am.byOwner && !(await this.autoMergeOn(projectId))) return () => this.stopMerge(projectId, task, am, 'a política de fluxo do projeto não manda mais a IA concluir: a mescla fica com você');
     if (!am.sha) return () => this.stopMerge(projectId, task, am, 'a entrega não tem commit gravado: a mescla automática foi recusada (não leva o branch inteiro)');
     const profile = task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
     const place = await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null);
@@ -5627,7 +5670,7 @@ export class TaskService {
     const sha = am.sha;
     // Resto de um processo que caiu no meio (o marcador é gravado antes de tocar o principal, e nesta fila só há uma mescla por vez): desfaz o `merge --no-commit` pela metade.
     if (am.merging) await abortStaleMerge(dir, sha).catch(() => false);
-    const valid = (t: Task) => t.status === 'review' && !!t.autoMerge && isVerdictOf(t, am.verdict);
+    const valid = (t: Task) => t.status === 'review' && !!t.autoMerge && verdictHolds(t, am);
     // Já está no principal (a mescla foi commitada e o Club caiu antes de gravar o card): só finaliza. Nunca uma segunda mescla.
     const already = await integratedSha(dir, sha).catch(() => null);
     if (already) {
@@ -5635,15 +5678,17 @@ export class TaskService {
       return async () => (await this.finishMerge(projectId, taskId, { sha: already, base, branch: place.branch ?? '', tests: null }, valid))?.status === 'done';
     }
     // Os commits do meio do caminho (os que a mescla traz além dos do próprio card) têm de ser de cards já aprovados ou integrados.
-    const inRange = new Set(await commitsToMerge(dir, sha).catch(() => [] as string[]));
-    const open = all.filter((o) => o.id !== task.id && blocksMerge(o, sha, inRange));
+    // Worktree de card: o branch só tem commits do card (nasce do HEAD de partida dele), então não há card do meio do caminho para esperar.
+    const inRange = place.card ? new Set<string>() : new Set(await commitsToMerge(dir, sha).catch(() => [] as string[]));
+    const open = place.card ? [] : all.filter((o) => o.id !== task.id && blocksMerge(o, sha, inRange));
     if (open.length) {
       const cancelled = open.filter((o) => o.status === 'cancelled');
       const names = open.map((o) => `“${titleOf(o)}” (id ${o.id}, ${o.status === 'cancelled' ? 'cancelada' : o.status}${approvedOrIntegrated(o) ? ', a versão aprovada ainda não está no caminho' : ''})`).join(', ');
       if (cancelled.length) return () => this.stopMerge(projectId, task, am, `o commit de card cancelado está no meio do caminho: ${names}; mescle pelo card ou resolva antes`);
       return () => this.waitMerge(projectId, task, am, 'open-card', `espera o card ainda não aprovado que está no meio do caminho: ${names}`);
     }
-    const marked = await this.change(projectId, taskId, (t) => (valid(t) ? { ...t, autoMerge: { ...t.autoMerge!, merging: new Date().toISOString(), wait: undefined } } : t));
+    // A espera pelo principal limpo (`waitDirty`) fica gravada durante a tentativa: o motivo e o `since` não somem a cada varredura, e a nota sai uma vez só.
+    const marked = await this.change(projectId, taskId, (t) => (valid(t) ? { ...t, autoMerge: { ...t.autoMerge!, merging: new Date().toISOString(), wait: t.autoMerge!.wait?.why === 'main-dirty' ? t.autoMerge!.wait : undefined } } : t));
     if (!marked?.autoMerge?.merging) return;
     // Os testes são obrigatórios e a mescla automática nunca os pula (sem `skipTests`): sem testes ou com teste vermelho, não entra.
     const result = await mergeCode(dir, place, task.title, { upTo: sha }).then(
@@ -5661,6 +5706,17 @@ export class TaskService {
     const detail = oneLine(err instanceof Error ? err.message : String(err), 300);
     if (err instanceof CodeError && err.code === 'conflict') {
       const files = err.files.map((f) => `\`${untrustedLine(f, 200)}\``).join(', ');
+      // Worktree de card: o merge do principal ficou em andamento NO worktree do card (com os marcadores), e o principal não foi tocado: o responsável resolve ali mesmo.
+      if (task.codeAt?.card) {
+        return this.bounceMerge(
+          projectId,
+          task,
+          am,
+          `conflito com o principal em ${err.files.map((f) => untrustedLine(f, 200)).join(', ')}`,
+          `a junção falhou com conflito ao trazer o principal para a worktree do seu card, nos arquivos: ${files}. A worktree está com o merge em andamento e os marcadores de conflito nesses arquivos; o principal não foi tocado. Resolva os conflitos (tire os marcadores), faça \`git add\` e \`git commit\` na worktree, rode os testes e entregue de novo.`,
+          tests,
+        );
+      }
       return this.bounceMerge(projectId, task, am, `conflito com o principal em ${err.files.map((f) => untrustedLine(f, 200)).join(', ')}`, `a mescla automática falhou com conflito no principal, nos arquivos: ${files}. Nada foi mesclado. Traga o branch principal para a sua worktree (git merge), resolva os conflitos, rode os testes e entregue de novo.`, tests);
     }
     if (err instanceof CodeError && err.code === 'tests-failed') {
@@ -5669,6 +5725,8 @@ export class TaskService {
     }
     // Recusa que repetir não muda (sem commit de entrega, sem testes no projeto): para na hora, sem tentativas.
     if (err instanceof CodeError && (err.code === 'no-delivery' || err.code === 'no-tests')) return this.stopMerge(projectId, task, am, err.code === 'no-tests' ? `${detail} (a mescla automática exige testes verdes e nunca os pula)` : detail, tests);
+    // Worktree de card com arquivo do card sujo no principal: espera o dono commitar ou guardar, sem contar tentativa nem parar no teto; a junção roda sozinha quando ficar limpo (o tick, o fim de cada commit automático).
+    if (err instanceof CodeError && err.code === 'main-dirty' && task.codeAt?.card) return this.waitDirty(projectId, task, am, detail);
     // Principal sujo, testes cortados no tempo, falha de git: passageiro, tenta de novo com backoff até o teto.
     await this.retryMerge(projectId, task, am, err instanceof CodeError && err.code === 'main-dirty' ? 'main-dirty' : 'retry', detail, tests, now);
   }
@@ -5678,6 +5736,17 @@ export class TaskService {
     await this.change(projectId, task.id, (t) => {
       if (!stillAsked(t, am) || (t.autoMerge!.wait?.why === why && t.autoMerge!.wait.detail === detail)) return t;
       return noted({ ...t, autoMerge: { ...t.autoMerge!, merging: undefined, wait: { why, detail, since: t.autoMerge!.wait?.since ?? new Date().toISOString() } } }, `mescla automática em espera: ${detail}`);
+    });
+  }
+
+  /** A junção do card espera o principal ficar limpo nos arquivos dele: o motivo no card (a nota sai uma vez por motivo), sem `retry` (a varredura confere a cada tick) e sem teto. */
+  private async waitDirty(projectId: string, task: Task, am: TaskAutoMerge, detail: string): Promise<void> {
+    await this.change(projectId, task.id, (t) => {
+      if (!stillAsked(t, am)) return t;
+      const cur = t.autoMerge!;
+      if (cur.wait?.why === 'main-dirty' && cur.wait.detail === detail && !cur.merging && !cur.retry) return t;
+      const next = { ...t, autoMerge: { ...cur, merging: undefined, retry: undefined, wait: { why: 'main-dirty' as const, detail, since: cur.wait?.since ?? new Date().toISOString() } } };
+      return cur.wait?.detail === detail ? next : noted(next, `junção em espera: ${detail}`);
     });
   }
 
@@ -6696,6 +6765,11 @@ export class TaskService {
     if (!dir || (!profile?.worktree && task.codeAt?.where !== 'worktree')) return;
     const place = await locateTaskCode(dir, task, true).catch(() => null);
     const sha = place ? await checkpoint(place, task.title).catch(() => null) : null;
+    // Entrega com conflito aberto na worktree (o merge do principal que a junção deixou para o responsável resolver, ver `mergeCard`): o checkpoint não commita marcadores, e o card diz por que está sem commit.
+    if (!sha && place) {
+      const open = await unresolvedFiles(place.path).catch(() => []);
+      if (open.length) await this.change(projectId, task.id, (t) => noted(t, `entrega sem commit: conflito não resolvido na worktree em ${oneLine(open.slice(0, 8).join(', '), 200)}`));
+    }
     // O `checkpoint` é só o último; a lista guarda todos, para a mescla automática saber de quem é o commit da entrega reprovada que segue no branch (ver `Task.checkpoints`).
     if (sha) await this.change(projectId, task.id, (t) => noted({ ...t, checkpoint: { sha, at: new Date().toISOString() }, checkpoints: [...new Set([...(t.checkpoints ?? []), sha])].slice(-CHECKPOINTS_MAX) }, `entrega no commit ${sha.slice(0, 7)}`));
   }
@@ -8175,7 +8249,10 @@ function withOwnerGate(t: Task, why: TaskOwnerGate['why'], by?: string): Task {
 }
 
 /** A tarefa segue em "revisão", com a mescla automática pedida por esta aprovação (a mesma revisão e entrega: `isVerdictOf`)? É a conferência de quem grava o desfecho de uma mescla. */
-const stillAsked = (t: Task, am: TaskAutoMerge): boolean => t.status === 'review' && !!t.autoMerge && isVerdictOf(t, am.verdict);
+const stillAsked = (t: Task, am: TaskAutoMerge): boolean => t.status === 'review' && !!t.autoMerge && verdictHolds(t, am);
+
+/** O pedido de mescla ainda vale para a entrega de agora? Do dono (`byOwner`): sim, enquanto a entrega for a do pedido (nova entrega apaga a marca); senão, o veredito da revisão tem de ser o desta entrega. */
+const verdictHolds = (t: Task, am: TaskAutoMerge): boolean => (am.byOwner ? am.sha === deliveredAt(t) : isVerdictOf(t, am.verdict));
 
 /** A mescla automática está na hora de tentar? Esperando um card do meio, a cada varredura (conferir é barato e não conta tentativa); em backoff, quando vence; senão, já. */
 const mergeDue = (am: TaskAutoMerge, at: number): boolean => am.wait?.why === 'open-card' || !am.retry || retryDue(am.retry, at);
@@ -8213,7 +8290,7 @@ async function locateTaskCode(projectPath: string, task: Pick<Task, 'staffId' | 
     const root = path.resolve(projectPath, '.claude', 'worktrees') + path.sep;
     const dir = path.resolve(task.codeAt.path);
     const alive = dir.startsWith(root) && (await fs.stat(path.join(dir, '.git')).then((s) => s.isFile(), () => false));
-    return alive ? { where: 'worktree', path: dir, branch: task.codeAt.branch } : null;
+    return alive ? { where: 'worktree', path: dir, branch: task.codeAt.branch, card: true } : null;
   }
   if (task.codeAt?.where === 'project') return locateCode(projectPath, null, false);
   return locateCode(projectPath, task.staffId, task.codeAt?.where === 'worktree' ? true : ownWorktree);

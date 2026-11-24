@@ -264,17 +264,13 @@ describe('"pronto" nunca sai com o código fora do principal', () => {
     expect(git(p.dir, 'branch', '--list', t.codeAt!.branch!)).toBe('');
   });
 
-  it('principal sujo: a junção não roda, o card FICA em Revisão (não vai a Finalizado) e o arquivo do dono não é tocado', async () => {
-    const p = await proj('sujo');
+  it('sem testes no projeto: 409 com o código `no-tests` (o dono confirma pela mescla do card), e o card fica em Revisão', async () => {
+    const p = await proj('sem-testes');
     const t = await deliver(p, 'ana-1', 'Entrega', { 'a.txt': 'do A\n' });
-    await fs.writeFile(path.join(p.dir, 'app.txt'), 'edição do dono, sem commit\n');
-    await expect(p.svc.update('p', t.id, { status: 'done' }, true)).rejects.toBeInstanceOf(CodeError);
-    const after = await p.get(t.id);
-    expect(after.status).toBe('review');
-    expect(after.merged).toBeFalsy();
+    await fs.rm(path.join(p.dir, 'package.json')); // o principal deixa de ter testes (arquivo versionado apagado, sem commit)
+    await expect(p.svc.update('p', t.id, { status: 'done' }, true)).rejects.toMatchObject({ code: 'no-tests' });
+    expect((await p.get(t.id)).status).toBe('review');
     expect(existsSync(path.join(p.dir, 'a.txt'))).toBe(false);
-    expect(await fs.readFile(path.join(p.dir, 'app.txt'), 'utf8')).toBe('edição do dono, sem commit\n');
-    expect(existsSync(t.codeAt!.path!)).toBe(true);
   });
 
   it('a pasta do card sumiu: não dá para conferir nem juntar, o card fica em Revisão', async () => {

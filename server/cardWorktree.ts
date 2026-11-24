@@ -111,7 +111,13 @@ async function create(projectPath: string, taskId: string, git: GitRun): Promise
     await fs.rm(wt.path, { recursive: true, force: true });
   }
   await git(projectPath, ['worktree', 'prune']).catch(() => '');
-  const branchExists = await git(projectPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${wt.branch}`]).then(() => true, () => false);
+  let branchExists = await git(projectPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${wt.branch}`]).then(() => true, () => false);
+  // Branch que sobrou de uma tentativa antiga, sem nenhum commit do card (já está todo no principal): não carrega trabalho nenhum, e reaproveitá-lo faria o card nascer de uma base velha. Sai e nasce de novo
+  // do HEAD de agora. Com commit próprio (trabalho do card, ex.: a pasta apagada por fora) é reaproveitado: o que ele tem não se perde.
+  if (branchExists && (await git(projectPath, ['merge-base', '--is-ancestor', wt.branch, 'HEAD']).then(() => true, () => false))) {
+    await git(projectPath, ['branch', '-D', wt.branch]).catch(() => '');
+    branchExists = false;
+  }
   await fs.mkdir(path.dirname(wt.path), { recursive: true });
   try {
     await git(projectPath, branchExists ? ['worktree', 'add', wt.path, wt.branch] : ['worktree', 'add', '-b', wt.branch, wt.path, 'HEAD'], ADD_TIMEOUT_MS);

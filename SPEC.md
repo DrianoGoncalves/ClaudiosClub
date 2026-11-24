@@ -1,3 +1,4 @@
 ## Lições da revisão
 
+- 2026-11-24: todo caminho que leva um card a "pronto" (coluna pelo dono ou API, aprovação do revisor, mescla automática) tem de passar pela junção do código quando ele está numa worktree, e a junção que não pode rodar deixa o card fora de "pronto" COM o motivo e tenta de novo sozinha (`approveCardByOwner`/`mergeOne` em `server/tasks.ts`); entregar só o caminho que dá 409 reabre o caso de 23/11 (card Finalizado com commit fora do principal). Entrega de função com critério de aceite numerado leva um teste com git real por item, no mesmo commit.
 - 2026-11-23: ao mudar o que toda conversa recebe por padrão (mcp.json, `--allowedTools`, ficha), rode TODOS os testes que leem `mcp.json`/`chatSpawn`/`prepareRun` (`grep` em `tests/`), não só os que citam a função alterada: o `codexConsultor.test.ts` esperava "sem MCP = null" e ficou velho.

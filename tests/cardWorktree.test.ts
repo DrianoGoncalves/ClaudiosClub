@@ -109,6 +109,17 @@ describe('criação', () => {
     expect(existsSync(path.join(made.path, 'lixo.txt'))).toBe(false);
   });
 
+  it('branch velho sem commit do card (já todo no principal) NÃO é reaproveitado: o card nasce do HEAD de agora', async () => {
+    const dir = await repo();
+    git(dir, 'branch', 'myco-card/t-old1'); // sobra de uma tentativa antiga: aponta para um commit que o principal já passou
+    await fs.writeFile(path.join(dir, 'depois.txt'), 'x\n');
+    git(dir, 'add', 'depois.txt');
+    git(dir, 'commit', '-qm', 'o principal andou');
+    const wt = await ensureCardWorktree(dir, 't-old1');
+    expect(wt.base).toBe(git(dir, 'rev-parse', 'HEAD'));
+    expect(existsSync(path.join(wt.path, 'depois.txt'))).toBe(true);
+  });
+
   it('branch que sobrou sem pasta é reaproveitado, com os commits dele', async () => {
     const dir = await repo();
     const a = await ensureCardWorktree(dir, 't-fff666');
