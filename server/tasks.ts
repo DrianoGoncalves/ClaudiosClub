@@ -26,8 +26,9 @@ import type { Reservation } from './resourceGate';
 import { VERSION_PAUSE_DEFAULT_MINUTES, VERSION_PAUSE_MAX_MINUTES, clockOf, type PauseBy, type ProjectPauses } from './projectPause';
 import { CapabilityError } from './engineCapability';
 import { StateBusyError } from './atomicWrite';
+import { backupTasks, BoardCorruptError, boardReadOk, knownCorruptVersion, recoverTasks } from './boardGuard';
 import { writeAtomic } from './staff/store';
-import { abortStaleMerge, checkpoint, CodeError, codeTouchedSince, commitsToMerge, detectTest, formatLimit, integratedSha, locateCode, mergeCode, readCode, runTests, type CodePlace } from './taskCode';
+import { abortStaleMerge, checkpoint, CodeError, codeTouchedSince, commitsToMerge, detectTest, formatLimit, integratedSha, locateCode, mergeCode, readCode, runTests, scopedTestCommand, type CodePlace } from './taskCode';
 import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
 import { UsageStopError } from './usageStop';
@@ -6283,14 +6284,16 @@ export class TaskService {
   private async deliveryTests(projectId: string, task: Task, onWait?: HeavyWaitFn): Promise<TestRun | null> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir || !task.staffId) return null;
-    const command = await detectTest(dir);
+    // Só os testes ligados aos arquivos da entrega (ver `scopedTestCommand`); a suíte inteira fica no CI do PR e no botão "rodar testes" do cartão.
+    const command = await scopedTestCommand(dir, task.changedFiles);
     if (!command) return null;
     const profile = await this.deps.readProfile(projectId, task.staffId);
     const place = await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null);
     const cwd = place?.path ?? dir;
     const base = this.deps.runTests ?? runTests;
     const run: typeof base = (c, cmd, timeoutMs, queueAs) => base(c, cmd, timeoutMs, queueAs, onWait);
-    const tests = await run(cwd, command);
+    // Na fila pesada como a suíte, mesmo escopado: um arquivo muito importado faz o `related` rodar quase tudo.
+    const tests = await run(cwd, command, undefined, 'npm test');
     // Suíte que falhou: roda de novo, uma vez, só os arquivos que falharam (sem a suíte inteira), para o pedido de revisão separar falha desta entrega de falha antiga.
     // Erro aqui nunca derruba a entrega: sem a nova rodada o pedido mostra só a lista.
     const isolated = await isolateFailures(cwd, tests, task.changedFiles ?? [], run).catch(() => undefined);
@@ -6463,14 +6466,18 @@ export class TaskService {
     const finished: string[] = [];
     let freed = false;
     const run = prev.then(async () => {
-      const before = await readTasks(dir);
+      // Leitura estrita: arquivo preso ou corrompido lança aqui, e nada é gravado por cima (ver `readTasksForWrite`).
+      const before = await readTasksForWrite(dir);
       const next = clearClosedHeld(clearStaleRanks(clearBlockAlerts(fn(before))));
+      const text = JSON.stringify(next, null, 2) + '\n';
       try {
-        await writeAtomic(file, JSON.stringify(next, null, 2) + '\n');
+        await writeAtomic(file, text);
       } finally {
         // Gravou (ou falhou no meio): o guardado já não vale; a próxima leitura vem do disco.
         forgetTasks(dir);
       }
+      // A cópia de segurança (no máximo uma a cada 10 min, ver boardGuard.ts): falha nela nunca derruba a gravação.
+      void backupTasks(dir, text).catch((err: Error) => console.warn(`[quadro] cópia de segurança de ${file} não gravada: ${err.message}`));
       // Toda tarefa que ficou pronta por qualquer caminho (a tela, a aprovação da revisão, a mescla) passa por aqui: é o ponto do commit automático (ver `autoCommit`).
       const was = new Map(before.map((t) => [t.id, t.status]));
       for (const t of next) if (t.status === 'done' && was.has(t.id) && was.get(t.id) !== 'done') finished.push(t.id);
@@ -6562,22 +6569,84 @@ function forgetTasks(dir: string): void {
 }
 
 /** As tarefas do projeto (`.myco/tasks.json`), só leitura; lista vazia se não há arquivo. Guardadas por versão do arquivo (ver `tasksCache`). */
-export async function readTasks(dir: string): Promise<Task[]> {
+export function readTasks(dir: string): Promise<Task[]> {
+  return loadTasks(dir, false);
+}
+
+/** Erros de leitura em que vale tentar de novo (no Windows, antivírus ou indexador segurando o arquivo). */
+const READ_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const READ_ATTEMPTS = 6;
+const READ_BASE_MS = 50;
+
+/**
+ * A leitura de quem vai gravar (`mutate`): nunca devolve lista vazia por engano. Arquivo preso que não solta: `StateBusyError` (503, nada gravado). Arquivo que não lê
+ * como lista e não tem o que pôr no lugar: `BoardCorruptError` (503, nada gravado). Antes, as duas viravam `[]`, e a gravação seguinte trocava o quadro inteiro por quase nada.
+ */
+function readTasksForWrite(dir: string): Promise<Task[]> {
+  return loadTasks(dir, true);
+}
+
+/** `op` com novas tentativas enquanto o Windows segura o arquivo; ENOENT devolve null; esgotado, `StateBusyError` (503, nada gravado). */
+async function retryBusy<T>(file: string, op: () => Promise<T>): Promise<T | null> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await op();
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return null;
+      if (!code || !READ_RETRY_CODES.has(code) || attempt >= READ_ATTEMPTS) throw new StateBusyError(file, err);
+      await new Promise((r) => setTimeout(r, READ_BASE_MS * 2 ** (attempt - 1) * (0.5 + Math.random() / 2)));
+    }
+  }
+}
+
+/**
+ * `strict` (quem vai gravar): erro de leitura e quadro corrompido lançam. Senão (telas, rotinas): leitura que falhou devolve o último quadro lido (melhor que um
+ * quadro vazio de mentira), e corrompido sem conserto devolve `[]` (o aviso na caixa explica). Arquivo que não lê como lista passa por `recoverTasks` (boardGuard.ts):
+ * volta a cópia boa mais nova, ou a última versão lida.
+ */
+async function loadTasks(dir: string, strict: boolean): Promise<Task[]> {
   const file = tasksFile(dir);
-  const st = await fs.stat(file).catch(() => null);
-  if (!st) {
+  const hit = tasksCache.get(file);
+  const gone = () => {
+    // Sem arquivo é quadro novo (ou apagado para recomeçar): o aviso de "corrompido" sai.
     tasksCache.delete(file);
+    boardReadOk(dir);
     return [];
+  };
+  let st;
+  if (strict) {
+    st = await retryBusy(file, () => fs.stat(file));
+    if (!st) return gone();
+  } else {
+    try {
+      st = await fs.stat(file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return gone();
+      return hit ? [...hit.tasks] : [];
+    }
   }
   const version = fileVersion(st);
-  const hit = tasksCache.get(file);
   if (hit && hit.version === version) return [...hit.tasks];
-  const raw = await fs.readFile(file, 'utf8').catch(() => null);
-  if (!raw) return [];
+  // Já se sabe que esta versão do arquivo não lê e não tem conserto agora: nem abre (6 MB por leitura, a cada poucos segundos, no HDD).
+  if (knownCorruptVersion(dir) === version) {
+    if (strict) throw new BoardCorruptError(file);
+    return hit ? [...hit.tasks] : [];
+  }
+  const raw = strict ? await retryBusy(file, () => fs.readFile(file, 'utf8')) : await fs.readFile(file, 'utf8').catch(() => undefined);
+  if (raw === null) return gone(); // sumiu entre o stat e a leitura
+  if (raw === undefined) return hit ? [...hit.tasks] : [];
+  // A versão é a do `stat` de antes da leitura: se o arquivo mudou no meio, a próxima leitura vê outra versão e lê de novo.
   const tasks = parseTasks(raw);
-  // JSON ruim não fica guardado (a próxima leitura tenta de novo). A versão é a do `stat` de antes da leitura: se o arquivo mudou no meio,
-  // a próxima leitura vê outra versão e lê de novo.
-  if (!tasks) return [];
+  if (!tasks) {
+    // Zerado, cortado ou JSON quebrado: nada disso fica guardado. Volta a cópia boa (ou a última versão lida); sem nenhuma, o quadro fica marcado como corrompido.
+    const restored = await recoverTasks(dir, parseTasks, hit?.tasks ?? null, version);
+    tasksCache.delete(file);
+    if (restored) return restored;
+    if (strict) throw new BoardCorruptError(file);
+    return [];
+  }
+  boardReadOk(dir);
   // Arquivo mexido há pouco (ver RACY_MS): não guarda; a versão dele ainda pode se repetir numa gravação seguinte.
   if (Date.now() - st.mtimeMs < RACY_MS) {
     tasksCache.delete(file);

@@ -334,7 +334,7 @@ describe('heavyGuardOffInboxItem e a fiação do servidor', () => {
     const route = src.slice(start, src.indexOf('\n  ],', start));
     expect(route.indexOf('if (!fromBrowser) throw new BadRequest')).toBeGreaterThan(0);
     expect(route.indexOf('if (!fromBrowser)')).toBeLessThan(route.indexOf('parse('));
-    expect(route).toMatch(/regex\(\/\^\(error\|cap\|commit\|guardoff\|codexsandbox\):/);
+    expect(route).toMatch(/regex\(\/\^\(error\|cap\|commit\|guardoff\|codexsandbox\|board\):/);
     expect(route).toContain('chats.dismissGuardOff(b.id)');
   });
 

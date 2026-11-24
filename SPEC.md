@@ -94,8 +94,9 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 
 - Achar a pasta de um projeto e a lista de projetos do quadro no caminho das tarefas usa `adapter.projectPath` / `adapter.boardProjectIds` (só a descoberta e um `access`).
 - `adapter.listProjects()` (que faz `stat` de todo transcript do `~/.claude/projects`, mais de mil arquivos) não entra em caminho chamado por tarefa, por cartão ou por polling.
+- O `/api/board` lê o começo e o fim de cada transcript **uma vez por versão do arquivo** (`transcriptFacts` em `server/adapters/claude/sessions.ts`, com a mesma janela de 3 s da regra 1). O que muda sem mexer no transcript (ao vivo, `custom-title.json`, subagents) é lido a cada montagem e não entra no guardado.
 
-*Por quê:* o `stat` em rajada ocupava o pool de I/O do Node, e a leitura e a gravação do quadro ficavam esperando atrás dele.
+*Por quê:* o `stat` em rajada ocupava o pool de I/O do Node, e a leitura e a gravação do quadro ficavam esperando atrás dele. Em 23/11/2026 o `/api/board` era a rota mais lenta (até 5,7 min com o HDD 100% ocupado): cada montagem relia 2 × 64 KB de ~600 transcripts.
 
 ### 3. Git e CLIs nas leituras da tela: uma vez por projeto, com teto e prazo
 
@@ -120,9 +121,12 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 - A rodada da fila de tarefas (60 s) roda uma por vez. Rodada presa há mais de 10 min é liberada com aviso no log, para não desligar a rede de segurança.
 - Rotina nova com `setInterval` que faz I/O ou sobe processo segue o mesmo padrão: uma de cada vez.
 
-### 6. Gravação atômica tolerante ao Windows
+### 6. Gravação atômica tolerante ao Windows e à queda de energia
 
 - O rename do `writeAtomic` tenta por pelo menos ~3 s (backoff com jitter) antes de desistir: no HDD, o antivírus segura o destino por mais que meio segundo. A desistência vai para o log; ela nunca é silenciosa.
+- O `writeAtomic` força os dados no disco (`sync`) **antes** do rename. Sem isso, uma queda de energia logo depois deixa o arquivo com o tamanho certo e só zeros: em 23/11/2026 o `tasks.json` do MyCo (6,3 MB) voltou assim, e só foi recuperado varrendo o disco inteiro. Custo medido no HDD para esses 6,3 MB: de 22 para 205 ms por gravação (mediana). Encolher o arquivo (tirar as tarefas prontas antigas) é o que baixa esse custo; tirar o `sync`, não.
+- Quem vai gravar o quadro lê de forma estrita (`readTasksForWrite`): arquivo preso que não solta vira `StateBusyError`, e quadro que não lê como lista vira `BoardCorruptError`. Nunca `[]`. Antes, as duas viravam lista vazia, e a gravação seguinte trocava o quadro inteiro por quase nada.
+- O quadro tem cópias em `.myco/backups/tasks/` (no máximo uma a cada 10 min; ficam as 6 mais novas e a última de cada dia por 7 dias). Arquivo que não lê como lista é guardado ao lado (`tasks.json.corrompido-<data>`) e volta a cópia boa mais nova, ou a última versão lida pelo servidor. Sem nenhuma das duas, as gravações são recusadas até o arquivo ser consertado. Qualquer desses casos vira aviso na caixa "precisa de mim" (`server/boardGuard.ts`).
 
 ### 7. Estáticos e subida
 
@@ -134,3 +138,10 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 
 - Pedido acima de 2 s vai para o log como `[lento] MÉTODO caminho status em N ms`, sem a query (pode levar código ou token) e sem o SSE.
 - Mudança que afeta essas regras traz no pedido de revisão o número de antes e de depois: tempo da rota, processos git por leitura, atraso do event loop.
+
+### 9. Testes em camadas
+
+- Na entrega e na mescla, com vitest e a lista dos arquivos mudados, rodam só os testes ligados a eles: `vitest related … --passWithNoTests --maxWorkers=2` (`scopedTestCommand` em `server/taskCode.ts`). A suíte inteira roda no CI do PR e no botão "rodar testes" do cartão. `MYCO_FULL_TESTS=1` força a suíte inteira.
+- Fora do CI, a suíte do Club roda com no máximo 2 processos de teste (`maxWorkers` no `vitest.config.ts`; `MYCO_TEST_WORKERS` troca o número).
+
+*Por quê:* a suíte inteira (372 arquivos, ~6.800 testes) levava de 10 a 30 min por entrega nesta máquina, duas vezes por tarefa (entrega e mescla). Com 3 processos de ~350 MB ao lado dos funcionários, o Windows paginava no HDD. No CI ela roda em ~3 min.

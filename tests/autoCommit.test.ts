@@ -531,7 +531,7 @@ describe('commit automático: configuração e política', () => {
     expect(index).toContain('board-commit$`), ({ params: [id] }) => tasks.boardCommit(id!)');
     expect(index).toMatch(/board-commit\$`\),\s*\(\{ params: \[id\], body, fromBrowser \}\) => tasks\.setBoardCommit\(id!, body, fromBrowser\)/);
     expect(index).toContain('writeOwnerFile(dir, input)'); // files/write registra a gravação
-    expect(index).toMatch(/\(error\|cap\|commit\|guardoff\|codexsandbox\)/);
+    expect(index).toMatch(/\(error\|cap\|commit\|guardoff\|codexsandbox\|board\)/);
     expect(index).toContain('tasks.ackCommit(b.id)');
     const code = await fs.readFile(path.join(__dirname, '..', 'server', 'autoCommit.ts'), 'utf8');
     expect(code).not.toMatch(/'push'|--no-verify/);

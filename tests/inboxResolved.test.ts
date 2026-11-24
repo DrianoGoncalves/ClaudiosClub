@@ -418,7 +418,7 @@ describe('InboxResolver: a leitura da caixa', () => {
     expect(src).toContain('resolver.sweep(readAt)');
     expect(src).toContain('resolvedLast(a, b) || INBOX_ORDER');
     // O ignorar é o de sempre: a mesma rota, sem caminho novo.
-    expect(src).toMatch(/regex\(\/\^\(error\|cap\|commit\|guardoff\|codexsandbox\):/);
+    expect(src).toMatch(/regex\(\/\^\(error\|cap\|commit\|guardoff\|codexsandbox\|board\):/);
   });
 });
 

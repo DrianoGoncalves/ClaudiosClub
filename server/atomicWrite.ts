@@ -14,6 +14,12 @@ const RENAME_MAX_WAIT_MS = 1000; // teto por espera
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Força os dados no disco antes da troca (ver `writeOnce`). Nos testes fica desligado: eles gravam em pastas temporárias (nada a perder numa queda), e no HDD o sync
+ * multiplicava o tempo da suíte e mudava a ordem das gravações que os testes de corrida observam. `MYCO_FSYNC=1` liga mesmo nos testes (o teste do próprio sync).
+ */
+const durable = () => !process.env.VITEST || process.env.MYCO_FSYNC === '1';
+
 /** O arquivo de estado seguiu ocupado por outro processo até acabarem as tentativas. A API responde 503 (tentar de novo é seguro: nada foi gravado). */
 export class StateBusyError extends Error {
   /** Segundos até valer a pena tentar de novo (cabeçalho `retry-after`). */
@@ -50,7 +56,15 @@ async function writeOnce(file: string, text: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(tmp, text, 'utf8');
+    // Os dados vão para o disco ANTES da troca. Sem o fsync, uma queda de energia logo depois do rename deixa o arquivo com o tamanho certo e o conteúdo
+    // zerado: o NTFS grava o rename no diário antes de os dados chegarem ao disco. Foi o que zerou o tasks.json em 23/11/2026 (SPEC "Desempenho" 6).
+    const fh = await fs.open(tmp, 'w');
+    try {
+      await fh.writeFile(text, 'utf8');
+      if (durable()) await fh.sync();
+    } finally {
+      await fh.close();
+    }
     await renameWithRetry(tmp, file);
   } catch (err) {
     await fs.unlink(tmp).catch(() => undefined); // não deixa o .tmp largado
