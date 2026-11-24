@@ -19,6 +19,7 @@ import {
   appendLog,
   brokenDeps,
   daemonCommand,
+  daemonState,
   isAlive,
   modInstalled,
   openUrl,
@@ -155,6 +156,12 @@ async function start(opts: { offerMod: boolean }): Promise<void> {
     console.log(`O Claudio’s Club já está rodando em segundo plano: ${url}`);
     return;
   }
+  // Sem vigia registrado, mas a porta já responde: um Claudio’s Club sem o arquivo do vigia (o daily:stop antigo o apagava por engano, ou foi subido à mão).
+  // Um vigia novo só ficaria em "porta ocupada" com o antigo no ar.
+  if (await isUp()) {
+    console.log(`O Claudio’s Club já responde em ${url}, sem vigia registrado. Não subi outro. Para reiniciar, encerre o que está rodando antes.`);
+    return;
+  }
   if (opts.offerMod) await offerModInstall();
   // Atualiza o checklist (scripts/status.js) que a página de início mostra; nunca impede a subida.
   spawnSync(process.execPath, ['--import', 'tsx', path.join(ROOT, 'scripts', 'doctor.ts')], { cwd: ROOT, stdio: 'ignore', timeout: 60_000 });
@@ -184,12 +191,21 @@ async function start(opts: { offerMod: boolean }): Promise<void> {
 }
 
 function stop(): void {
-  const pid = runningDaemon();
-  if (!pid) {
+  // Disco lento: a 1ª leitura da linha de comando pode passar do prazo. Tenta de novo com mais folga antes de concluir qualquer coisa.
+  let d = daemonState();
+  if (d.state === 'unknown') d = daemonState(30_000);
+  if (d.state === 'stopped') {
     console.log('O Claudio’s Club não está rodando em segundo plano.');
     fs.rmSync(PID_FILE, { force: true });
     return;
   }
+  if (d.state === 'unknown') {
+    // Não mata o que não confirmou ser o vigia (o PID pode ter sido reaproveitado) e não apaga o registro: apagar deixaria o vigia vivo sem rastro.
+    console.log(`Há um processo vivo com o PID do vigia (${d.pid}), mas não deu para confirmar que é ele (disco lento?). Não encerrei nada: tente de novo em instantes.`);
+    process.exitCode = 1;
+    return;
+  }
+  const pid = d.pid;
   fs.writeFileSync(STOP_FILE, '');
   stopProcess(pid);
   // Espera o vigia sair de fato (até 5 s) antes de apagar os arquivos de controle.
