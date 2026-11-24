@@ -65,11 +65,12 @@ describe('os textos fixos', () => {
   });
 
   it('a rubrica das provas do Club: não cobra do executor, só falha nova que toca a tarefa conta, o resto é no máximo 🟡, indisponível não reprova nem consome rodada', () => {
-    expect(REVIEW_RUBRIC).toContain('Provas do Claudio’s Club (tsc e testes relacionados, anexados ao pedido): o executor não as redigita, e a falta delas no relato dele não reprova.');
+    expect(REVIEW_RUBRIC).toContain('Provas do Claudio’s Club (tsc e testes relacionados, anexados ao pedido): quem executou não as redigita, e a falta delas no relato dele não reprova.');
     expect(REVIEW_RUBRIC).toContain('Só falha NOVA (que não já falhava na base) e que vem dos arquivos da tarefa conta contra a entrega');
     expect(REVIEW_RUBRIC).toContain('erro de tsc ou falha de teste que já existia na base ou que não vem dos arquivos da tarefa é no máximo 🟡');
     expect(REVIEW_RUBRIC).toContain('Prova marcada "indisponível" ou "não se aplica" não reprova e não consome rodada.');
-    expect(REVIEW_RUBRIC).not.toMatch(/revisor/i);
+    // Os dois textos entram na ficha do gestor, e a do Codex não pode ter estas palavras (tests/codexEngine.test.ts: "no Codex a ficha não manda usar Agent…").
+    for (const text of [REVIEW_RUBRIC, REQUIRED_PROOFS_LINE]) expect(text).not.toMatch(/pesquisador|executor|revisor/i);
   });
 });
 

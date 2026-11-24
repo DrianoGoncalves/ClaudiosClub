@@ -142,13 +142,13 @@ export async function testsPlan(cwd: string, changed: string[], cfg: ProofConfig
     only = (files) => `npx jest --passWithNoTests ${files.join(' ')}`;
   } else {
     const project = await detectTest(cwd);
-    return na(project ? `o comando de testes do projeto (\`${project}\`) não é o vitest nem o jest simples, que sabem rodar só os relacionados: a suíte inteira roda na junção` : 'o projeto não tem comando de testes');
+    return na(project ? `o comando de testes do projeto (\`${project}\`) não é o vitest nem o jest simples, que sabem rodar só os relacionados: a suíte inteira não roda na entrega (só na junção da worktree, quando há)` : 'o projeto não tem comando de testes');
   }
   // Só caminho que cabe na linha de comando sem aspas (ver `testFileOf`) e que existe na entrega (apagado não tem o que testar).
   const files: string[] = [];
   for (const f of changed) if (CODE_FILE.test(f) && testFileOf(f) && (await isFile(path.join(cwd, f)))) files.push(f);
   if (!files.length) return na(changed.length ? 'nenhum arquivo de código existente foi alterado' : 'a tarefa não tem lista de arquivos alterados');
-  if (files.length > RELATED_MAX) return { plan: { kind: 'unavailable', reason: `${files.length} arquivos alterados: lista grande demais para rodar só os relacionados (a suíte inteira roda na junção)` }, onlyFiles: null };
+  if (files.length > RELATED_MAX) return { plan: { kind: 'unavailable', reason: `${files.length} arquivos alterados: lista grande demais para rodar só os relacionados (a suíte inteira não roda na entrega, só na junção da worktree, quando há)` }, onlyFiles: null };
   return { plan: { kind: 'run', command: related(files.join(' ')) }, onlyFiles: only };
 }
 

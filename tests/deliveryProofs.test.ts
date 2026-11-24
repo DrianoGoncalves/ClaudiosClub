@@ -105,7 +105,7 @@ describe('descoberta: o que rodar em cada projeto', () => {
     await write(jest, 'src/a.js', '');
     expect((await testsPlan(jest, ['src/a.js'], {})).plan).toEqual({ kind: 'run', command: 'npx jest --findRelatedTests --passWithNoTests src/a.js' });
 
-    // Mais arquivos que a linha de comando aguenta: indisponível (a suíte inteira roda na junção), nunca erro.
+    // Mais arquivos que a linha de comando aguenta: indisponível (a suíte inteira só roda na junção da worktree), nunca erro.
     const many = Array.from({ length: RELATED_MAX + 1 }, (_, i) => `src/m${i}.ts`);
     for (const f of many) await write(dir, f, '');
     const big = (await testsPlan(dir, many, {})).plan;
@@ -724,7 +724,7 @@ describe('na entrega (TaskService): quem recebe prova, e a paridade entre os mot
     expect(review).toContain('`src/feature.ts: TS2322 tipo errado`');
     expect(review).toContain('`tests/feature.test.ts > soma`');
     expect(review).toContain('Prova marcada "indisponível" ou "não se aplica" não reprova e não consome rodada.'); // a rubrica nova, no pedido
-    expect(review).toContain('o executor não as redigita, e a falta delas no relato dele não reprova');
+    expect(review).toContain('quem executou não as redigita, e a falta delas no relato dele não reprova');
     expect(c.told.join('\n')).toContain('Testes relacionados aos arquivos alterados'); // o gestor recebe o mesmo
     expect(t.proofs).toMatchObject({ typecheck: { status: 'ran', exitCode: 2 }, tests: { status: 'ran', exitCode: 1 } });
     expect(t.status).toBe('review');
