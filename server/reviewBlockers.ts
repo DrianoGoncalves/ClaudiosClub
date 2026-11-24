@@ -1,4 +1,4 @@
-import type { Rejection, ReviewBlocker } from '../shared/model';
+import type { Rejection, ReviewBlocker, TaskContestItem } from '../shared/model';
 
 // A reprovação da revisão com itens (t-33b84c): o revisor fecha o REPROVADO com um bloco `[BLOQUEADORES]`, uma linha por 🔴 (id estável Rn, arquivo:linha, problema,
 // como provar). Aqui ficam só as funções puras (ler o bloco, cortar o texto sem perder 🔴, o que o revisor lê); quem grava e manda é `TaskService.reject` / `requestReview`.
@@ -137,6 +137,63 @@ export function doubtIsAboutRejection(doubt: string, rej: Rejection): boolean {
   const lead = /^((?:R[1-9]\d{0,2}\b[\s,;/&e]*)+)/i.exec(body);
   return !!lead && citedIds(lead[1]!).some((id) => rej.blockers.some((b) => b.id === id));
 }
+
+const ITEM_LEAD = '^[\\s>*+•-]*(?:\\[[ xX]\\]\\s*)?[*_`]*';
+const NEXT_ITEM = new RegExp(`${ITEM_LEAD}(?:R[1-9]\\d{0,2}|GERAL)[*_\`]*\\s*[:·—–-]`, 'i');
+
+/** O que o executor escreveu sobre o item `id` (a linha `R1: …` e as seguintes até a próxima linha de item ou em branco), em uma linha de até 600 caracteres; vazio se não há linha própria. */
+export function replyLineFor(reply: string, id: string): string {
+  const lines = reply.split(LINES);
+  const own = new RegExp(`${ITEM_LEAD}${id}[*_\`]*\\s*[:·—–-]`, 'i');
+  const from = lines.findIndex((l) => own.test(l));
+  if (from < 0) return '';
+  const out = [lines[from]!];
+  for (const l of lines.slice(from + 1)) {
+    if (!l.trim() || NEXT_ITEM.test(l)) break;
+    out.push(l);
+  }
+  return squash(out.join(' '), 600);
+}
+
+/**
+ * Os itens da contestação de `rej` (a reprovação) com a resposta `reply` do executor: um por 🔴 do bloco, cada um com a linha dele. Sem bloco válido não há ids: um item só, `GERAL`, com o texto
+ * do revisor e a resposta inteira.
+ */
+export function contestItems(rej: Rejection, reply: string): TaskContestItem[] {
+  if (rej.block === 'ok') return rej.blockers.map((b) => ({ id: b.id, where: b.where, problem: b.problem, answer: replyLineFor(reply, b.id) }));
+  return [{ id: 'GERAL', where: '(texto do revisor)', problem: squash(rej.raw ?? '', 600), answer: squash(reply, 600) }];
+}
+
+/**
+ * A resposta do revisor à contestação: uma linha por item, `R1: MANTIDO — por quê` ou `R1: RETIRADO — por quê` (ou `GERAL: …`). `decisions` só tem os ids pedidos (`ids`) com UMA decisão; `missing` os que
+ * ficaram sem linha ou com duas linhas que se contradizem (nada se decide por omissão: o item que o revisor não disse não é retirado).
+ */
+export function parseContestAnswer(text: string, ids: string[]): { decisions: Map<string, { keep: boolean; reason: string }>; missing: string[] } {
+  const line = new RegExp(`${ITEM_LEAD}(R[1-9]\\d{0,2}|GERAL)[*_\`]*\\s*[:·—–-]*\\s*[*_\`]*(MANTIDO|RETIRADO)[*_\`]*(?![\\p{L}\\d])\\s*[:·—–-]*\\s*(.*)$`, 'iu');
+  const seen = new Map<string, { keep: boolean; reason: string }>();
+  const clash = new Set<string>();
+  for (const l of text.split(LINES)) {
+    const m = line.exec(l);
+    if (!m) continue;
+    const id = m[1]!.toUpperCase();
+    if (!ids.includes(id)) continue;
+    const keep = m[2]!.toUpperCase() === 'MANTIDO';
+    const prev = seen.get(id);
+    if (prev && prev.keep !== keep) clash.add(id);
+    if (!prev) seen.set(id, { keep, reason: squash(m[3]!.replace(/^[*_`]+|[*_`]+$/g, ''), 400) });
+  }
+  const decisions = new Map([...seen].filter(([id]) => !clash.has(id)));
+  return { decisions, missing: ids.filter((id) => !decisions.has(id)) };
+}
+
+/** Os ids que algum revisor já MANTEVE numa contestação (de qualquer reprovação do card): contestar de novo, sem editar, um item desses é o segundo impasse. */
+export function keptContestIds(rejections: Rejection[] | undefined): Set<string> {
+  return new Set((rejections ?? []).flatMap((r) => (r.contested?.items ?? []).filter((i) => i.decision === 'keep').map((i) => i.id)));
+}
+
+/** O que o revisor lê sobre como responder à contestação (o pedido curto: só os itens, sem refazer a revisão). */
+export const CONTEST_FORMAT =
+  'Responda UMA linha por item, na ordem e sem pular nenhum: `R1: MANTIDO — por que o 🔴 continua valendo e o que ele deve fazer` ou `R1: RETIRADO — por que não vale mais` (com `GERAL` no lugar de R1 quando o item for GERAL). Sem linha de APROVADO/REPROVADO, sem bloco de bloqueadores e sem 🔴 novos: o que for novo vira observação depois das linhas. Não mude o código.';
 
 /** O próximo id livre, para o revisor numerar os 🔴 novos. */
 export const nextBlockerId = (prior: PriorBlockers): string => `R${prior.maxId + 1}`;

@@ -1097,6 +1097,13 @@ export interface Task {
    */
   reopened?: { at: string; edited?: true; kept?: Pick<Task, 'ownerGate' | 'autoMerge' | 'reviewRetry'> };
   /**
+   * Contestação da reprovação (impasse de revisão): o card foi reprovado e o responsável respondeu SEM editar nenhum arquivo nessa rodada (a prova já existia, ou ele discorda do 🔴). Isso não é
+   * rodada nova de revisão: o card fica em "fazendo" (a tela mostra o ícone de espera) enquanto o revisor que reprovou recebe só a resposta, item a item, e mantém ou retira cada 🔴. Retirou todos:
+   * aprovado, pelo fluxo normal. Manteve algum: volta ao responsável com o motivo, como ajuste. Não conta no limite de revisões automáticas nem grava reprovação nova. O segundo impasse no mesmo item
+   * leva o card a Aguardar, para quem pediu decidir. Some quando a contestação se resolve ou o card sai de "fazendo". Só o servidor grava.
+   */
+  contest?: TaskContest;
+  /**
    * O card foi para Aguardar porque a conversa "parou no meio" de uma ação com efeito fora do projeto (`TurnCapHit` `restart`, ou `retry` com `why: 'cut'`): uma parada PRESUMIDA, lida do
    * transcript. Se o turno da conversa terminar normal depois (a parada era falsa, ou ela seguiu por mensagem), o card sai de Aguardar e o fim do turno decide como em "fazendo": a entrega
    * é gravada e ele vai para revisão. Some quando o card sai de Aguardar. Só o servidor grava.
@@ -1634,6 +1641,44 @@ export interface Rejection {
   raw?: string;
   /** A resposta do executor, ao fim do turno que seguiu a reprovação (a entrega seguinte). `cited`: os ids Rn que ela cita, lidos antes do corte. */
   reply?: { at: string; text: string; cut?: true; cited: string[] };
+  /** A última edição que o Club viu o executor fazer depois desta reprovação (ISO): é o que separa a reentrega com edição (rodada nova) da sem edição (contestação, ver `Task.contest`). */
+  editedAt?: string;
+  /** A contestação desta reprovação que o revisor já respondeu (os itens com a decisão dele): o que fecha o laço, porque o item mantido que o executor contesta de novo sem editar vai a Aguardar. */
+  contested?: { at: string; items: TaskContestItem[] };
+}
+
+/** Um 🔴 da reprovação que o executor contesta, com o que ele respondeu sobre ele e, depois, a decisão do revisor. */
+export interface TaskContestItem {
+  /** `R1`, `R2`… (o id do 🔴); `GERAL` quando a reprovação veio sem bloco válido (o texto do revisor é um item só). */
+  id: string;
+  /** arquivo:linha do 🔴, como o revisor deu. */
+  where: string;
+  /** O que o revisor pediu (o problema), como no bloco dele. */
+  problem: string;
+  /** O que o executor respondeu sobre este item (a linha dele; vazio = não tem linha própria na resposta). Texto dele, a tela o mostra como texto puro. */
+  answer: string;
+  /** A decisão do revisor: manteve o 🔴 ou o retirou. Ausente enquanto ele não respondeu. */
+  decision?: 'keep' | 'withdraw';
+  /** Por que ele decidiu assim, em uma linha. */
+  reason?: string;
+}
+
+/** A contestação em andamento (`Task.contest`): a reprovação contestada, os itens e a conversa curta do revisor que os confere. */
+export interface TaskContest {
+  /** `Rejection.round` da reprovação contestada. */
+  round: number;
+  at: string;
+  items: TaskContestItem[];
+  /** A resposta inteira do executor (até 3000 caracteres), para o item sem linha própria. Texto dele, a tela o mostra como texto puro. */
+  reply: string;
+  /** O revisor que reprovou: é ele que mantém ou retira cada 🔴. */
+  reviewer: { staffId: string; name: string };
+  /** A conversa nova do revisor para esta contestação (só lê e responde). Ausente enquanto não abriu. */
+  sessionId?: string;
+  /** A conversa ainda não abriu (limite de consumo, conversa fechando…): tentativas e a próxima (backoff); o tick refaz. */
+  retry?: RetryState;
+  /** O re-pedido ("uma linha por item, MANTIDO ou RETIRADO") já foi feito, uma vez só. */
+  reasked?: true;
 }
 
 export interface TaskDelivery {
