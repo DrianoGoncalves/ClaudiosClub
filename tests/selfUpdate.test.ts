@@ -125,6 +125,16 @@ describe('atualizar o Claudio’s Club pela versão publicada no GitHub', () => 
     expect((await readUpdateStatus(dir)).supported).toBe(false);
   });
 
+  it('recém-subido, sem status guardado: a leitura da tela responde com a parte local, sem esperar a busca no remoto', async () => {
+    const u = new SelfUpdater(app);
+    const local = await u.check();
+    expect(local).toMatchObject({ supported: true, checkedAt: null });
+    // Nada foi guardado: a busca de verdade (a do `start` ou o "procurar agora") é que grava o status.
+    const fresh = await u.check(true);
+    expect(fresh.checkedAt).not.toBeNull();
+    expect(await u.check()).toMatchObject({ checkedAt: fresh.checkedAt });
+  });
+
   it('o quadro vê a mudança à mão sem nova busca no remoto (mesmo checkedAt)', async () => {
     const u = new SelfUpdater(app);
     const first = await u.check(true);
