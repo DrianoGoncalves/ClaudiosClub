@@ -8,7 +8,7 @@ import { t, locale } from '../i18n';
 import { BranchIcon, ClockIcon, UserIcon } from '../icons';
 import { PrimaryReturnBadge, PrimaryReturnLine, TaskFallbackBadge } from '../staff/FallbackBadge';
 import { AutoBadge, AutoInfo } from './AutoCard';
-import { BoardReview, useBoardCommit, useBoardReview, useBoardWriter } from './BoardReview';
+import { BoardReview, useBoardCommit, useBoardReview, useBoardWriter, useFlowCompletion } from './BoardReview';
 import { CommitBadge, CommitBlock } from './TaskCommit';
 import { FallbackWaitBadge, fallbackWaitText } from './FallbackWait';
 import { ReviewDelegate, ReviewStatus } from './ReviewDelegate';
@@ -198,6 +198,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [dup, setDup] = useState<{ createdId: string; warnings: TaskCreateWarning[] } | null>(null);
   const boardReview = useBoardReview(projectId);
   const boardCommit = useBoardCommit(projectId);
+  const flowCompletion = useFlowCompletion(projectId);
   const boardWriter = useBoardWriter(projectId);
   const projectPause = useProjectPause(projectId, projectName, onChanged, initialPause);
   /** A versão com escopo (ver ReleaseDialog): a faixa lê de 15 em 15 s; a página abre por cima do quadro. */
@@ -580,7 +581,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onClose={() => setDup(null)}
           />
         )}
-        <BoardReview review={boardReview} commit={boardCommit} writer={boardWriter} staff={byHierarchy(staff)} />
+        <BoardReview review={boardReview} commit={boardCommit} writer={boardWriter} flow={flowCompletion} staff={byHierarchy(staff)} />
         {adding && (
           <TaskForm
             staff={byHierarchy(staff)}

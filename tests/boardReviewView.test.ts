@@ -72,7 +72,7 @@ describe('BoardReview', () => {
     missing: false,
     error: null,
     saving: false,
-    save: async () => {},
+    save: async () => true,
     ...extra,
   });
   const render = (review: BoardReviewState, list = people) => renderToStaticMarkup(createElement(BoardReview, { review, staff: list }));

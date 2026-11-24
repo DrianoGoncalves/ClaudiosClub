@@ -77,7 +77,7 @@ import type {
   UsageStopHit,
   UserScope,
 } from '../../shared/model';
-import type { FlowPolicy } from '../../shared/model';
+import type { FlowGates, FlowPolicy } from '../../shared/model';
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import type { ReleaseHistory, ReleaseMode, ReleaseView } from '../../shared/release';
 import type { CiStatus, PrCi } from '../../shared/ci';
@@ -960,6 +960,9 @@ export const api = {
   boardReview: (projectId: string) => get<BoardConfig>(`/api/projects/${projectId}/board-review`),
   /** Grava o estado inteiro: o servidor recusa ligada sem responsável (`reviewerId`). */
   saveBoardReview: (projectId: string, config: BoardConfig) => post<BoardConfig>(`/api/projects/${projectId}/board-review`, config),
+  /** Política de fluxo do projeto (portões e preset). Ler é livre; gravar a conclusão só pela tela (403 fora dela). */
+  flowPolicy: (projectId: string) => get<FlowPolicy>(`/api/projects/${projectId}/flow-policy`),
+  setFlowCompletion: (projectId: string, completion: FlowGates['completion']) => post<FlowPolicy | null>(`/api/projects/${projectId}/flow-policy`, { completion }),
   /** Commit automático do projeto (a chave `autoCommit` do mesmo `.myco/board.json`): um commit local por tarefa pronta, nunca push. Servidor sem a rota = 404. */
   boardCommit: (projectId: string) => get<BoardCommitConfig>(`/api/projects/${projectId}/board-commit`),
   saveBoardCommit: (projectId: string, config: BoardCommitConfig) => post<BoardCommitConfig>(`/api/projects/${projectId}/board-commit`, config),

@@ -215,6 +215,17 @@ Quem revisa cada tarefa em **Revisão**:
 
 O limite de **3** revisões automáticas por tarefa vale também aqui; passando dele, o que sobrar fica com você (mesmo selo).
 
+#### Concluir sozinho quando o revisor aprovar
+
+Logo abaixo do revisor, no mesmo painel, a linha **Concluir sozinho quando o revisor aprovar** é o portão **conclusão** da **política de fluxo** do projeto (a mesma do **Quem publica** da página de versões; fica gravada fora do projeto, onde o agente não grava, e só muda por esta tela).
+
+- **Ligada**: aprovada pelo revisor, a tarefa vai para **Finalizado** e a worktree é mesclada no projeto principal **sem o seu clique**. Sem isto, todo aprovado com worktree fica em **Revisão** com "falta mesclar".
+- **Desligada**: o revisor continua revisando, mas a tarefa aprovada espera a sua aprovação. Nada é concluído nem mesclado sem você.
+- **Ao ligar a revisão automática ou escolher o revisor**, a linha vem **ligada por padrão**, mas só se você ainda não tinha escolhido: uma escolha sua já gravada (inclusive desligada) nunca é sobrescrita. Se a gravação falhar, o revisor fica gravado e a linha mostra o erro e o valor real.
+- **Valor padrão do projeto**: enquanto você não escolhe, a linha aparece **desligada** e avisa "você ainda não escolheu", porque nesse estado o Club não mescla sozinho. Um clique em **Ligada** grava a sua escolha e liga de fato; escolher aqui passa a valer como decisão sua.
+- **Sem revisor** (revisão do quadro desligada e nenhum revisor apontado na tarefa), nada conclui sozinho: a tarefa espera você, mesmo com a linha ligada.
+- Os **presets** (Manual, Supervisionado, Automático) e os portões de **plano** e **commit** ainda não têm tela própria; o commit automático é o botão do mesmo painel.
+
 ### Card registrado automaticamente
 
 Quando um funcionário altera código do projeto numa conversa que não é de nenhuma tarefa, o Club cria sozinho um card para registrar o trabalho:
