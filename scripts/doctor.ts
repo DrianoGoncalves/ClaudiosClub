@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { getAuthStatus } from '../server/auth';
+import { defenderTip, readDefenderExclusions } from './defender';
 import { BUILT, ROOT, brokenBuild, brokenDeps, launcherInstalled } from './lib';
 
 // Checklist do Claudio’s Club: confere o que falta para rodar (Node 22+, Git, Claude Code, login, dependências, build
@@ -86,12 +88,18 @@ async function collect(): Promise<Check[]> {
 async function main(): Promise<void> {
   const checks = await collect();
   const statusFile = path.join(ROOT, 'scripts', 'status.js');
-  // status.js: window.claudioStatus = { at, checks }. UTF-8.
-  const payload = { at: new Date().toISOString(), checks };
+  // Dica opcional do Windows Defender (ver scripts/defender.ts): não entra no checklist (não falta nada sem ela), só na seção "Opcional" da página.
+  const defender = process.platform === 'win32' ? defenderTip(os.homedir(), ROOT, readDefenderExclusions()) : null;
+  // status.js: window.claudioStatus = { at, checks, defender }. UTF-8.
+  const payload = { at: new Date().toISOString(), checks, defender };
   fs.writeFileSync(statusFile, `window.claudioStatus = ${JSON.stringify(payload)};`, 'utf8');
 
   for (const c of checks) {
     console.log(`${c.ok ? '✓' : '✗'} ${LABELS[c.id].padEnd(26)} ${c.detail}`);
+  }
+  if (defender) {
+    const pending = [...defender.recommended.paths, ...defender.optional.paths].filter((p) => p.excluded === false).length;
+    console.log(`· Opcional: Windows Defender ${!defender.excludedKnown ? '(não deu para ler as exclusões)' : pending ? `(${pending} pasta(s) ainda verificada(s): veja a página de início)` : '(pastas já fora da verificação)'}`);
   }
   const okCount = checks.filter((c) => c.ok).length;
   console.log(`${okCount} de ${checks.length} ok. Gravado em ${statusFile}`);
