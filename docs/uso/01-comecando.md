@@ -22,6 +22,13 @@ Depois disso, use tudo pelo navegador.
 - Use o botão **Iniciar** na página de início, que aparece no mesmo endereço quando o Claudio's Club está parado. O botão chama o link `myco://`. Na primeira vez, o navegador pergunta se pode abrir: marque "sempre permitir".
 - Ou rode `npm run daily:start` no terminal. Se o botão **Iniciar** não fizer nada, rode esse comando uma vez: ele registra o link e sobe o Claudio's Club.
 
+**Opcional, no Windows: disco mais rápido.** A página de início tem a seção **Opcional: disco mais rápido**, recolhida. O antivírus do Windows (Defender) verifica cada arquivo que o Claudio's Club, o git e os testes abrem, e num HD isso pesa no disco. A seção mostra dois comandos, cada um com o botão **Copiar** e o comando que desfaz:
+
+- **Recomendado (risco baixo):** tira da verificação os transcripts das conversas e o histórico do git do Claudio's Club.
+- **Opcional (mais ganho, mais risco):** tira o `node_modules`. Ele é código de terceiros baixado do npm, então um pacote malicioso deixaria de ser verificado.
+
+Quem roda é você, no PowerShell aberto como administrador. A página nunca roda nada. As pastas que já estão fora da verificação aparecem marcadas.
+
 ## Parear o navegador
 
 As ações (mandar mensagem, botões) só funcionam em navegador pareado. Num navegador novo:
