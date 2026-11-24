@@ -10,7 +10,7 @@ import messages from '../client/src/i18n/tasks';
 // Commit automático na tela (t-33bd83): o liga/desliga no bloco da revisão do quadro, o selo no cartão (SHA ou "commit parcial") e o bloco do detalhe.
 
 const off: BoardConfig = { autoReview: false, reviewerId: null };
-const review: BoardReviewState = { config: off, missing: false, error: null, saving: false, save: async () => {} };
+const review: BoardReviewState = { config: off, missing: false, error: null, saving: false, save: async () => true };
 const commitState = (autoCommit: boolean | null, extra: Partial<BoardCommitState> = {}): BoardCommitState => ({
   config: autoCommit === null ? null : { autoCommit },
   error: null,
