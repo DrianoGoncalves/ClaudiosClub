@@ -39,7 +39,7 @@ import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf
 import { UsageStopError } from './usageStop';
 import { AUTO_MERGE_MAX_TRIES, BACKGROUND_WAIT_MS, ESCALATE_AFTER_MS, HELD_MAX_FAILS, OUTCOME_HOLD_MAX_MS, PERMISSION_STUCK_MS, PermanentError, REASK_AFTER_MS, REVIEW_WAIT_MS, failedRetry, isTransient, nextRetry, retryDue } from './retryPolicy';
 import { BLOCKERS_FORMAT, REJECTIONS_MAX, REPLY_MAX, citedIds, doubtIsAboutRejection, fitReviewText, nextBlockerId, parseBlockers, priorBlockers, type ParsedBlock } from './reviewBlockers';
-import type { CommitLeftovers, CommitLeftoversDone, DeliveryPhase, DeliveryProofs, FlowPolicy, QueueColumn, QueueDelivery, QueueReview, QueueWait, Rejection, ReviewBlocker, StaffQueue, TaskAutoMerge, TaskCommitLeft, TaskOwnerGate } from '../shared/model';
+import type { CommitLeftovers, CommitLeftoversDone, DeliveryPhase, DeliveryProofs, FlowPolicy, QueueColumn, QueueDelivery, QueueReview, QueueWait, Rejection, ReviewBlocker, StaffQueue, TaskAutoMerge, TaskCommitLeft, TaskOwnerGate, TaskPlanAi, TaskPlanApproval } from '../shared/model';
 import { FlowPolicyInput, applyFlowInput, legacyPolicy, ownerGateOf, type FlowPolicies } from './flowPolicy';
 import type { HeavyWaitFn } from './heavyQueue';
 import { appendRun, newRunId, readRuns, type RunOutcome, type RunTrigger, type TaskRunEvent } from './taskRuns';
@@ -381,6 +381,7 @@ export const PlanDecisionBody = z
   .refine((b) => b.decision !== 'reject' || !!b.reason, 'reason: diga o que ajustar no plano (a recusa leva o motivo ao responsável)')
   .refine((b) => b.decision === 'reject' || b.reason === undefined, 'reason é da recusa; na aprovação use note')
   .refine((b) => b.decision === 'approve' || b.note === undefined, 'note é da aprovação; na recusa use reason');
+type PlanDecision = z.infer<typeof PlanDecisionBody>;
 
 /** O que `reorder` devolve: o card movido e de onde para onde (posição na fila), ou o aviso da sugestão (nada mudou). */
 export type TaskOrderResult =
@@ -552,8 +553,8 @@ export interface TaskServiceDeps {
   flow?: FlowPolicies;
 }
 
-/** A conversa da dúvida ao gestor: o que ele responde ali não é da tarefa (ver answerQuestion). */
-type Role = 'work' | 'review' | 'deploy' | 'question';
+/** A conversa da dúvida ao gestor: o que ele responde ali não é da tarefa (ver answerQuestion). 'plan': a conversa em que a IA decide o plano (ver `requestPlanDecision`). */
+type Role = 'work' | 'review' | 'deploy' | 'question' | 'plan';
 
 const OCCUPIED: TaskStatus[] = ['planning', 'doing'];
 /** Tarefas cuja conversa de troca volta no boot e segue no secundário: tudo, menos pronta (que sai do quadro ou é arquivada). */
@@ -729,6 +730,7 @@ export class TaskService {
       if (t.review?.sessionId) this.bySession.set(t.review.sessionId, { projectId, taskId: t.id, role: 'review' });
       if (t.deploy?.sessionId) this.bySession.set(t.deploy.sessionId, { projectId, taskId: t.id, role: 'deploy' });
       if (t.question?.managerSession) this.bySession.set(t.question.managerSession, { projectId, taskId: t.id, role: 'question' });
+      if (t.planWait?.ai?.sessionId) this.bySession.set(t.planWait.ai.sessionId, { projectId, taskId: t.id, role: 'plan' });
     }
     const pos = queuePositions(tasks);
     const kids = subtasksByParent(tasks);
@@ -2016,7 +2018,7 @@ export class TaskService {
         // pessoa que saiu e as mensagens guardadas iam para ela: zerados, quem pegar a tarefa começa do zero.
         if (t.status === 'review' || t.status === 'waiting') return noted(loose, 'responsável excluído');
         if (t.runId) cancelled.push(t);
-        const fresh: Task = { ...loose, sessionId: null, plan: null, held: [], fallback: undefined, runId: null };
+        const fresh: Task = { ...loose, sessionId: null, plan: null, planApproved: undefined, aiPlanRounds: undefined, held: [], fallback: undefined, runId: null };
         return t.status === 'todo' ? noted(fresh, 'responsável excluído') : moved(fresh, 'todo', 'auto', 'responsável excluído');
       }),
     );
@@ -2756,12 +2758,16 @@ export class TaskService {
     if (this.closeAfterTurn.has(sessionId)) {
       const where = await this.where(sessionId);
       if (where?.role === 'review') await this.closeReview(where.projectId, where.taskId, sessionId);
+      else if (where?.role === 'plan') await this.closePlanDecision(sessionId);
       else this.closeAfterTurn.delete(sessionId);
     }
     // O veredito do revisor no Codex: quem chama `onTurnDone` é o `TurnWatcher`, que só lê o status das sessões do Claude (~/.claude/sessions), então o fim
     // de turno do Codex (`turn.completed` → `onIdle('turn')`) é o único aviso que existe. No Claude o vigia já avisa: ler aqui também leria o mesmo
     // turno duas vezes. Falha daqui não segura o resto (a fila do revisor); o `chaseReviews` refaz o que faltar.
-    if (reason === 'turn' && engine === 'codex') await this.safely(() => this.onReviewTurn(sessionId));
+    if (reason === 'turn' && engine === 'codex') {
+      await this.safely(() => this.onReviewTurn(sessionId));
+      await this.safely(() => this.onPlanTurn(sessionId));
+    }
     await this.workDone(sessionId, reason);
     if (projectId && staffId) await this.kick(projectId, staffId);
   }
@@ -2786,6 +2792,7 @@ export class TaskService {
       await this.safely(() => this.retryNoCode(projectId, tasks, now));
       await this.safely(() => this.reconcilePlanCards(projectId, tasks));
       await this.safely(() => this.retryPlanWait(projectId, tasks, now));
+      await this.safely(() => this.chasePlanDecisions(projectId, tasks, now));
       await this.safely(() => this.retryEngineStops(projectId, tasks, now));
       await this.safely(() => this.warnPermissions(projectId, tasks, now));
       await this.safely(() => this.retryOverlaps(projectId, tasks, now));
@@ -4109,7 +4116,12 @@ export class TaskService {
   async onPlanApproved(sessionId: string, plan: string): Promise<void> {
     try {
       // Cancelada: o cartão do plano que ficou pendente não executa nada, nem grava o plano (ver `silenceSession`, que o nega ao cancelar).
-      await this.onSession(sessionId, 'work', (t) => (t.status === 'cancelled' ? t : t.status === 'planning' || t.status === 'todo' ? moved({ ...t, plan }, 'doing', 'auto', 'plano aprovado') : { ...t, plan }));
+      // A versão aprovada fica gravada (`Task.planApproved`): quem aprovou pela rota (`settlePlan`) já a assinou, e a daqui (o cartão da conversa) a mantém.
+      await this.onSession(sessionId, 'work', (t) => {
+        if (t.status === 'cancelled') return t;
+        const planApproved = t.planApproved?.hash === planHash(plan) ? t.planApproved : approvalOf(plan);
+        return t.status === 'planning' || t.status === 'todo' ? moved({ ...t, plan, planApproved }, 'doing', 'auto', 'plano aprovado') : { ...t, plan, planApproved };
+      });
     } catch (err) {
       const taskId = (await this.where(sessionId).catch(() => null))?.taskId ?? 'desconhecida';
       (this.deps.log ?? ((line: string) => console.warn(line)))(`[tarefas] plano aprovado não aplicado (tarefa ${taskId}, sessão ${sessionId}): ${err instanceof Error ? err.message : String(err)}`);
@@ -4159,7 +4171,14 @@ export class TaskService {
     if (where?.role !== 'work' || where.auto) return false;
     const { projectId, taskId } = where;
     const first = await this.fresh(projectId, taskId);
-    if (!first?.requestedBy || !first.staffId || first.autoCreated || first.status !== 'planning' || first.sessionId !== sessionId) return false;
+    if (!first?.staffId || first.autoCreated || first.sessionId !== sessionId) return false;
+    // Portão 'ai' da política de fluxo: o cartão é decidido pela IA (o gestor que pediu; senão o revisor do quadro), sem clique do dono. Sem ninguém para decidir (ou no teto de reprovações da IA), o cartão
+    // fica com o dono, como o item 'plan' da caixa: nada de gestor decidindo por curl nem de aprovação sozinha.
+    if ((first.status === 'planning' || first.status === 'doing') && this.deps.answerPlan && (await this.flowOf(projectId)).plan === 'ai' && (await this.workEngine(projectId, first, sessionId)) === 'claude') {
+      const decider = await this.planDecider(projectId, first);
+      return decider ? this.planToAi(projectId, first, sessionId, requestId, plan, decider) : false;
+    }
+    if (!first.requestedBy || first.status !== 'planning') return false;
     if (!this.deps.answerPlan || (await this.workEngine(projectId, first, sessionId)) !== 'claude') return false;
     if (!(await this.deps.readProfile(projectId, first.requestedBy).catch(() => null))) return false;
     const text = plan.trim().slice(0, PLAN_TEXT_MAX) || NO_PLAN_TEXT;
@@ -4176,6 +4195,39 @@ export class TaskService {
     this.warnDependents(projectId, taskId, stuckReason(marked));
     await this.deliverPlanWait(projectId, taskId);
     return true;
+  }
+
+  /**
+   * O cartão de plano (ExitPlanMode) com o portão 'ai' da política de fluxo: o plano vai a quem decide pela IA (`planDecider`, ver `requestPlanDecision`) e o veredito dele responde o cartão (`settlePlan` →
+   * `decidePlanCard`), sem clique do dono. A aprovação vale para a VERSÃO do plano (`Task.planApproved`): o card em "fazendo" que apresenta de novo a mesma versão aprovada segue aprovado (o cartão é
+   * respondido na hora); outra versão não herda a aprovação, o card volta a "planejando" e espera uma nova. O mesmo cartão duas vezes, ou outro cartão com a versão que já está em decisão, mantém a decisão
+   * em curso; versão diferente troca a espera (a conversa que julgava a velha deixa de valer). True se o cartão foi tratado aqui.
+   */
+  private async planToAi(projectId: string, first: Task, sessionId: string, requestId: string, plan: string, decider: PlanDecider): Promise<boolean> {
+    const text = plan.trim().slice(0, PLAN_TEXT_MAX) || NO_PLAN_TEXT;
+    const hash = planHash(text);
+    if (first.status === 'doing' && first.plan && first.planApproved?.hash === hash) {
+      const profile = await this.deps.readProfile(projectId, first.staffId!).catch(() => null);
+      return !!this.deps.answerPlan?.(sessionId, requestId, { allow: true, executeAs: executeAutonomyOf(profile?.autonomy ?? 'plan') });
+    }
+    const at = new Date().toISOString();
+    let taken = false;
+    let waiting: Task | null = null;
+    await this.change(projectId, first.id, (t) => {
+      if ((t.status !== 'planning' && t.status !== 'doing') || t.sessionId !== sessionId || t.planWait?.card === requestId) return t;
+      taken = true;
+      // O mesmo plano já em decisão, só com outro cartão: a decisão em curso vale, e o veredito responde o cartão novo.
+      if (waitsPlan(t) && t.planWait!.ai?.hash === hash) return { ...t, planWait: { ...t.planWait!, card: requestId } };
+      const planWait: TaskPlanWait = { since: at, text, to: 'manager', card: requestId, ai: planAiOf(decider, text, at) };
+      const note = `entregou o plano pelo cartão da conversa: espera a decisão de ${decider.name} (IA)`;
+      return (waiting = t.status === 'planning' ? noted({ ...t, planWait }, note) : moved({ ...t, planWait }, 'planning', 'auto', `plano alterado depois da aprovação: ${note}`));
+    });
+    const marked = waiting as Task | null;
+    if (marked) {
+      this.warnDependents(projectId, first.id, stuckReason(marked));
+      await this.requestPlanDecision(projectId, first.id);
+    }
+    return taken;
   }
 
   /** O plano foi negado na conversa sem ser recusado de vez (o funcionário ajusta e apresenta de novo): a espera de decisão daquele cartão acaba. Outro cartão, ou nenhuma espera: nada. */
@@ -5287,6 +5339,7 @@ export class TaskService {
     // Fechando: nada conclui (ver `onIdle`). A tarefa fica em "fazendo" e a órfã do boot retoma a conversa.
     if (this.deps.closing?.()) return;
     await this.onReviewTurn(sessionId);
+    await this.safely(() => this.onPlanTurn(sessionId));
     await this.onSession(sessionId, 'deploy', (t) => noteHandoff(t, 'deploy', 'deploy respondeu'));
     await this.workDone(sessionId);
   }
@@ -6242,17 +6295,25 @@ export class TaskService {
    * 'stuck' da caixa, ver `ownAlerts`).
    *
    * Só a ficha que edita (autonomia diferente de "só planeja"): a ficha `plan` tem o plano pelo cartão de plano da conversa (Claude) ou, no Codex, o fim do turno que entrega (ver `endsInDelivery`).
-   * Só "fazendo", sem plano já aprovado (`plan`): depois da aprovação o fim de turno volta ao fluxo de sempre (entrega, ou "sem código"). Devolve true se o card ficou esperando (agora ou já estava).
+   * Exceção: com o portão 'ai' da política de fluxo, o fim do turno de "planejando" no Codex (ficha `plan`, card que pede plano primeiro) também é o plano, decidido pela IA: sem isso o plano seguiria
+   * como entrega, com `plan: null`, e quem pediu teria de aprovar à mão ("plano aprovado, implemente" na conversa). Card que não pede plano (análise de uma ficha `plan`) segue entregando.
+   * Só "fazendo" (ou o "planejando" acima), sem plano já aprovado (`plan`): depois da aprovação o fim de turno volta ao fluxo de sempre (entrega, ou "sem código"). Devolve true se o card ficou esperando (agora ou já estava).
+   * Com o portão 'ai' o plano vai a quem decide pela IA (`planDecider`) e, sem ninguém, ao dono (item na caixa): nunca é aprovado sozinho.
    */
   private async holdPlan(projectId: string, task: Task, sessionId: string): Promise<boolean> {
     const staffId = task.staffId;
     if (!staffId || task.autoCreated || task.plan || task.changedFiles?.length) return false;
     // O segundo aviso do mesmo fim de turno (o vigia e o processo): o plano já está esperando.
     if (waitsPlan(task)) return true;
-    if (task.status !== 'doing' || !wantsPlan(task)) return false;
+    if ((task.status !== 'doing' && task.status !== 'planning') || !wantsPlan(task)) return false;
     const profile = await this.deps.readProfile(projectId, staffId);
-    if (!profile || profile.autonomy === 'plan') return false;
-    const manager = task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
+    if (!profile) return false;
+    const ai = (await this.flowOf(projectId)).plan === 'ai';
+    if (task.status === 'planning') {
+      if (!ai || profile.autonomy !== 'plan' || (await this.workEngine(projectId, task, sessionId)) !== 'codex') return false;
+    } else if (profile.autonomy === 'plan') return false;
+    const decider = ai ? await this.planDecider(projectId, task) : null;
+    const manager = !ai && task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
     const text = (this.deps.lastText?.(sessionId) ?? '').trim().slice(0, PLAN_TEXT_MAX) || NO_PLAN_TEXT;
     const at = new Date().toISOString();
     let waiting: Task | null = null;
@@ -6266,9 +6327,12 @@ export class TaskService {
           already = true;
           return t;
         }
-        if (t.status !== 'doing') return t;
-        const planWait: TaskPlanWait = { since: at, text, to: manager ? 'manager' : 'owner', ...(manager && { notifyRetry: { attempts: 0, nextAt: at, firstAt: at } }) };
-        return (waiting = moved({ ...t, planWait }, 'planning', 'auto', 'entregou o plano: não é entrega (não vai para revisão); espera quem pediu aprovar ou recusar'));
+        if (t.status !== task.status) return t;
+        const planWait: TaskPlanWait = decider
+          ? { since: at, text, to: 'manager', ai: planAiOf(decider, text, at) }
+          : { since: at, text, to: manager ? 'manager' : 'owner', ...(manager && { notifyRetry: { attempts: 0, nextAt: at, firstAt: at } }) };
+        const note = `entregou o plano: não é entrega (não vai para revisão); espera ${decider ? `a decisão de ${decider.name} (IA)` : 'quem pediu aprovar ou recusar'}`;
+        return (waiting = t.status === 'planning' ? noted({ ...t, planWait }, note) : moved({ ...t, planWait }, 'planning', 'auto', note));
       });
     });
     const marked = waiting as Task | null;
@@ -6276,7 +6340,8 @@ export class TaskService {
     // Quem esperava por ele fica sabendo, e a fila dele anda: o turno acabou e o card espera a decisão de quem pediu sem prender o funcionário (`parked`), como o "sem código". Sem `await` (a vez dele não espera).
     this.warnDependents(projectId, task.id, stuckReason(marked));
     void this.kick(projectId, staffId);
-    if (manager) await this.deliverPlanWait(projectId, task.id);
+    if (decider) await this.requestPlanDecision(projectId, task.id);
+    else if (manager) await this.deliverPlanWait(projectId, task.id);
     return true;
   }
 
@@ -6330,6 +6395,191 @@ export class TaskService {
   }
 
   /**
+   * Quem decide o plano pela IA (portão 'ai' da política de fluxo), na ordem: o gestor que pediu o card (`requestedBy`, ainda na equipe e que não é o responsável); senão o revisor do quadro (revisão
+   * automática ligada, ainda na equipe, que não é o responsável). Ninguém, ou a IA já reprovou o plano `AUTO_REVIEW_ROUNDS` vezes (`Task.aiPlanRounds`): null, e o plano vai ao dono (item na caixa).
+   * A IA nunca aprova sozinha, sem decisor.
+   */
+  private async planDecider(projectId: string, task: Task): Promise<PlanDecider | null> {
+    if (task.autoCreated || (task.aiPlanRounds ?? 0) >= AUTO_REVIEW_ROUNDS) return null;
+    if (task.requestedBy && task.requestedBy !== task.staffId) {
+      const manager = await this.deps.readProfile(projectId, task.requestedBy).catch(() => null);
+      if (manager) return { id: manager.id, name: manager.name, by: 'manager' };
+    }
+    const dir = await this.deps.projectPath(projectId);
+    const board = dir ? await readBoardConfig(dir) : DEFAULT_BOARD_CONFIG;
+    if (!board.autoReview || !board.reviewerId || board.reviewerId === task.staffId) return null;
+    const reviewer = await this.deps.readProfile(projectId, board.reviewerId).catch(() => null);
+    return reviewer ? { id: reviewer.id, name: reviewer.name, by: 'reviewer' } : null;
+  }
+
+  /**
+   * Abre a conversa em que quem decide (`planWait.ai`) lê o plano e responde APROVADO ou REPROVADO na primeira linha, como a revisão (`requestReview`): conversa nova dele, sem edição de arquivo
+   * (`reviewOnly`) e fora da fila de trabalho. A conversa só vale para esta espera e esta versão do plano (`since` e `hash`): se o plano mudou enquanto ela abria, é descartada. Falha que passa sozinha
+   * (limite de consumo, conversa fechando…) refaz com backoff pelo tick (`chasePlanDecisions`); a que não passa (decisor fora da equipe) vai ao dono. Um por vez por card.
+   */
+  private async requestPlanDecision(projectId: string, taskId: string): Promise<void> {
+    const key = `plandecide:${projectId}:${taskId}`;
+    if (this.inFlight.has(key)) return;
+    this.inFlight.add(key);
+    try {
+      const t = await this.fresh(projectId, taskId);
+      const n = t?.planWait;
+      const ai = n?.ai;
+      if (!t || !n || !ai || ai.sessionId || !waitsPlan(t)) return;
+      const [decider, worker] = await Promise.all([this.deps.readProfile(projectId, ai.staffId).catch(() => null), t.staffId ? this.deps.readProfile(projectId, t.staffId).catch(() => null) : null]);
+      if (!decider) {
+        await this.escalatePlanAi(projectId, taskId, n.since, 'quem decide o plano não está mais no projeto');
+        return;
+      }
+      let sessionId: string | null = null;
+      try {
+        sessionId = await this.deps.send(projectId, decider.id, await this.planDecisionText(projectId, t, n.text, worker), false, undefined, true);
+        this.bySession.set(sessionId, { projectId, taskId, role: 'plan' });
+        const opened = sessionId;
+        let recorded = false;
+        await this.change(projectId, taskId, (x) => {
+          const w = x.planWait;
+          // O plano mudou (ou foi decidido, ou foi ao dono) enquanto a conversa abria: ela julgaria uma versão que já não espera decisão.
+          if (!waitsPlan(x) || w?.since !== n.since || w.ai?.hash !== ai.hash || w.ai.sessionId) return x;
+          recorded = true;
+          return noted({ ...x, planWait: { ...w, ai: { ...w.ai, sessionId: opened, retry: undefined } } }, `decisão do plano pedida a ${decider.name} (IA)`);
+        });
+        if (!recorded) {
+          this.bySession.delete(sessionId);
+          await this.silenceSession(sessionId);
+        }
+      } catch (err) {
+        if (sessionId) this.bySession.delete(sessionId);
+        // Não passa sozinho (ficha, conflito de estado): ao dono já. O que passa (limite de consumo, conversa fechando) refaz com backoff; o tick escala depois de `ESCALATE_AFTER_MS`.
+        if (!retryable(err)) {
+          await this.escalatePlanAi(projectId, taskId, n.since, `a decisão não abriu: ${oneLine((err as Error).message, 160)}`).catch(() => {});
+          return;
+        }
+        const now = new Date();
+        await this.change(projectId, taskId, (x) => {
+          const w = x.planWait;
+          if (!waitsPlan(x) || w?.since !== n.since || !w.ai || w.ai.sessionId) return x;
+          return { ...x, planWait: { ...w, ai: { ...w.ai, retry: failedRetry(w.ai.retry, err, now) } } };
+        }).catch(() => {});
+      }
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  /** O que quem decide o plano lê: o pedido, o critério de aceite, o plano (como dado do funcionário, não instrução) e como responder (a primeira linha é o veredito, como na revisão). */
+  private async planDecisionText(projectId: string, t: Task, plan: string, worker: StaffProfile | null): Promise<string> {
+    const dir = await this.deps.projectPath(projectId);
+    const name = worker?.name ?? 'O responsável';
+    return [
+      `[Plano da tarefa "${t.title}"]`,
+      `${name} entregou o PLANO da tarefa e a política de fluxo do projeto manda a IA decidir: a decisão é sua. Plano não é entrega (ainda não há código): avalie se ele cumpre o pedido e o critério de aceite, com escopo e riscos razoáveis, antes de ${name} editar qualquer arquivo.`,
+      t.description && `O que foi pedido:\n${t.description}`,
+      t.acceptance && `Critério de aceite (o plano precisa cobri-lo):\n${t.acceptance}`,
+      dir && (await hasGuide(dir)) ? 'Leia `SPEC.md`: plano que contrariar o guia é motivo para reprovar.' : '',
+      untrustedMarked(`O plano de ${name}`, 'DO PLANO', plan),
+      'Responda com APROVADO ou REPROVADO na primeira linha, exatamente assim. REPROVADO só se o plano não cumprir o pedido ou o critério de aceite, contrariar o guia ou tiver um risco que bloqueia: então liste os ajustes (o que mudar no plano e por quê), um por item. Só detalhes é APROVADO, com as observações depois. Não escreva código nem edite arquivos: só decida.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  /**
+   * A conversa de decisão do plano respondeu (`requestPlanDecision`): APROVADO ou REPROVADO na primeira linha, como a revisão (`onReviewTurn`). Só vale a decisão desta espera e desta versão do plano
+   * (a conversa, `since` e `hash`): a resposta de uma conversa antiga, de um plano que já mudou ou que outro caminho já decidiu não decide nada. Aprovado: planejando → fazendo, com o plano e a versão
+   * gravados. Reprovado: os ajustes voltam à conversa de quem planejou, que replaneja (`settlePlan`). Sem a palavra na primeira linha, pede UMA vez de novo; sem ela de novo, o plano vai ao dono.
+   */
+  private async onPlanTurn(sessionId: string): Promise<void> {
+    const where = await this.where(sessionId);
+    if (where?.role !== 'plan') return;
+    const { projectId, taskId } = where;
+    const t = await this.fresh(projectId, taskId);
+    const n = t?.planWait;
+    const ai = n?.ai;
+    if (!t || !n || !ai || ai.sessionId !== sessionId || !waitsPlan(t) || ai.hash !== planHash(n.text)) {
+      await this.closePlanDecision(sessionId);
+      return;
+    }
+    const answer = this.deps.lastText?.(sessionId) ?? null;
+    const verdict = parseVerdict(answer);
+    if (!verdict) {
+      if (ai.reasked) {
+        await this.escalatePlanAi(projectId, taskId, n.since, 'quem decide não respondeu APROVADO ou REPROVADO na primeira linha');
+        await this.closePlanDecision(sessionId);
+        return;
+      }
+      let asked = false;
+      await this.change(projectId, taskId, (x) => {
+        if (!waitsPlan(x) || x.planWait!.since !== n.since || x.planWait!.ai?.sessionId !== sessionId || x.planWait!.ai.reasked) return x;
+        asked = true;
+        return { ...x, planWait: { ...x.planWait!, ai: { ...x.planWait!.ai, reasked: true } } };
+      });
+      if (asked && this.deps.sendTo) await this.deps.sendTo(projectId, sessionId, ai.staffId, REASK_TEXT, []).catch(() => {});
+      return;
+    }
+    const decider = (await this.deps.readProfile(projectId, ai.staffId).catch(() => null))?.name ?? 'quem decide';
+    const who = `${decider} (IA)`;
+    try {
+      if (verdict === 'approved') await this.settlePlan(projectId, t, { decision: 'approve' }, who);
+      else {
+        // Os ajustes são o que vem depois da primeira linha (o texto da decisão, não o do responsável).
+        const lines = (answer ?? '').split(/\r?\n/);
+        const first = lines.findIndex((l) => l.trim());
+        const reason = lines.slice(first + 1).join('\n').trim().slice(0, PLAN_NOTE_MAX) || 'a IA reprovou o plano sem listar os ajustes: releia o pedido e o critério de aceite e refaça o plano';
+        await this.settlePlan(projectId, t, { decision: 'reject', reason }, who);
+        await this.change(projectId, taskId, (x) => ({ ...x, aiPlanRounds: (x.aiPlanRounds ?? 0) + 1 }));
+      }
+    } catch (err) {
+      // A gravação não coube na vez dele (503): o plano segue esperando com o veredito na conversa, e o tick aplica (`chasePlanDecisions`) ou, no prazo, o dono decide. Decidido por outro caminho (409): nada a fazer.
+      if (err instanceof TaskBusyError) return;
+      if (!(err instanceof TaskConflictError)) throw err;
+    }
+    await this.closePlanDecision(sessionId);
+  }
+
+  /** Fecha a conversa de decisão que já deu o veredito (ou ficou sem valor), como `closeReview`: só com ela parada (senão o `onIdle` fecha ao fim do turno); falha ao fechar fica para o reap. */
+  private async closePlanDecision(sessionId: string): Promise<void> {
+    this.closeAfterTurn.delete(sessionId);
+    if (!this.deps.closeIfIdle || this.deps.closing?.()) return;
+    try {
+      if (!(await this.deps.closeIfIdle(sessionId))) this.closeAfterTurn.add(sessionId);
+    } catch {
+      // O reap por inatividade a fecha.
+    }
+  }
+
+  /** A decisão pela IA não vai acontecer (a conversa não abriu, não respondeu no prazo, quem decide saiu): o plano passa a `to: 'owner'` e aparece na caixa do usuário; fica uma nota com o motivo. */
+  private async escalatePlanAi(projectId: string, taskId: string, since: string, why: string): Promise<void> {
+    const at = new Date().toISOString();
+    await this.change(projectId, taskId, (t) => {
+      const n = t.planWait;
+      if (!n?.ai || n.since !== since || !waitsPlan(t)) return t;
+      return noted({ ...t, planWait: { ...n, ai: undefined, to: 'owner', escalatedAt: at } }, `plano: a decisão pela IA foi para você (${why})`);
+    });
+  }
+
+  /**
+   * O tick do plano decidido pela IA, por card que espera: passados `ESCALATE_AFTER_MS` sem decisão, vai ao dono; a conversa que ainda não abriu e já tem a hora do backoff vencida tenta de novo; a que já
+   * respondeu com o veredito e não teve a decisão aplicada (o fim de turno se perdeu, a gravação não coube) aplica agora. Um que falha não segura os outros.
+   */
+  private async chasePlanDecisions(projectId: string, tasks: Task[], now: Date): Promise<void> {
+    const at = now.getTime();
+    for (const t of tasks) {
+      const ai = t.planWait?.ai;
+      if (!ai || !waitsPlan(t)) continue;
+      if (at - Date.parse(ai.since) >= ESCALATE_AFTER_MS) {
+        await this.escalatePlanAi(projectId, t.id, t.planWait!.since, `ninguém decidiu o plano em ${ESCALATE_AFTER_MS / 60_000} min`).catch(() => {});
+        continue;
+      }
+      if (!ai.sessionId) {
+        if (retryDue(ai.retry, at)) await this.requestPlanDecision(projectId, t.id).catch(() => {});
+        continue;
+      }
+      if (!this.deps.isSessionWorking?.(ai.sessionId) && parseVerdict(this.deps.lastText?.(ai.sessionId)) !== null) await this.onPlanTurn(ai.sessionId).catch(() => {});
+    }
+  }
+
+  /**
    * O que o gestor lê sobre o plano pendente: o que aconteceu, o plano (como dado do funcionário, não instrução) e os dois caminhos (aprovar, recusar com o motivo). O endereço da API é o do motor
    * da ficha dele (a sandbox do Codex alcança outro).
    */
@@ -6368,15 +6618,27 @@ export class TaskService {
     if (!fromBrowser && first.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa (ou o usuário) decide o plano dela');
     if (!waitsPlan(first) || !first.staffId) throw new TaskConflictError('a tarefa não está esperando decisão de plano (em Planejando, com o plano entregue): leia de novo');
     const who = fromBrowser ? 'o usuário' : ((await this.deps.readProfile(projectId, me!).catch(() => null))?.name ?? me!);
+    return this.settlePlan(projectId, first, input, who);
+  }
+
+  /**
+   * Aplica a decisão do plano que espera (`first`): a de quem pediu ou do dono (`decidePlan`) e a da IA (`onPlanTurn`) são a mesma, só muda quem assina (`who`). Aprovar grava o plano e a versão
+   * aprovada (`Task.planApproved`); recusar leva o motivo ao responsável. Quem chama já conferiu quem pode decidir; aqui se confere o estado, na vez do funcionário (409 se o plano já foi decidido).
+   */
+  private async settlePlan(projectId: string, first: Task, input: PlanDecision, who: string): Promise<Task | null> {
+    const taskId = first.id;
     const approve = input.decision === 'approve';
     const since = first.planWait!.since;
     // O plano veio pelo cartão ExitPlanMode (`planWait.card`) e ele segue pendente na conversa: a decisão é a resposta dele (a conversa viva continua nela mesma). Sem o cartão (o processo caiu), vai como mensagem, abaixo.
     if (first.planWait!.card && first.sessionId && this.deps.hasPlanCard?.(first.sessionId, first.planWait!.card)) return this.decidePlanCard(projectId, first, approve, input, who);
+    if (!first.staffId) throw new TaskConflictError('a tarefa não está esperando decisão de plano (em Planejando, com o plano entregue): leia de novo');
     const workerName = (await this.deps.readProfile(projectId, first.staffId).catch(() => null))?.name ?? 'o responsável';
+    // Quem decide de novo, para o responsável: a IA (portão 'ai') ou quem pediu.
+    const again = first.planWait!.ai ? 'o plano é decidido de novo' : 'quem pediu decide de novo';
     const textOf = (title: string): string =>
       approve
         ? [`[Tarefa "${title}"]`, `O plano foi aprovado por ${who}. Implemente-o agora, neste mesmo card: não peça outra aprovação. Os arquivos, os testes e a entrega seguem como sempre.`, input.note && `Observação de quem aprovou: ${input.note}`].filter(Boolean).join('\n\n')
-        : [`[Tarefa "${title}"]`, `O plano foi recusado por ${who}. Motivo: ${input.reason}`, 'Ajuste o plano e termine o turno com ele, ainda sem editar arquivos: quem pediu decide de novo.'].join('\n\n');
+        : [`[Tarefa "${title}"]`, `O plano foi recusado por ${who}. Motivo: ${input.reason}`, `Ajuste o plano e termine o turno com ele, ainda sem editar arquivos: ${again}.`].join('\n\n');
     // Aprovado, o card vai implementar: é aqui que ele precisa da vaga de escrita (o plano, não). Ocupada, ele volta à fila com o motivo e a aprovação guardada, e implementa quando a vaga ficar livre (ver `takeSlot`).
     const slot = approve ? await this.slotView(projectId, first) : null;
     // Com a vaga livre, a foto do que já está sujo vale desde antes de o card voltar a editar (ver `captureSlot`); a mensagem de aprovação só sai depois.
@@ -6407,10 +6669,10 @@ export class TaskService {
           const holder = slot && (writeHolder(all, slot.ownCopy, slot.committing, t.id) ?? (starting && starting !== t.id ? all.find((x) => x.id === starting) : undefined));
           if (holder) {
             const reason = slotReason(holder);
-            return { ...toQueue({ ...t, plan: t.planWait!.text, planWait: undefined }, reason, `plano aprovado por ${who}; ${reason}: o card espera na fila e implementa quando a vaga ficar livre`), resourceWait: { reason, since: at, holder: holder.id } };
+            return { ...toQueue({ ...t, plan: t.planWait!.text, planApproved: approvalOf(t.planWait!.text, who), planWait: undefined }, reason, `plano aprovado por ${who}; ${reason}: o card espera na fila e implementa quando a vaga ficar livre`), resourceWait: { reason, since: at, holder: holder.id } };
           }
-          if (busy) return toQueue({ ...t, plan: t.planWait!.text, planWait: undefined }, busyReason, `plano aprovado por ${who}; ${busyReason}: o card espera na fila e implementa na vez dele`);
-          return moved({ ...t, plan: t.planWait!.text, planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`);
+          if (busy) return toQueue({ ...t, plan: t.planWait!.text, planApproved: approvalOf(t.planWait!.text, who), planWait: undefined }, busyReason, `plano aprovado por ${who}; ${busyReason}: o card espera na fila e implementa na vez dele`);
+          return moved({ ...t, plan: t.planWait!.text, planApproved: approvalOf(t.planWait!.text, who), planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`);
         }),
       { op: `plano ${taskId}`, refused: 'a decisão do plano NÃO foi gravada', deadlineMs: this.lockDeadline() },
     ).catch(async (err) => {
@@ -6441,6 +6703,7 @@ export class TaskService {
     const since = first.planWait!.since;
     const profile = await this.deps.readProfile(projectId, staffId).catch(() => null);
     const stale = () => new TaskConflictError('o plano já foi decidido ou o card mudou: leia de novo');
+    const again = first.planWait!.ai ? 'o plano é decidido de novo' : 'quem pediu decide outra vez';
     const out = await this.lockedWithDeadline(
       projectId,
       staffId,
@@ -6452,13 +6715,13 @@ export class TaskService {
         gate.commit();
         const answer = approve
           ? { allow: true, executeAs: executeAutonomyOf(profile?.autonomy ?? 'plan') }
-          : { allow: false, message: `O plano foi recusado por ${who}. Motivo: ${input.reason}\n\nAjuste o plano e apresente-o de novo: quem pediu decide outra vez. Ainda sem editar arquivos.` };
+          : { allow: false, message: `O plano foi recusado por ${who}. Motivo: ${input.reason}\n\nAjuste o plano e apresente-o de novo: ${again}. Ainda sem editar arquivos.` };
         if (!this.deps.answerPlan?.(sessionId, card, answer)) throw stale();
         return this.change(projectId, first.id, (t) => {
           // A resposta ao cartão já pode ter movido o card (`onPlanApproved`): só o que ainda espera esta decisão muda.
           if (!waitsPlan(t) || t.planWait!.since !== since) return t;
           return approve
-            ? moved({ ...t, plan: t.planWait!.text, planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`)
+            ? moved({ ...t, plan: t.planWait!.text, planApproved: approvalOf(t.planWait!.text, who), planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`)
             : noted({ ...t, planWait: undefined }, `plano recusado por ${who}: ${untrustedLine(input.reason, 200)}`);
         });
       },
@@ -7174,7 +7437,7 @@ export function stuckState(t: Task, now = Date.now()): StuckState | null {
   // Card = código: o turno terminou sem editar nada (ver `holdNoCode`) e quem pediu decide, cancelando com motivo ou devolvendo ao responsável: só ele destrava.
   if (markedNoCode(t)) return { reason: 'terminou o turno sem editar código (card = código): espera quem pediu cancelar ou devolver ao responsável', selfHeals: false, humanAction: 'decide', since: t.noCode!.since };
   // Plano primeiro: o card entregou o plano (ver `holdPlan`) e quem pediu decide, aprovando ou recusando com o motivo: só ele destrava.
-  if (waitsPlan(t)) return { reason: 'entregou o plano e espera quem pediu aprovar ou recusar', selfHeals: false, humanAction: 'decide', since: t.planWait!.since };
+  if (waitsPlan(t)) return { reason: t.planWait!.ai ? 'entregou o plano e espera a decisão da IA (APROVADO ou REPROVADO)' : 'entregou o plano e espera quem pediu aprovar ou recusar', selfHeals: false, humanAction: 'decide', since: t.planWait!.since };
   if (t.status !== 'review') return null;
   // Aprovada, e a mescla automática parou (sem testes, sem commit de entrega, principal sujo além do teto…): só o dono mescla pelo card (ver `TaskService.mergeSoon`).
   const stopped = stoppedMerge(t);
@@ -7503,6 +7766,21 @@ const markedNoCode = (t: Task): boolean => !!t.noCode && t.status === 'doing';
 
 /** O plano de `t` espera a decisão de quem pediu (ver `holdPlan`)? Só vale em "planejando": em outra coluna a marca já saiu (`moved`). */
 const waitsPlan = (t: Task): boolean => !!t.planWait && t.status === 'planning';
+
+/** A versão do plano: o hash do texto, sem a diferença de fim de linha nem as pontas (o mesmo plano reescrito igual é a mesma versão). A aprovação vale para uma versão (`Task.planApproved`). */
+export const planHash = (text: string): string => createHash('sha256').update(text.replace(/\r\n/g, '\n').trim()).digest('hex').slice(0, 16);
+
+const approvalOf = (text: string, by?: string): TaskPlanApproval => ({ hash: planHash(text), at: new Date().toISOString(), ...(by && { by }) });
+
+/** Quem decide o plano pela IA (ver `TaskService.planDecider`). */
+interface PlanDecider {
+  id: string;
+  name: string;
+  by: TaskPlanAi['by'];
+}
+
+/** A decisão pela IA que ainda não abriu a conversa: a versão do plano (hash) e a primeira tentativa, já vencida (o chamador abre na hora). */
+const planAiOf = (d: PlanDecider, text: string, at: string): TaskPlanAi => ({ by: d.by, staffId: d.id, hash: planHash(text), since: at, retry: { attempts: 0, nextAt: at, firstAt: at } });
 
 /** O plano que espera decisão é o fim de turno (sem cartão ExitPlanMode pendente: ver `TaskPlanWait.card`)? A conversa está parada, então não prende o funcionário (`parked`). */
 const waitsPlanIdle = (t: Task): boolean => waitsPlan(t) && !t.planWait!.card;

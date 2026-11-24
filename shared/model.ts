@@ -722,8 +722,8 @@ export interface BoardCardWorktreeConfig {
 export type FlowMode = 'auto' | 'supervised' | 'manual' | 'custom';
 
 /**
- * Os portões. `plan`: quem aprova o plano de um card que pede plano primeiro; 'owner' = como hoje (quem pediu o card ou o dono decide), 'ai' fica só guardado (a aprovação por IA é de outro
- * card e ainda não age). `completion`: quem leva uma tarefa em revisão a "pronto"; 'ai' = o veredito APROVADO do revisor (e, sem revisor, a tarefa espera o dono), 'owner' = só o dono, pela tela.
+ * Os portões. `plan`: quem aprova o plano de um card que pede plano primeiro; 'owner' = como hoje (quem pediu o card ou o dono decide), 'ai' = a IA decide (o gestor que pediu o card; senão o
+ * revisor do quadro; sem nenhum dos dois, o dono, nunca sozinho): ver `TaskPlanWait.ai`. `completion`: quem leva uma tarefa em revisão a "pronto"; 'ai' = o veredito APROVADO do revisor (e, sem revisor, a tarefa espera o dono), 'owner' = só o dono, pela tela.
  * `commit`: o commit automático local da tarefa pronta (o `autoCommit` de sempre).
  */
 export interface FlowGates {
@@ -1068,6 +1068,13 @@ export interface Task {
    */
   planWait?: TaskPlanWait;
   /**
+   * A versão do plano (`plan`) que foi aprovada: o hash do texto e quando. A aprovação vale para ESSA versão: um plano diferente apresentado depois (outro cartão de plano, outro fim de turno)
+   * não herda a aprovação e espera uma nova (ver `TaskService.onPlan`, `planWait.ai`). Só o servidor grava.
+   */
+  planApproved?: TaskPlanApproval;
+  /** Quantas vezes a IA reprovou o plano deste card (portão 'ai'); no teto (`AUTO_REVIEW_ROUNDS`) o plano passa a ir ao dono. Só o servidor grava. */
+  aiPlanRounds?: number;
+  /**
    * A tarefa em "revisão" espera a aprovação do dono (política de fluxo com conclusão 'owner', ou 'ai' sem revisor configurado): só a EXIBIÇÃO (a nota e o item na caixa). Quem autoriza a ir
    * a "pronto" é a política lida de `~/.myco` e o pedido do dono pela tela, nunca este campo. Vale só para a entrega `deliveryAt`; entrega nova, ou sair de "revisão", o desfaz. Só o servidor grava.
    */
@@ -1343,6 +1350,39 @@ export interface TaskPlanWait {
    * (ficha que edita) e a decisão vai como mensagem.
    */
   card?: string;
+  /**
+   * A decisão é da IA (política de fluxo com `plan: 'ai'`): o plano vai a quem decide (o gestor que pediu o card; senão o revisor do quadro) numa conversa de decisão, que responde APROVADO ou
+   * REPROVADO na primeira linha. Presente, o aviso com os caminhos de API ao gestor (`notifyRetry`) não existe, e o plano não vai para a caixa do dono. Perdida a decisão (a conversa não
+   * abriu, ou não respondeu no prazo), o plano passa a `to: 'owner'` e esta marca sai.
+   */
+  ai?: TaskPlanAi;
+}
+
+/** A decisão do plano pela IA (`TaskPlanWait.ai`). */
+export interface TaskPlanAi {
+  /** Quem decide: o gestor que pediu o card ('manager') ou o revisor do quadro ('reviewer'). */
+  by: 'manager' | 'reviewer';
+  staffId: string;
+  /** A versão do plano (o hash de `TaskPlanWait.text`) que a conversa de decisão julga: o veredito de outra versão não vale. */
+  hash: string;
+  /** Desde quando o plano espera esta decisão (ISO): passado o prazo sem veredito, vai ao dono. */
+  since: string;
+  /** A conversa de decisão, quando ela abriu. */
+  sessionId?: string;
+  /** O veredito não veio na primeira linha e já foi pedido de novo (uma vez). */
+  reasked?: true;
+  /** A conversa de decisão ainda não abriu (limite de consumo, conversa fechando…): tentativas e a próxima (backoff); o tick refaz. */
+  retry?: RetryState;
+}
+
+/** A versão do plano aprovada (`Task.planApproved`). */
+export interface TaskPlanApproval {
+  /** O hash do texto do plano aprovado (`planHash` em server/tasks.ts). */
+  hash: string;
+  /** Quando foi aprovado (ISO). */
+  at: string;
+  /** Quem aprovou (o nome; com a decisão da IA, o de quem decidiu). */
+  by?: string;
 }
 
 /** A parada do card por erro do motor (`Task.engineStop`). `why`/`engine`/`error` são os do `TurnCapHit` `engine` que o originou. */
