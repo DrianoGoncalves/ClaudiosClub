@@ -6,7 +6,7 @@ import type { CodexEffort, CostReviewApplied, CostReviewApplyResult, StaffProfil
 import { COST_REVIEW_FINDING_IDS, isClosed } from '../shared/model';
 import { buildCostReview, COST_REVIEW_MAX_DAYS } from './costReview';
 import { readProfile } from './staff/store';
-import { readTasks } from './tasks';
+import { readActiveTasks } from './tasks';
 
 /** Igual ao limite de regras da ficha (StaffInputObject, list(50)). */
 const FICHA_RULES_MAX = 50;
@@ -99,7 +99,7 @@ export async function runCostReviewApply(input: CostReviewApplyInput): Promise<C
   };
   let fichaChanged = false;
   let rulesChanged = false;
-  const openTitles = new Set((await readTasks(projectPath)).filter((t) => t.staffId === staffId && !isClosed(t)).map((t) => t.title));
+  const openTitles = new Set((await readActiveTasks(projectPath)).filter((t) => t.staffId === staffId && !isClosed(t)).map((t) => t.title));
   const pendingTasks: Array<{ item: CostReviewApplied; title: string; description: string }> = [];
 
   for (const id of ids) {
