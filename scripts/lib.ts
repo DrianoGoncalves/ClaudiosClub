@@ -119,32 +119,58 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-/** Linha de comando do processo; vazia se não der para ler. */
-export function commandLine(pid: number): string {
+/** Linha de comando do processo; vazia se não der para ler (inclusive quando o PowerShell passa do prazo). */
+export function commandLine(pid: number, timeoutMs = 10_000): string {
   try {
     if (process.platform === 'win32') {
       return execFileSync(POWERSHELL, ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], {
         encoding: 'utf8',
         windowsHide: true,
-        timeout: 10_000,
+        timeout: timeoutMs,
       });
     }
-    return execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8', timeout: 5_000 });
+    return execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8', timeout: Math.min(timeoutMs, 5_000) });
   } catch {
     return '';
   }
 }
 
-/** PID do vigia, se ele está vivo. O sistema reaproveita PIDs: confere que o processo ainda é o daemon. */
-export function runningDaemon(): number | null {
+/**
+ * O vigia registrado no arquivo de PID:
+ * - `running`: vivo, e a linha de comando é a do daemon;
+ * - `stopped`: sem arquivo, processo morto, ou o PID foi reaproveitado por outro programa (o sistema reaproveita PIDs);
+ * - `unknown`: vivo, mas a linha de comando não pôde ser lida. Com o HDD saturado, o PowerShell passa do prazo; antes isso virava "parado", o `daily:stop`
+ *   apagava o arquivo e o `daily:start` subia um segundo vigia, com o primeiro ainda segurando a porta (24/11/2026).
+ * `probe` troca as leituras (só os testes).
+ */
+export type DaemonState = { state: 'running' | 'unknown'; pid: number } | { state: 'stopped'; pid: null };
+
+export interface DaemonProbe {
+  readPid?: () => unknown;
+  alive?: (pid: number) => boolean;
+  cmdline?: (pid: number, timeoutMs: number) => string;
+}
+
+export function daemonState(timeoutMs = 10_000, probe: DaemonProbe = {}): DaemonState {
   let pid: unknown;
   try {
-    pid = (JSON.parse(fs.readFileSync(PID_FILE, 'utf8')) as { pid?: unknown }).pid;
+    pid = probe.readPid ? probe.readPid() : (JSON.parse(fs.readFileSync(PID_FILE, 'utf8')) as { pid?: unknown }).pid;
   } catch {
-    return null;
+    return { state: 'stopped', pid: null };
   }
-  if (typeof pid !== 'number' || !isAlive(pid)) return null;
-  return /daemon\.(ts|mjs)/.test(commandLine(pid)) ? pid : null;
+  if (typeof pid !== 'number' || !(probe.alive ?? isAlive)(pid)) return { state: 'stopped', pid: null };
+  const cmd = (probe.cmdline ?? commandLine)(pid, timeoutMs);
+  if (!cmd.trim()) return { state: 'unknown', pid };
+  return /daemon\.(ts|mjs)/.test(cmd) ? { state: 'running', pid } : { state: 'stopped', pid: null };
+}
+
+/**
+ * PID do vigia para quem decide se sobe outro (o `daily:start`, o link myco://, o próprio daemon ao nascer): `unknown` conta como rodando. Na dúvida, não sobe um
+ * segundo vigia por cima. Quem encerra (o `daily:stop`) usa `daemonState` e só mata o que confirmou ser o vigia.
+ */
+export function runningDaemon(probe: DaemonProbe = {}): number | null {
+  const d = daemonState(10_000, probe);
+  return d.state === 'stopped' ? null : d.pid;
 }
 
 /**
