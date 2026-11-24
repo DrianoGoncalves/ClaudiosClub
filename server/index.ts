@@ -1702,7 +1702,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), async ({ params: [id] }) => tasks.commitLeftOf(id!, withInboxWait(await tasks.list(id!), id!, chats.attention()))],
   // Refazer o commit das sobras de uma tarefa pronta (ver `TaskService.redoLeftovers`): o GET mostra os arquivos, o diff e o `digest`; o POST `{ digest }` faz o commit complementar. Só pela tela
   // (o serviço responde 403 a quem não é a tela; o gate já barra o POST de funcionário e as rotas nem estão na lista de apiPolicy.ts). 404 se o projeto ou a tarefa não existem; 409 com o motivo se não dá.
-  ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/commit-leftovers$`), ({ params: [id, taskId], fromBrowser }) => tasks.previewLeftovers(id!, taskId!, fromBrowser)],
+  // O GET confere o cookie do pareamento (`paired`), como /api/consult/links: o navegador não manda Origin num GET do próprio site, então `fromBrowser` era sempre
+  // falso aqui e o "Revisar sobras" da caixa sempre dava "só são vistas pelo Claudio’s Club". O POST (o commit) segue exigindo `fromBrowser`.
+  ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/commit-leftovers$`), ({ params: [id, taskId], paired }) => tasks.previewLeftovers(id!, taskId!, paired)],
   ['POST', new RegExp(`^/api/projects/${ID}/tasks/${ID}/commit-leftovers$`), ({ params: [id, taskId], body, fromBrowser }) => tasks.redoLeftovers(id!, taskId!, body, fromBrowser)],
   // Revisão automática do quadro: `{ autoReview, reviewerId }` (ver server/boardConfig.ts). Ler é livre; gravar só pela tela, como as outras
   // configurações de projeto (o funcionário nem tem este POST na lista de apiPolicy.ts).
