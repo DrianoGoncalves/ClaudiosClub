@@ -2541,3 +2541,10 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 :is(.btn-primary, .btn-secondary):focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
 /* Tamanho único (o do "Salvar ficha"), em qualquer tela; a primária se destaca só pela cor de fundo. */
 :is(.btn-primary, .btn-secondary):not(.btn-icon, .chat-more-btn, .hr-more, .mcp-pair-remove, .json-more) { font-size: var(--btn-font); line-height: var(--btn-lh); padding: var(--btn-pad); min-height: var(--btn-h); box-sizing: border-box; }
+/* Ícones animados no hover/foco do botão pai (só transform, sem dependência). Respeita "animações off" e prefers-reduced-motion. */
+.ico-send, .ico-plus, .ico-trash { transition: transform 0.2s ease-out; transform-origin: center; }
+:is(button, a):is(:hover, :focus-visible) > .ico-send { transform: translate(2px, -2px); }
+:is(button, a):is(:hover, :focus-visible) > .ico-plus { transform: rotate(90deg); }
+:is(button, a):is(:hover, :focus-visible) > .ico-trash { transform: rotate(-8deg); }
+@media (prefers-reduced-motion: reduce) { :is(.ico-send, .ico-plus, .ico-trash) { transition: none; transform: none !important; } }
+.anim-off :is(.ico-send, .ico-plus, .ico-trash) { transition: none; transform: none !important; }
