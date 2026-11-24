@@ -148,6 +148,7 @@ import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, dropStaffSessions, hasStaffFiles, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
 import { StateBusyError } from './atomicWrite';
+import { BoardCorruptError, boardIncidents, boardIncidentSummary, dismissBoardIncident } from './boardGuard';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { writeOwnerFile } from './ownerEdits';
@@ -2219,8 +2220,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       // `error:<sessão>` (parou com erro), `cap:<sessão>` (parou no teto), `commit:<projeto>:<tarefa>` (o commit automático falhou ou foi parcial) ou `guardoff:<sessão>` (a fila de
       // validação pesada ficou desligada por hooks.json na conta do Codex) ou `codexsandbox:password-policy` (a política de senha do Windows quebra o sandbox do Codex): o id do item da caixa.
-      const b = parse(z.object({ id: z.string().regex(/^(error|cap|commit|guardoff|codexsandbox):.+/).max(300) }), body);
-      return { ok: b.id.startsWith('commit:') ? await tasks.ackCommit(b.id) : b.id.startsWith('guardoff:') ? chats.dismissGuardOff(b.id) : b.id.startsWith('codexsandbox:') ? codexPolicy.dismiss(b.id) : chats.dismissError(b.id) };
+      // `board:<projeto>:<data>`: o quadro de tarefas que estava corrompido e voltou de uma cópia (o de "corrompido sem cópia" só some quando o arquivo volta a ler).
+      const b = parse(z.object({ id: z.string().regex(/^(error|cap|commit|guardoff|codexsandbox|board):.+/).max(300) }), body);
+      return { ok: b.id.startsWith('commit:') ? await tasks.ackCommit(b.id) : b.id.startsWith('guardoff:') ? chats.dismissGuardOff(b.id) : b.id.startsWith('codexsandbox:') ? codexPolicy.dismiss(b.id) : b.id.startsWith('board:') ? dismissBoardIncident(b.id) : chats.dismissError(b.id) };
     },
   ],
   [
@@ -3036,6 +3038,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
           console.error('[estado] arquivo ocupado:', err.file, (err.cause as Error | undefined)?.message);
           return send(res, 503, { error: err.message }, { 'retry-after': String(err.retryAfter) });
         }
+        // O tasks.json não lê como lista e não há cópia boa (ver boardGuard.ts): nada foi gravado por cima dele; o aviso na caixa explica.
+        if (err instanceof BoardCorruptError) return send(res, 503, { error: err.message });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         // Teto de títulos manuais: só criar outro recusa (409); editar ou apagar um que existe segue.
@@ -3410,6 +3414,14 @@ async function getInbox(): Promise<InboxItem[]> {
   for (const s of chats.secretHits()) {
     const w = where(s.sessionId, liveById.get(s.sessionId));
     if (!hidden(w)) out.push(secretInboxItem(s, w, projects.find((p) => p.id === w.projectId)?.path ?? null));
+  }
+  // Quadro de tarefas que não lia como lista (gravação que não chegou ao disco): voltou de uma cópia, ou segue corrompido sem cópia boa (ver boardGuard.ts). Aviso do projeto,
+  // sem conversa: o clique abre a sala do projeto.
+  for (const inc of boardIncidents()) {
+    const same = (a: string, b: string) => (process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b));
+    const p = projects.find((x) => same(x.path, inc.dir));
+    if (!p || hidden({ projectId: p.id, staffId: null, sessionId: '' })) continue;
+    out.push({ id: inc.id, kind: 'error', projectId: p.id, projectName: p.name, sessionId: '', staffId: null, name: p.name, summary: boardIncidentSummary(inc), at: inc.at });
   }
   // Chave escrita no .mcp.json de um projeto: o arquivo vai para o git junto com o código.
   for (const p of projects.filter((x) => x.exists && !x.worktreeOf)) {
