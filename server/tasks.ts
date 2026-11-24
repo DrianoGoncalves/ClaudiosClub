@@ -4680,10 +4680,11 @@ export class TaskService {
 
   /**
    * O preview do "refazer o commit das sobras": os arquivos de fora como estão agora (motivo, cards abertos que ainda os tocam, cards cancelados que os tocaram), o diff do que o commit levaria e o
-   * `digest` que o POST devolve. Lido do disco e do git neste instante (sem cache). Só a tela chama (`fromBrowser`; 403 antes de qualquer leitura); null se o projeto ou a tarefa não existem. Só leitura.
+   * `digest` que o POST devolve. Lido do disco e do git neste instante (sem cache). Só a tela chama (`fromScreen`: na rota, o cookie do pareamento, porque o navegador não
+   * manda Origin num GET; 403 antes de qualquer leitura); null se o projeto ou a tarefa não existem. Só leitura.
    */
-  async previewLeftovers(projectId: string, taskId: string, fromBrowser: boolean): Promise<CommitLeftovers | null> {
-    if (!fromBrowser) throw new TaskForbiddenError('as sobras do commit só são vistas pelo Claudio’s Club');
+  async previewLeftovers(projectId: string, taskId: string, fromScreen: boolean): Promise<CommitLeftovers | null> {
+    if (!fromScreen) throw new TaskForbiddenError('as sobras do commit só são vistas pelo Claudio’s Club');
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return null;
     const all = await readTasks(dir);
