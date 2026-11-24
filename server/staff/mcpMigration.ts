@@ -5,10 +5,10 @@ import type { StaffProfile } from '../../shared/model';
 import { tryJson } from '../adapters/claude/fsutil';
 import { convertMcps, isMcpRef, MCP_NAME, type KnownMcpNames } from '../mcpAccessRefs';
 import { DEFAULT_SECRETS_DIR, hasSecret, type VaultOptions } from '../secretVault';
-import { clubDefOf, clubEntry, clubSecretId, McpError, readClub } from './mcp';
+import { clubDefOf, clubEntry, clubSecretId, McpError, MIGRATION_NAME_EXISTS, readClub } from './mcp';
 import { editFile, extraOf, readDoc } from './mcpLibrary';
 import { parseLauncherEntry } from './mcpLaunch';
-import { migrateToolsKeys } from './mcpTools';
+import { migrateToolsKeys, revertToolsKeys, type ToolsKeysMigration } from './mcpTools';
 import { writeAtomic } from './store';
 
 // Migração de uma vez para o modelo Global/Projeto de MCPs (ver mcpAccessRefs.ts e mcpLibrary.ts). Roda no boot, sem bloquear a subida. Nada é
@@ -33,6 +33,8 @@ export interface McpMigration {
   written: Record<string, Obj>;
   /** As fichas convertidas junto (o `mcps` de antes, para o rollback). */
   fichas: Array<{ projectId: string; staffId: string; before: string[] }>;
+  /** As chaves antigas do arquivo de ferramentas testadas que passaram para a nova (antiga → nova), para o rollback. Relatório de antes desta versão não tem. */
+  toolsKeyMap?: Record<string, string>;
 }
 
 export interface McpMigrationOptions {
@@ -99,7 +101,7 @@ export async function migrateClubToGlobal(o: McpMigrationOptions): Promise<McpMi
         moved.push(t.name);
         written[t.name] = t.entry;
       } else if (isOwnPointer(servers[t.name], t.name, o.clubFile) || isDeepStrictEqual(servers[t.name], t.entry)) moved.push(t.name);
-      else inEdit.push(`${t.name} (já existe na Global: ficou como estava)`);
+      else inEdit.push(`${t.name} (${MIGRATION_NAME_EXISTS})`);
     }
   };
   const doc = await readDoc(o.claudeConfigFile);
@@ -199,27 +201,32 @@ export interface McpBootResult {
   repaired: string[];
   /** Chaves do arquivo de ferramentas testadas que passaram para o modelo novo. */
   toolsKeys: number;
+  /** As que ficaram no arquivo, antiga → nova (vão para o relatório). */
+  toolsKeyMap: Record<string, string>;
   fichas: StaffMcpConversion;
 }
 
 /**
  * O que roda no boot, nesta ordem: o registro vai para a Global (uma vez); entradas do Club com lançador que sumiu são refeitas; as
  * ferramentas testadas ganham a chave nova; as fichas com nome antigo viram refs (a cada boot, só as que mudam). O `mcps` de antes das
- * fichas convertidas na primeira execução fica no relatório (rollback). Um passo que falha não derruba os outros.
+ * fichas convertidas e o mapa das chaves antigas das ferramentas, na primeira execução, ficam no relatório (rollback). Um passo que falha
+ * não derruba os outros.
  */
 export async function migrateMcpsAtBoot(
   o: McpMigrationOptions & { toolsFile: string } & Pick<Parameters<typeof convertStaffMcps>[0], 'projects' | 'known' | 'list' | 'save'>,
 ): Promise<McpBootResult> {
-  const out: McpBootResult = { club: null, repaired: [], toolsKeys: 0, fichas: { changed: [], skipped: [] } };
+  const out: McpBootResult = { club: null, repaired: [], toolsKeys: 0, toolsKeyMap: {}, fichas: { changed: [], skipped: [] } };
   try {
     out.club = await migrateClubToGlobal(o);
   } catch (err) {
     out.clubError = err instanceof Error ? err.message : 'erro';
   }
   out.repaired = await repairLauncherEntries(o).catch(() => []);
-  out.toolsKeys = await migrateToolsKeys(o.toolsFile).catch(() => 0);
+  const tools = await migrateToolsKeys(o.toolsFile).catch((): ToolsKeysMigration => ({ changed: 0, keys: {} }));
+  out.toolsKeys = tools.changed;
+  out.toolsKeyMap = tools.keys;
   out.fichas = await convertStaffMcps(o);
-  if (out.club && out.fichas.changed.length) await writeRecord(o.recordFile, { ...out.club, fichas: out.fichas.changed });
+  if (out.club && (out.fichas.changed.length || tools.changed)) await writeRecord(o.recordFile, { ...out.club, fichas: out.fichas.changed, toolsKeyMap: tools.keys });
   return out;
 }
 
@@ -230,18 +237,29 @@ export interface McpRollback {
   kept: string[];
   /** Fichas com o `mcps` de antes de volta. */
   fichas: number;
+  /** Fichas que não deu para devolver (projeto ou ficha não achados), `projeto/ficha`: com alguma, o relatório fica para uma nova tentativa. */
+  fichasPuladas: string[];
+  /** Chaves de ferramentas testadas que voltaram ao nome antigo (0 sem `toolsFile`, ou em relatório de antes do mapa existir). */
+  toolsKeys: number;
+  /** Backups feitos antes de gravar: o ~/.claude.json e o arquivo de ferramentas (null: não gravou). */
+  backups: { claudeConfig: string | null; tools: string | null };
 }
 
 /**
  * Desfaz a migração a partir do relatório: remove do ~/.claude.json só a entrada que ainda é igual à gravada (e, se ela chama o lançador, que
- * `parseLauncherEntry` reconhece como a do Club deste servidor), devolve o `mcps` de antes às fichas e apaga o relatório. O registro e o cofre não foram mexidos,
- * então o modelo antigo volta a achar tudo. A lista de ferramentas testadas não volta (a chave antiga não é recuperável): teste de novo.
- * `null` = sem relatório, nada a desfazer. Alternativa à mão: restaurar o backup do ~/.claude.json que está no relatório.
+ * `parseLauncherEntry` reconhece como a do Club deste servidor), devolve o `mcps` de antes às fichas, devolve as chaves antigas do arquivo de
+ * ferramentas testadas (`toolsFile`, pelo mapa do relatório) e apaga o relatório. O registro e o cofre não foram mexidos, então o modelo antigo
+ * volta a achar tudo. Backup antes de cada gravação (~/.claude.json e ferramentas, em `backupDir`; as fichas têm o `mcps` de antes no relatório).
+ * Chave de ferramenta que a migração descartou (duas antigas viraram a mesma) e relatório de antes do mapa não voltam: teste de novo.
+ * Ficha que não deu para devolver mantém o relatório (rodar de novo refaz só o que falta). `null` = sem relatório, nada a desfazer.
+ * Alternativa à mão: restaurar o backup do ~/.claude.json que está no relatório. A nova versão do Club migra de novo no próximo boot (sem relatório).
  */
 export async function rollbackMcpMigration(o: {
   recordFile: string;
   claudeConfigFile: string;
   backupDir: string;
+  /** O arquivo de ferramentas testadas (mcp-tools.json); sem ele, as chaves não voltam. */
+  toolsFile?: string;
   projects: Array<{ id: string; path: string }>;
   list: (projectPath: string, projectId: string) => Promise<StaffProfile[]>;
   save: (projectPath: string, p: StaffProfile) => Promise<void>;
@@ -251,6 +269,7 @@ export async function rollbackMcpMigration(o: {
   if (!isObj(rec)) return null;
   const written = isObj(rec.written) ? rec.written : {};
   const fichas = Array.isArray(rec.fichas) ? rec.fichas : [];
+  const toolsKeyMap = isObj(rec.toolsKeyMap) ? Object.fromEntries(Object.entries(rec.toolsKeyMap).filter((e): e is [string, string] => typeof e[1] === 'string')) : {};
 
   let removed: string[] = [];
   let kept: string[] = [];
@@ -270,18 +289,23 @@ export async function rollbackMcpMigration(o: {
   };
   const doc = await readDoc(o.claudeConfigFile);
   apply(isObj(doc?.mcpServers) ? structuredClone(doc.mcpServers as Obj) : {});
-  if (removed.length) await editFile(o, 'user', null, apply);
+  const claudeConfig = removed.length ? await editFile(o, 'user', null, apply) : null;
 
   let restored = 0;
+  const puladas: string[] = [];
   for (const f of fichas) {
     if (!isObj(f) || typeof f.projectId !== 'string' || typeof f.staffId !== 'string' || !Array.isArray(f.before)) continue;
     const project = o.projects.find((p) => p.id === f.projectId);
-    if (!project) continue;
-    const profile = (await o.list(project.path, project.id)).find((p) => p.id === f.staffId);
-    if (!profile) continue;
+    const profile = project ? (await o.list(project.path, project.id).catch(() => [])).find((p) => p.id === f.staffId) : undefined;
+    if (!project || !profile) {
+      puladas.push(`${f.projectId}/${f.staffId}`);
+      continue;
+    }
     await o.save(project.path, { ...profile, mcps: f.before.filter((m): m is string => typeof m === 'string') });
     restored++;
   }
-  await fs.rm(o.recordFile, { force: true });
-  return { removed, kept, fichas: restored };
+
+  const tools = o.toolsFile ? await revertToolsKeys(o.toolsFile, toolsKeyMap, o.backupDir) : { reverted: 0, backup: null };
+  if (!puladas.length) await fs.rm(o.recordFile, { force: true });
+  return { removed, kept, fichas: restored, fichasPuladas: puladas, toolsKeys: tools.reverted, backups: { claudeConfig, tools: tools.backup } };
 }

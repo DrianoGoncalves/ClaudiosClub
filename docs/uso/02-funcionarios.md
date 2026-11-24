@@ -205,6 +205,7 @@ Deixa um funcionário de um projeto fazer uma pergunta a um funcionário de outr
 - O **navegador** tem um seletor só, **Acesso do navegador**, que aparece com **Usar o navegador** marcado. Vale para o Claude in Chrome e para o Chrome do GPT, que são o mesmo navegador (vale o mais restritivo dos dois). Ele não tem teste: **Só leitura** bloqueia o navegador inteiro e **Pede antes de escrever** pede a cada ação.
 - A lista de MCPs (Global e Projeto) e o acesso de cada um valem nos dois motores, Claude e GPT (Codex); o GPT recebe os marcados na ficha pelo arquivo de lançamento da conversa. O **Acesso do navegador** também vale nos dois.
 - Cada MCP ligado que roda no seu computador ocupa memória, mas o peso de cada um não foi medido (a ficha diz "peso não medido"). O que foi medido, e o que gasta o limite de uso, está em **O que pesa e quando vale ligar**, abaixo.
+- **Voltar atrás na migração** (só se for voltar a uma versão do Club anterior aos escopos Global e Projeto): com o Club fechado, rode `npm run mcp:rollback` na pasta do Club. Ele tira do `~/.claude.json` só as entradas que a migração gravou e que você não mexeu, devolve às fichas o `mcps` de antes e às ferramentas testadas as chaves antigas, e apaga o relatório `~/.myco/mcps-migracao.json`. Antes de gravar, guarda cópia do `~/.claude.json` e do `mcp-tools.json` em `~/.myco/backups`. Sem o relatório não há o que desfazer; a versão nova migra de novo no próximo boot.
 
 ## O que pesa e quando vale ligar
 

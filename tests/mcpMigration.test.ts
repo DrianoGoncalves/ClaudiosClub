@@ -1,3 +1,4 @@
+import { execSync, spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -5,10 +6,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { setSecret } from '../server/secretVault';
 import { clubSecretId, knownMcpNames, McpError } from '../server/staff/mcp';
-import { parseLauncherEntry } from '../server/staff/mcpLaunch';
+import { mcpLaunchCommand, parseLauncherEntry } from '../server/staff/mcpLaunch';
 import { createMcpLibrary } from '../server/staff/mcpLibrary';
 import { migrateClubToGlobal, migrateMcpsAtBoot, repairLauncherEntries, rollbackMcpMigration } from '../server/staff/mcpMigration';
-import { migrateToolsKeys, newToolsKey, saveTestedTools, toolsKey } from '../server/staff/mcpTools';
+import { migrateToolsKeys, newToolsKey, revertToolsKeys, saveTestedTools, toolsKey } from '../server/staff/mcpTools';
 import { removeTemp } from './support/tmp';
 
 // Migração do registro do Club (~/.myco/mcps.json) para a Global (~/.claude.json): tudo em pastas temporárias, nunca o ~/.claude.json real.
@@ -220,7 +221,7 @@ describe('rollbackMcpMigration: desfaz só o que a migração fez e o usuário n
     await fs.writeFile(e.claudeConfigFile, JSON.stringify(mid));
 
     const r = await rollbackMcpMigration({ recordFile: e.recordFile, claudeConfigFile: e.claudeConfigFile, backupDir: e.backupDir, projects, list, save });
-    expect(r).toEqual({ removed: ['fs', 'aberto', 'sse1'], kept: ['web'], fichas: 1 });
+    expect(r).toMatchObject({ removed: ['fs', 'aberto', 'sse1'], kept: ['web'], fichas: 1, fichasPuladas: [], toolsKeys: 0 });
     const after = await e.readClaude();
     expect(Object.keys(after.mcpServers)).toEqual(['usuario', 'web']);
     expect(after.mcpServers.web.timeout).toBe(9999);
@@ -238,9 +239,200 @@ describe('rollbackMcpMigration: desfaz só o que a migração fez e o usuário n
     await fs.writeFile(e.claudeConfigFile, JSON.stringify({ mcpServers: { usuario: SEED.mcpServers.usuario } }));
     const antes = await fs.readFile(e.claudeConfigFile, 'utf8');
     const r = await rollbackMcpMigration({ recordFile: e.recordFile, claudeConfigFile: e.claudeConfigFile, backupDir: e.backupDir, projects: [], list: async () => [], save: async () => {} });
-    expect(r).toEqual({ removed: [], kept: [], fichas: 0 });
+    expect(r).toEqual({ removed: [], kept: [], fichas: 0, fichasPuladas: [], toolsKeys: 0, backups: { claudeConfig: null, tools: null } });
     expect(await fs.readFile(e.claudeConfigFile, 'utf8')).toBe(antes);
   });
+});
+
+describe('rollbackMcpMigration: as chaves das ferramentas testadas, o backup e as fichas que faltam', () => {
+  const ficha = (id: string, mcps: string[] | null) => ({ id, name: id, mcps }) as unknown as StaffProfile;
+  const noStaff = { projects: [], known: async () => ({ globalNames: [], projectNames: [] }), list: async () => [], save: async () => {} };
+  const readKeys = async (file: string) => Object.keys((JSON.parse(await fs.readFile(file, 'utf8')) as { servers: Record<string, unknown> }).servers).sort();
+
+  it('devolve as chaves antigas pelo mapa do relatório, com backup do arquivo antes de gravar; a descartada na migração não volta', async () => {
+    const e = await setup();
+    await saveTestedTools(e.toolsFile, 'club||fs', 'fp1', [{ name: 'ler', readOnly: true }], new Date('2026-11-01T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'user||usuario', 'fp2', [], new Date('2026-11-02T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'user||dup', 'velha', [], new Date('2026-11-01T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'club||dup', 'nova', [], new Date('2026-11-05T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'project|p|ja-novo', 'fp4', [], new Date('2026-11-04T00:00:00Z'));
+    await migrateMcpsAtBoot({ ...e.o, toolsFile: e.toolsFile, ...noStaff });
+    expect(await readKeys(e.toolsFile)).toEqual(['global||dup', 'global||fs', 'global||usuario', 'project|p|ja-novo']);
+    const toolsMigrated = await fs.readFile(e.toolsFile, 'utf8');
+    const claudeMigrated = await fs.readFile(e.claudeConfigFile, 'utf8');
+
+    const r = await rollbackMcpMigration({ ...e.o, toolsFile: e.toolsFile, ...noStaff });
+    expect(r).toMatchObject({ removed: ['fs', 'web', 'aberto', 'sse1'], toolsKeys: 3 });
+    // Só a `dup` testada por último volta (a outra foi descartada); a que já era nova não muda.
+    expect(await readKeys(e.toolsFile)).toEqual(['club||dup', 'club||fs', 'project|p|ja-novo', 'user||usuario']);
+    const doc = JSON.parse(await fs.readFile(e.toolsFile, 'utf8')) as { servers: Record<string, { fingerprint: string; tools: unknown[] }> };
+    expect(doc.servers['club||dup']!.fingerprint).toBe('nova');
+    expect(doc.servers['club||fs']).toMatchObject({ fingerprint: 'fp1', tools: [{ name: 'ler', readOnly: true }] });
+
+    // Backup antes de gravar: o arquivo de ferramentas e o ~/.claude.json de antes do rollback, na pasta de backups.
+    expect(path.dirname(r!.backups.tools!)).toBe(e.backupDir);
+    expect(path.basename(r!.backups.tools!)).toMatch(/^mcp-tools\.json\.\d{4}-\d{2}-\d{2}T/);
+    expect(await fs.readFile(r!.backups.tools!, 'utf8')).toBe(toolsMigrated);
+    expect(await fs.readFile(r!.backups.claudeConfig!, 'utf8')).toBe(claudeMigrated);
+    await expect(fs.stat(e.recordFile)).rejects.toThrow();
+  });
+
+  it('relatório de antes do mapa (sem `toolsKeyMap`): as chaves ficam como estão e o arquivo nem é regravado', async () => {
+    const e = await setup();
+    await migrateClubToGlobal(e.o);
+    const rec = JSON.parse(await fs.readFile(e.recordFile, 'utf8')) as Record<string, unknown>;
+    delete rec.toolsKeyMap;
+    await fs.writeFile(e.recordFile, JSON.stringify(rec));
+    await saveTestedTools(e.toolsFile, 'global||fs', 'fp1', [], new Date('2026-11-01T00:00:00Z'));
+    const antes = await fs.readFile(e.toolsFile, 'utf8');
+    const r = await rollbackMcpMigration({ ...e.o, toolsFile: e.toolsFile, ...noStaff });
+    expect(r).toMatchObject({ toolsKeys: 0, backups: { tools: null } });
+    expect(await fs.readFile(e.toolsFile, 'utf8')).toBe(antes);
+    await expect(fs.readdir(e.backupDir).then((l) => l.filter((f) => f.startsWith('mcp-tools')))).resolves.toEqual([]);
+  });
+
+  it('revertToolsKeys: chave nova que sumiu, antiga que já voltou, arquivo ausente ou estragado: nada é gravado', async () => {
+    const e = await setup();
+    await saveTestedTools(e.toolsFile, 'global||a', 'fa', [], new Date('2026-11-01T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'club||b', 'fb', [], new Date('2026-11-02T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'global||b', 'fb2', [], new Date('2026-11-03T00:00:00Z'));
+    const antes = await fs.readFile(e.toolsFile, 'utf8');
+    // `c` não existe mais no arquivo; `b` já foi testada de novo no modelo antigo (`club||b` existe): as duas ficam.
+    expect(await revertToolsKeys(e.toolsFile, { 'club||c': 'global||c', 'club||b': 'global||b' }, e.backupDir)).toEqual({ reverted: 0, backup: null });
+    expect(await fs.readFile(e.toolsFile, 'utf8')).toBe(antes);
+    expect(await revertToolsKeys(path.join(e.dir, 'nao-existe.json'), { 'club||a': 'global||a' }, e.backupDir)).toEqual({ reverted: 0, backup: null });
+    const quebrado = path.join(e.dir, 'quebrado.json');
+    await fs.writeFile(quebrado, '{ não é json');
+    expect(await revertToolsKeys(quebrado, { 'club||a': 'global||a' }, e.backupDir)).toEqual({ reverted: 0, backup: null });
+    expect(await fs.readFile(quebrado, 'utf8')).toBe('{ não é json');
+    await expect(fs.stat(e.backupDir)).rejects.toThrow();
+  });
+
+  it('ficha que não deu para devolver (projeto fora do quadro): o relatório fica e uma nova rodada refaz só o que falta', async () => {
+    const e = await setup();
+    const store = new Map<string, StaffProfile>([['ana', ficha('ana', ['fs'])]]);
+    const projects = [{ id: 'proj', path: '/x/proj' }];
+    const list = async () => [...store.values()];
+    const save = async (_p: string, p: StaffProfile) => void store.set(p.id, p);
+    await migrateMcpsAtBoot({ ...e.o, toolsFile: e.toolsFile, projects, known: async () => ({ globalNames: ['fs'], projectNames: [] }), list, save });
+    expect(store.get('ana')!.mcps).toEqual(['global:fs']);
+
+    const r1 = await rollbackMcpMigration({ ...e.o, toolsFile: e.toolsFile, projects: [], list, save });
+    expect(r1).toMatchObject({ removed: ['fs', 'web', 'aberto', 'sse1'], fichas: 0, fichasPuladas: ['proj/ana'] });
+    expect(store.get('ana')!.mcps).toEqual(['global:fs']);
+    await expect(fs.stat(e.recordFile)).resolves.toBeTruthy();
+
+    const r2 = await rollbackMcpMigration({ ...e.o, toolsFile: e.toolsFile, projects, list, save });
+    expect(r2).toMatchObject({ removed: [], kept: [], fichas: 1, fichasPuladas: [] });
+    expect(store.get('ana')!.mcps).toEqual(['fs']);
+    await expect(fs.stat(e.recordFile)).rejects.toThrow();
+  });
+});
+
+describe('conflitos da migração na API de MCPs (list da biblioteca)', () => {
+  const library = (e: Awaited<ReturnType<typeof setup>>) =>
+    createMcpLibrary({ claudeConfigFile: e.claudeConfigFile, clubFile: e.clubFile, backupDir: e.backupDir, resolveProject: async () => null, vault: e.vault, recordFile: e.recordFile });
+
+  it('a entrada da Global que bloqueou o nome leva `pending`; o que não tem entrada vai à parte; o que migrou não tem nada', async () => {
+    const e = await setup({
+      registry: { servers: { ...REGISTRO.servers, 'com espaco': { type: 'stdio', command: 'x' } } },
+      claude: { mcpServers: { fs: { command: 'do-usuario', args: ['--x'] } } },
+    });
+    await migrateClubToGlobal(e.o);
+    const { servers, pending } = await library(e).list(null);
+    const bloqueada = servers.find((s) => s.name === 'fs')!;
+    expect(bloqueada.managed).toBeUndefined();
+    expect(bloqueada.command).toBe('do-usuario');
+    expect(bloqueada.pending).toContain('já existe na Global');
+    expect(bloqueada.pending).toContain('mcps.json');
+    for (const s of servers.filter((x) => x.name !== 'fs')) expect(s.pending, s.name).toBeUndefined();
+    expect(pending).toEqual([{ name: 'com espaco', reason: 'nome inválido para a Global' }]);
+  });
+
+  it('sem relatório, ou sem conflito: nem o campo de cada item nem o da lista aparecem', async () => {
+    const e = await setup();
+    expect(await library(e).list(null)).not.toHaveProperty('pending');
+    await migrateClubToGlobal(e.o);
+    const r = await library(e).list(null);
+    expect(r).not.toHaveProperty('pending');
+    expect(r.servers.some((s) => 'pending' in s)).toBe(false);
+  });
+
+  it('conflito resolvido some: definição do Club apagada do registro, ou o nome salvo de novo pela tela (vira entrada do Club)', async () => {
+    const e = await setup({ claude: { mcpServers: { fs: { command: 'do-usuario' } } } });
+    await migrateClubToGlobal(e.o);
+    const lib = library(e);
+    expect((await lib.list(null)).servers.find((s) => s.name === 'fs')!.pending).toBeDefined();
+
+    // O usuário salva `fs` pela tela: a entrada vira a do Club (gerenciada), com a definição do registro. Não há mais pendência.
+    await lib.save({ scope: 'global', originalName: 'fs', name: 'fs', type: 'stdio', command: 'node', args: ['srv.js'], env: { FS_TOKEN: 'valor-9876' } }, true);
+    const depois = await lib.list(null);
+    expect(depois.servers.find((s) => s.name === 'fs')).toMatchObject({ managed: true });
+    expect(depois.servers.find((s) => s.name === 'fs')!.pending).toBeUndefined();
+    expect(depois).not.toHaveProperty('pending');
+  });
+
+  it('o nome da Global foi liberado depois da migração: a pendência vai à parte, com o motivo atual; sem a definição no registro, some', async () => {
+    const e = await setup({ claude: { mcpServers: { fs: { command: 'do-usuario' } } } });
+    await migrateClubToGlobal(e.o);
+    const lib = library(e);
+    const cur = JSON.parse(await fs.readFile(e.claudeConfigFile, 'utf8')) as { mcpServers: Record<string, unknown> };
+    delete cur.mcpServers.fs;
+    await fs.writeFile(e.claudeConfigFile, JSON.stringify(cur));
+    const livre = await lib.list(null);
+    expect(livre.servers.some((s) => s.name === 'fs')).toBe(false);
+    expect(livre.pending).toHaveLength(1);
+    expect(livre.pending![0]).toMatchObject({ name: 'fs' });
+    expect(livre.pending![0]!.reason).toContain('liberado');
+
+    const reg = JSON.parse(await fs.readFile(e.clubFile, 'utf8')) as { servers: Record<string, unknown> };
+    delete reg.servers.fs;
+    await fs.writeFile(e.clubFile, JSON.stringify(reg));
+    expect(await lib.list(null)).not.toHaveProperty('pending');
+  });
+
+  it('relatório estragado ou registro ilegível: a lista segue sem o campo (não derruba a tela)', async () => {
+    const e = await setup({ claude: { mcpServers: { fs: { command: 'do-usuario' } } } });
+    await migrateClubToGlobal(e.o);
+    await fs.writeFile(e.recordFile, '{ quebrado');
+    expect(await library(e).list(null)).not.toHaveProperty('pending');
+    await fs.writeFile(e.recordFile, JSON.stringify({ conflicts: ['fs (já existe na Global: ficou como estava)', 5, 'sem-parenteses'] }));
+    await fs.writeFile(e.clubFile, '{ não é json');
+    const r = await library(e).list(null);
+    expect(r).not.toHaveProperty('pending');
+    expect(r.servers.find((s) => s.name === 'fs')!.pending).toBeUndefined();
+  });
+});
+
+describe('a entrada que a migração grava continua subindo pelo lançador (que só aceita os caminhos padrão)', () => {
+  it('stdio: o comando e os argumentos do ~/.claude.json sobem o MCP com o segredo do cofre; http: o headersHelper, rodado por um shell, imprime os cabeçalhos', async () => {
+    const e = await setup({ registry: null });
+    const out = path.join(e.dir, 'saida.txt');
+    const script = path.join(e.dir, 'mcp-falso.cjs');
+    await fs.writeFile(script, `require('node:fs').writeFileSync(${JSON.stringify(out)}, process.env.FS_TOKEN ?? 'SEM');\nprocess.exit(7);\n`);
+    await fs.writeFile(
+      e.clubFile,
+      JSON.stringify({
+        servers: {
+          fs: { type: 'stdio', command: process.execPath, args: [script], env: ['FS_TOKEN'] },
+          web: { type: 'http', url: 'https://mcp.exemplo.com/mcp', headers: ['Authorization'] },
+        },
+      }),
+    );
+    // O lançador de verdade (o .ts pelo tsx), como no modo de desenvolvimento; o MYCO_HOME do processo é a pasta da biblioteca e do cofre.
+    const r = await migrateClubToGlobal({ ...e.o, launcher: mcpLaunchCommand(false) });
+    expect(r!.moved).toEqual(['fs', 'web']);
+    const env = { ...process.env, MYCO_HOME: path.dirname(e.clubFile) };
+    const claude = await e.readClaude();
+
+    const stdio = spawnSync(claude.mcpServers.fs.command, claude.mcpServers.fs.args, { encoding: 'utf8', timeout: 60_000, windowsHide: true, env });
+    expect(stdio.status).toBe(7);
+    expect(await fs.readFile(out, 'utf8')).toBe(VALOR);
+    expect(`${stdio.stdout}${stdio.stderr}`).not.toContain(VALOR);
+
+    const helper = execSync(claude.mcpServers.web.headersHelper, { encoding: 'utf8', timeout: 60_000, windowsHide: true, env });
+    expect(JSON.parse(helper)).toEqual({ Authorization: HDR });
+  }, 120_000);
 });
 
 describe('repairLauncherEntries: só a entrada do Club cujo lançador sumiu é refeita', () => {
@@ -309,6 +501,9 @@ describe('migrateMcpsAtBoot: a ordem do boot e o que fica no relatório', () => 
     expect(store.get('cai')!.mcps).toBeNull();
     const rec = JSON.parse(await fs.readFile(e.recordFile, 'utf8'));
     expect(rec.fichas).toEqual([{ projectId: 'proj', staffId: 'ana', before: ['fs', 'doc', 'usuario'] }]);
+    // O mapa antiga → nova das ferramentas testadas fica no relatório (rollback).
+    expect(rec.toolsKeyMap).toEqual({ 'club||fs': 'global||fs', 'user||usuario': 'global||usuario', [`local|${proj.toLowerCase()}|x`]: `project|${proj.toLowerCase()}|x` });
+    expect(r.toolsKeyMap).toEqual(rec.toolsKeyMap);
 
     const keys = Object.keys(JSON.parse(await fs.readFile(e.toolsFile, 'utf8')).servers).sort();
     expect(keys).toEqual([`project|${proj.toLowerCase()}|x`, 'global||fs', 'global||usuario', 'project|p|ja-novo'].sort());
@@ -360,14 +555,24 @@ describe('chaves das ferramentas testadas: do modelo antigo para Global/Projeto'
     const e = await setup();
     await saveTestedTools(e.toolsFile, 'club||x', 'velho', [], new Date('2026-11-01T00:00:00Z'));
     await saveTestedTools(e.toolsFile, 'user||x', 'novo', [], new Date('2026-11-05T00:00:00Z'));
-    expect(await migrateToolsKeys(e.toolsFile)).toBe(2);
+    // O mapa antiga → nova só tem a entrada que ficou (`user||x`, a testada por último): a outra foi descartada.
+    expect(await migrateToolsKeys(e.toolsFile)).toEqual({ changed: 2, keys: { 'user||x': 'global||x' } });
     const doc = JSON.parse(await fs.readFile(e.toolsFile, 'utf8')) as { servers: Record<string, { fingerprint: string }> };
     expect(Object.keys(doc.servers)).toEqual(['global||x']);
     expect(doc.servers['global||x']!.fingerprint).toBe('novo');
     const bytes = await fs.readFile(e.toolsFile, 'utf8');
-    expect(await migrateToolsKeys(e.toolsFile)).toBe(0);
+    expect(await migrateToolsKeys(e.toolsFile)).toEqual({ changed: 0, keys: {} });
     expect(await fs.readFile(e.toolsFile, 'utf8')).toBe(bytes);
-    expect(await migrateToolsKeys(path.join(e.dir, 'nao-existe.json'))).toBe(0);
+    expect(await migrateToolsKeys(path.join(e.dir, 'nao-existe.json'))).toEqual({ changed: 0, keys: {} });
+  });
+
+  it('o mapa não leva a chave que já era nova (nem a que perdeu para uma nova do mesmo nome)', async () => {
+    const e = await setup();
+    await saveTestedTools(e.toolsFile, 'club||a', 'f1', [], new Date('2026-11-01T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'global||a', 'f2', [], new Date('2026-11-09T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'local|c:\\p|b', 'f3', [], new Date('2026-11-02T00:00:00Z'));
+    await saveTestedTools(e.toolsFile, 'project|c:\\p|ja', 'f4', [], new Date('2026-11-03T00:00:00Z'));
+    expect(await migrateToolsKeys(e.toolsFile)).toEqual({ changed: 2, keys: { 'local|c:\\p|b': 'project|c:\\p|b' } });
   });
 });
 

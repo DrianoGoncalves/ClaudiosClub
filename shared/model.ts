@@ -2206,8 +2206,27 @@ export interface McpServerView {
   args?: string[];
   /** Algum argumento tinha segredo: vem trocado pelo marcador `••••`. */
   argsMasked?: boolean;
+  /**
+   * Global: um MCP do Club de mesmo nome ficou no registro (`~/.myco/mcps.json`) e não é carregado, porque esta entrada já existia na Global e a
+   * migração não sobrescreve. O texto traz o motivo, do relatório `mcps-migracao.json`. Some quando o conflito se resolve (nome trocado, ou
+   * definição do Club apagada).
+   */
+  pending?: string;
   env: Array<{ key: string; set: boolean }>;
   headers: Array<{ key: string; set: boolean }>;
+}
+
+/** Um MCP do Club que a migração deixou no registro, sem nenhuma entrada de mesmo nome na Global para levar o aviso (nome inválido, entrada que não deu para montar). */
+export interface McpMigrationPending {
+  name: string;
+  /** O motivo, do relatório da migração (pt-br). */
+  reason: string;
+}
+
+/** `GET /api/mcp-servers`: os MCPs dos escopos Global e Projeto, e os do Club que ficaram para trás na migração e não têm linha (só vem se houver). */
+export interface McpServerList {
+  servers: McpServerView[];
+  pending?: McpMigrationPending[];
 }
 
 /** `ssh` = .vps/config.json (chave); `ftps` = FTP com TLS explícito; `ftp` = FTP puro, sem criptografia. */

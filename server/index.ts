@@ -57,7 +57,7 @@ import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
 import { StaffSendLimitError, StaffSendRate, sendTargetKey } from './chat/sendRate';
 import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService, StaffTeamExistsError } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
-import { CLUB_MCP_FILE, knownMcpNames, McpError, mcpJsonWarnings } from './staff/mcp';
+import { CLUB_MCP_FILE, knownMcpNames, MCP_MIGRATION_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
 import { migrateMcpsAtBoot as runMcpMigration } from './staff/mcpMigration';
 import { MCP_TOOLS_FILE } from './staff/mcpTools';
@@ -1047,6 +1047,7 @@ const ATTACHMENT_UPLOAD = new RegExp(`^/api/projects/${ID}/attachments$`);
 const mcpLibrary = createMcpLibrary({
   claudeConfigFile: defaultLocations().configFile,
   clubFile: CLUB_MCP_FILE,
+  recordFile: MCP_MIGRATION_FILE,
   backupDir: path.join(MYCO_HOME, 'backups'),
   resolveProject: projectPathOf,
 });
@@ -3418,7 +3419,7 @@ async function migrateMcpsAtBoot(): Promise<void> {
     clubFile: CLUB_MCP_FILE,
     claudeConfigFile: defaultLocations().configFile,
     backupDir: path.join(MYCO_HOME, 'backups'),
-    recordFile: path.join(MYCO_HOME, 'mcps-migracao.json'),
+    recordFile: MCP_MIGRATION_FILE,
     toolsFile: MCP_TOOLS_FILE,
     projects,
     known: (p) => knownMcpNames(p.path, defaultLocations().configFile),

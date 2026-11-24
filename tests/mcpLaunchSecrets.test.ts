@@ -7,10 +7,20 @@ import type { StaffProfile } from '../shared/model';
 import { defaultLocations } from '../server/adapters/claude/paths';
 import { codexDenyPaths } from '../server/chat/codexArgs';
 import { MYCO_HOME } from '../server/config';
-import { deleteSecret, setSecret } from '../server/secretVault';
+import { DEFAULT_SECRETS_DIR, deleteSecret, setSecret } from '../server/secretVault';
 import { secretDenyRules } from '../server/staff/ficha';
-import { buildMcpConfig, clubSecretId } from '../server/staff/mcp';
-import { launchSpec, McpLaunchError, mcpLaunchCommand, parseLaunchArgs } from '../server/staff/mcpLaunch';
+import { buildMcpConfig, CLUB_MCP_FILE, clubSecretId } from '../server/staff/mcp';
+import {
+  defaultLaunchPaths,
+  launchSpec,
+  McpLaunchError,
+  mcpLaunchCommand,
+  parseLaunchArgs,
+  refuseLaunchPaths,
+  runMcpLaunchCli,
+  type LaunchArgs,
+  type LaunchPaths,
+} from '../server/staff/mcpLaunch';
 import { removeTemp } from './support/tmp';
 
 // Os segredos da biblioteca do Club: nunca no mcp.json (a sessão lê), só no cofre, e o lançador os tira de lá ao subir.
@@ -164,6 +174,12 @@ describe('launchSpec: o que o lançador sobe, do cofre e da biblioteca', () => {
   });
 });
 
+/**
+ * O ambiente do lançador como processo: o MYCO_HOME é a pasta do teste, e a biblioteca (mcps.json) e o cofre (secrets) de `setup` são os padrão
+ * dele. O lançador não aceita `--club` nem `--vault` de outro lugar (ver refuseLaunchPaths).
+ */
+const HOME_OF = (env: { dir: string }): NodeJS.ProcessEnv => ({ ...process.env, MYCO_HOME: env.dir });
+
 describe('o lançador de verdade (processo)', () => {
   /** Um script que grava o valor da env num arquivo e sai com 7. */
   async function fakeServer(dir: string) {
@@ -179,7 +195,7 @@ describe('o lançador de verdade (processo)', () => {
     await fs.writeFile(env.club, JSON.stringify({ servers: { falso: { type: 'stdio', command: process.execPath, args: [script], env: ['FS_TOKEN'] } } }));
     await setSecret(clubSecretId('falso', 'env', 'FS_TOKEN'), VALOR, env.vault);
     const L = mcpLaunchCommand(false);
-    const r = spawnSync(L.command, [...L.args, '--server', 'falso', '--club', env.club, '--vault', env.vault.dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const r = spawnSync(L.command, [...L.args, '--server', 'falso', '--club', env.club, '--vault', env.vault.dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: HOME_OF(env) });
     expect(r.status).toBe(7);
     expect(await fs.readFile(out, 'utf8')).toBe(VALOR);
     expect(`${r.stdout}${r.stderr}`).not.toContain(VALOR);
@@ -190,7 +206,7 @@ describe('o lançador de verdade (processo)', () => {
     const { out, script } = await fakeServer(env.dir);
     await fs.writeFile(env.club, JSON.stringify({ servers: { falso: { type: 'stdio', command: process.execPath, args: [script], env: ['FS_TOKEN'] } } }));
     const L = mcpLaunchCommand(false);
-    const r = spawnSync(L.command, [...L.args, '--server', 'falso', '--club', env.club, '--vault', env.vault.dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const r = spawnSync(L.command, [...L.args, '--server', 'falso', '--club', env.club, '--vault', env.vault.dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: HOME_OF(env) });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('[myco-mcp]');
     expect(r.stderr).toContain('FS_TOKEN');
@@ -201,14 +217,14 @@ describe('o lançador de verdade (processo)', () => {
     const env = await setup();
     await fs.writeFile(env.club, JSON.stringify({ servers: { falso: { type: 'stdio', command: 'comando-que-nao-existe-zz9' } } }));
     const L = mcpLaunchCommand(false);
-    const r = spawnSync(L.command, [...L.args, '--server', 'falso', '--club', env.club, '--vault', env.vault.dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const r = spawnSync(L.command, [...L.args, '--server', 'falso', '--club', env.club, '--vault', env.vault.dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: HOME_OF(env) });
     expect(r.status).not.toBe(0);
   }, 60_000);
 
   it('--headers imprime só o JSON dos cabeçalhos do cofre', async () => {
     const env = await setup();
     const L = mcpLaunchCommand(false);
-    const r = spawnSync(L.command, [...L.args, '--headers', '--server', 'web', '--club', env.club, '--vault', env.vault.dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const r = spawnSync(L.command, [...L.args, '--headers', '--server', 'web', '--club', env.club, '--vault', env.vault.dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: HOME_OF(env) });
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({ Authorization: HDR });
   }, 60_000);
@@ -217,17 +233,150 @@ describe('o lançador de verdade (processo)', () => {
     const env = await setup();
     const L = mcpLaunchCommand(false);
     const base = [...L.args, '--club', env.club, '--vault', env.vault.dir];
-    const stdio = spawnSync(L.command, [...base, '--headers', '--server', 'fs'], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const stdio = spawnSync(L.command, [...base, '--headers', '--server', 'fs'], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: HOME_OF(env) });
     expect(stdio.status).toBe(1);
     expect(stdio.stdout).toBe('');
     expect(stdio.stderr).toContain('não é http');
     await deleteSecret(clubSecretId('web', 'header', 'Authorization'), env.vault);
-    const miss = spawnSync(L.command, [...base, '--headers', '--server', 'web'], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const miss = spawnSync(L.command, [...base, '--headers', '--server', 'web'], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: HOME_OF(env) });
     expect(miss.status).toBe(1);
     expect(miss.stdout).toBe('');
     expect(miss.stderr).toContain('Authorization');
     expect(`${miss.stdout}${miss.stderr}`).not.toContain(HDR);
   }, 60_000);
+});
+
+describe('o lançador não confia na linha de comando para os caminhos (--club, --vault, --snapshot)', () => {
+  /**
+   * A biblioteca do Club (stdio com um segredo no cofre padrão) e, num "repositório", outra biblioteca com o mesmo servidor e o mesmo nome de chave:
+   * quem chama o lançador com o `--club` do repositório quer o segredo real no env do comando que o repositório define. O MCP falso grava o valor
+   * que recebeu em `out` e sai com 7: sem `out`, o comando não subiu.
+   */
+  async function arm() {
+    const env = await setup();
+    const out = path.join(env.dir, 'saida.txt');
+    const script = path.join(env.dir, 'mcp-falso.cjs');
+    await fs.writeFile(script, `require('node:fs').writeFileSync(${JSON.stringify(out)}, process.env.FS_TOKEN ?? 'SEM');\nprocess.exit(7);\n`);
+    const def = { type: 'stdio', command: process.execPath, args: [script], env: ['FS_TOKEN'] };
+    await fs.writeFile(env.club, JSON.stringify({ servers: { falso: def } }));
+    await setSecret(clubSecretId('falso', 'env', 'FS_TOKEN'), VALOR, env.vault);
+    const repo = path.join(env.dir, 'repo');
+    await fs.mkdir(repo, { recursive: true });
+    const evilClub = path.join(repo, 'mcps.json');
+    await fs.writeFile(evilClub, JSON.stringify({ servers: { falso: def } }));
+    const paths: LaunchPaths = { club: env.club, vault: env.vault.dir, runDir: path.join(env.dir, 'run') };
+    /** Um arquivo de lançamento do Codex em `file` (cria a pasta) que sobe o mesmo MCP falso, com o valor do próprio arquivo. */
+    const snapshot = async (file: string) => {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, JSON.stringify({ servers: { falso: { type: 'stdio', command: process.execPath, args: [script], env: { FS_TOKEN: 'do-snapshot' } } } }));
+      return file;
+    };
+    return { ...env, out, repo, evilClub, paths, snapshot };
+  }
+
+  /** `runMcpLaunchCli` com o stderr capturado. */
+  async function cli(argv: string[], paths: LaunchPaths) {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await runMcpLaunchCli(argv, paths);
+      return { code, err: write.mock.calls.map((c) => String(c[0])).join('') };
+    } finally {
+      write.mockRestore();
+    }
+  }
+
+  it('--club de outro arquivo: recusado sem subir o comando, sem o valor na mensagem; o padrão sobe com o segredo do cofre', async () => {
+    const a = await arm();
+    const bad = await cli(['--server', 'falso', '--club', a.evilClub, '--vault', a.vault.dir], a.paths);
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain('--club');
+    expect(bad.err).toContain('recusado');
+    expect(bad.err).not.toContain(a.evilClub);
+    expect(bad.err).not.toContain(VALOR);
+    await expect(fs.access(a.out)).rejects.toThrow();
+
+    // O mesmo comando com o `--club` padrão sobe (a fixture está certa: a recusa acima é pelo caminho).
+    const ok = await cli(['--server', 'falso', '--club', a.club, '--vault', a.vault.dir], a.paths);
+    expect(ok.code).toBe(7);
+    expect(await fs.readFile(a.out, 'utf8')).toBe(VALOR);
+  });
+
+  it('--vault de outra pasta: recusado sem subir o comando', async () => {
+    const a = await arm();
+    const other = path.join(a.dir, 'cofre-de-fora');
+    const bad = await cli(['--server', 'falso', '--club', a.club, '--vault', other], a.paths);
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain('--vault');
+    expect(bad.err).toContain('recusado');
+    expect(bad.err).not.toContain(other);
+    await expect(fs.access(a.out)).rejects.toThrow();
+    // Argumento vazio também não é o padrão (path.resolve('') seria a pasta de onde o processo foi chamado).
+    expect((await cli(['--server', 'falso', '--club', '', '--vault', a.vault.dir], a.paths)).code).toBe(1);
+    await expect(fs.access(a.out)).rejects.toThrow();
+  });
+
+  it('--snapshot fora de <MYCO_HOME>/run/<sessão>/: recusado sem subir o comando; dentro, sobe', async () => {
+    const a = await arm();
+    const run = a.paths.runDir;
+    const outside = [
+      await a.snapshot(path.join(a.repo, 'codex-mcp.json')),
+      await a.snapshot(path.join(run, 'codex-mcp.json')),
+      await a.snapshot(path.join(run, 'sessao-1', 'fundo', 'codex-mcp.json')),
+      // Sem path.join, que tiraria o `..`: o lançador é quem normaliza.
+      await a.snapshot([run, 'sessao-1', '..', '..', 'repo', 'snap.json'].join(path.sep)),
+      await a.snapshot(path.join(`${run}-outro`, 'sessao-1', 'codex-mcp.json')),
+    ];
+    for (const file of outside) {
+      const bad = await cli(['--snapshot', file, '--server', 'falso'], a.paths);
+      expect(bad.code, file).toBe(1);
+      expect(bad.err).toContain('--snapshot');
+      expect(bad.err).toContain('recusado');
+      expect(bad.err).not.toContain(file);
+    }
+    await expect(fs.access(a.out)).rejects.toThrow();
+
+    const inside = await a.snapshot(path.join(run, 'sessao-1', 'codex-mcp.json'));
+    expect((await cli(['--snapshot', inside, '--server', 'falso'], a.paths)).code).toBe(7);
+    expect(await fs.readFile(a.out, 'utf8')).toBe('do-snapshot');
+  });
+
+  it('refuseLaunchPaths: o padrão escrito de outro jeito vale (`.`, sem --club/--vault); o que só parece com ele não', async () => {
+    const p: LaunchPaths = { club: path.join(root, 'h', 'mcps.json'), vault: path.join(root, 'h', 'secrets'), runDir: path.join(root, 'h', 'run') };
+    const args = (over: Partial<LaunchArgs>): LaunchArgs => ({ headers: false, server: 'x', club: p.club, vault: p.vault, ...over });
+    expect(refuseLaunchPaths(args({}), p)).toBeNull();
+    expect(refuseLaunchPaths(args({ club: path.join(root, 'h', '.', 'mcps.json'), vault: path.join(root, 'h', 'x', '..', 'secrets') }), p)).toBeNull();
+    expect(refuseLaunchPaths(args({ snapshot: path.join(p.runDir, 's', 'codex-mcp.json') }), p)).toBeNull();
+    if (process.platform === 'win32') expect(refuseLaunchPaths(args({ club: p.club.toUpperCase() }), p)).toBeNull();
+    expect(refuseLaunchPaths(args({ club: `${p.club}.outro` }), p)).toContain('--club');
+    expect(refuseLaunchPaths(args({ club: path.join(root, 'h', 'mcps.json', '..', '..', 'mcps.json') }), p)).toContain('--club');
+    expect(refuseLaunchPaths(args({ vault: `${p.vault}-2` }), p)).toContain('--vault');
+    // O snapshot é uma pasta, o arquivo da pasta de lançamento (sem sessão) ou a própria pasta: nenhum vale.
+    for (const snapshot of [p.runDir, path.join(p.runDir, 's'), path.join(p.runDir, 'a.json'), path.join(p.runDir, '..', 'codex-mcp.json'), '']) {
+      expect(refuseLaunchPaths(args({ snapshot }), p), snapshot).toContain('--snapshot');
+    }
+  });
+
+  it('o padrão do lançador é o do Club: biblioteca e cofre do MYCO_HOME, e a pasta run dele', () => {
+    expect(defaultLaunchPaths()).toEqual({ club: CLUB_MCP_FILE, vault: DEFAULT_SECRETS_DIR, runDir: path.join(MYCO_HOME, 'run') });
+  });
+
+  it('o lançador de verdade (processo): --club e --snapshot de fora saem com 1, sem subir o comando nem trazer o valor', async () => {
+    const a = await arm();
+    const L = mcpLaunchCommand(false);
+    const sp = (argv: string[]) => spawnSync(L.command, [...L.args, ...argv], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: HOME_OF(a) });
+    const club = sp(['--server', 'falso', '--club', a.evilClub, '--vault', a.vault.dir]);
+    const snap = sp(['--snapshot', await a.snapshot(path.join(a.repo, 'codex-mcp.json')), '--server', 'falso']);
+    for (const r of [club, snap]) {
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('recusado');
+      expect(`${r.stdout}${r.stderr}`).not.toContain(a.repo);
+      expect(`${r.stdout}${r.stderr}`).not.toContain(VALOR);
+    }
+    await expect(fs.access(a.out)).rejects.toThrow();
+    // O padrão, pelo mesmo processo, sobe.
+    expect(sp(['--server', 'falso', '--club', a.club, '--vault', a.vault.dir]).status).toBe(7);
+    expect(await fs.readFile(a.out, 'utf8')).toBe(VALOR);
+  }, 120_000);
 });
 
 describe('negações de leitura da sessão (secretDenyRules)', () => {

@@ -31,6 +31,12 @@ import { writeAtomic } from './store';
 /** O registro das definições dos MCPs do Claudio’s Club (comando, URL, nomes de chave; sem valor): fica fora de qualquer projeto, como as skills. */
 export const CLUB_MCP_FILE = path.join(MYCO_HOME, 'mcps.json');
 
+/** O relatório da migração do registro para a Global (ver mcpMigration.ts): o que ficou para trás está em `conflicts`. */
+export const MCP_MIGRATION_FILE = path.join(MYCO_HOME, 'mcps-migracao.json');
+
+/** O motivo do conflito de nome com uma entrada que já estava na Global (o texto do relatório; ver mcpMigration.ts e readMigrationConflicts). */
+export const MIGRATION_NAME_EXISTS = 'já existe na Global: ficou como estava';
+
 export class McpError extends Error {}
 
 const Servers = z.record(z.string(), z.object({ type: z.string().optional(), command: z.string().optional(), url: z.string().optional() }).passthrough());
@@ -90,6 +96,24 @@ export async function readClub(file: string): Promise<{ doc: Record<string, unkn
   const parsed = ClubJson.safeParse(tryJson(raw.replace(/^﻿/, '')));
   if (!parsed.success) throw new McpError('o arquivo da biblioteca (mcps.json) está com JSON inválido: corrija antes, não mexi nele');
   return { doc: parsed.data as Record<string, unknown>, servers: parsed.data.servers ?? {} };
+}
+
+/**
+ * Os MCPs do Club que a migração deixou no registro (`~/.myco/mcps.json`) e que nenhum caminho carrega: o relatório os traz como texto
+ * `nome (motivo)` em `conflicts`. Vale só o que ainda é verdade: o nome continua no registro (apagado de lá, não há mais o que carregar).
+ * Relatório que não existe ou não entende = nenhum. Nome → motivo.
+ */
+export async function readMigrationConflicts(recordFile: string, clubFile: string): Promise<Map<string, string>> {
+  const rec = await readJson(recordFile);
+  const list = rec && typeof rec === 'object' && !Array.isArray(rec) ? (rec as { conflicts?: unknown }).conflicts : null;
+  const out = new Map<string, string>();
+  if (!Array.isArray(list) || !list.length) return out;
+  const club = await readClub(clubFile).catch(() => null);
+  for (const text of list) {
+    const m = typeof text === 'string' ? /^(.+?) \((.+)\)$/.exec(text) : null;
+    if (m && club && Object.prototype.hasOwnProperty.call(club.servers, m[1]!)) out.set(m[1]!, m[2]!);
+  }
+  return out;
 }
 
 /**
