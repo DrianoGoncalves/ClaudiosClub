@@ -26,7 +26,7 @@ import type { Reservation } from './resourceGate';
 import { VERSION_PAUSE_DEFAULT_MINUTES, VERSION_PAUSE_MAX_MINUTES, clockOf, type PauseBy, type ProjectPauses } from './projectPause';
 import { CapabilityError } from './engineCapability';
 import { StateBusyError } from './atomicWrite';
-import { backupTasks, BoardCorruptError, boardReadOk, knownCorruptVersion, recoverTasks } from './boardGuard';
+import { backupTasks, BoardCorruptError, type BoardFile, boardFilePath, boardReadOk, hasBackups, isBoardCorrupt, knownCorruptVersion, recoverTasks } from './boardGuard';
 import { writeAtomic } from './staff/store';
 import { abortStaleMerge, checkpoint, CodeError, codeTouchedSince, commitsToMerge, detectTest, formatLimit, integratedSha, locateCode, mergeCode, readCode, runTests, scopedTestCommand, type CodePlace } from './taskCode';
 import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
@@ -2323,7 +2323,7 @@ export class TaskService {
       // Antes de tudo: se o limite agendou o "continue", a pendência já existe quando for cancelada.
       await this.deps.settleLimit?.(ev.sessionId);
       const dir = await this.deps.projectPath(projectId);
-      const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
+      const task = dir ? (await readActiveTasks(dir)).find((t) => t.id === taskId) : undefined;
       const profile = await this.deps.readProfile(projectId, staffId);
       if (!dir || !task || !profile || task.sessionId !== ev.sessionId || !profile.fallback) return;
       // Só a tarefa em andamento troca: parada, em revisão ou pronta, a conversa não é de quem decide trocar de motor.
@@ -3849,7 +3849,7 @@ export class TaskService {
       .join('\n');
     // Arquivo que outra tarefa aberta (não pronta nem cancelada) também mexeu: o diff dele traz hunks dela e a revisão não tem como separá-los.
     // Além das abertas agora, as que o Club registrou na hora da edição (`Task.fileOverlaps`) e já fecharam: o que elas mudaram segue no arquivo, sem commit ou com o dela.
-    const others = (await readTasks(dir)).filter((o) => o.id !== task.id && !isClosed(o) && o.changedFiles?.length);
+    const others = (await readActiveTasks(dir)).filter((o) => o.id !== task.id && !isClosed(o) && o.changedFiles?.length);
     const shared = shown
       .map((f) => {
         const live = others.filter((o) => o.changedFiles!.some((c) => pathKey(c) === pathKey(f))).map((o) => o.id);
@@ -4545,7 +4545,7 @@ export class TaskService {
   private async wakeSlotWaiters(projectId: string): Promise<void> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return;
-    for (const s of new Set((await readTasks(dir)).filter((t) => t.resourceWait?.holder && t.staffId && !isClosed(t)).map((t) => t.staffId!))) void this.kick(projectId, s);
+    for (const s of new Set((await readActiveTasks(dir)).filter((t) => t.resourceWait?.holder && t.staffId && !isClosed(t)).map((t) => t.staffId!))) void this.kick(projectId, s);
   }
 
   /** Os commits automáticos que ainda estão rodando; resolve quando não há mais nenhum (os testes e o desligamento esperam por isto). */
@@ -4804,7 +4804,7 @@ export class TaskService {
     if (where?.role === 'work' && !where.auto) return this.noteTaskEdit(where.projectId, where.taskId, ev.sessionId, dir, files);
     // A conversa já é de uma tarefa (revisão, deploy ou dúvida), ou a troca de motor a deixou para trás: o card é o dela.
     if (where ? !(where.role === 'work' && where.auto) : await this.isTaskConversation(ev.sessionId)) return;
-    const board = await readTasks(dir);
+    const board = await readActiveTasks(dir);
     const open = board.find(openAutoCard(ev.sessionId));
     if (open && files.every((f) => open.changedFiles?.includes(f))) return this.noteOverlaps(ev.projectId, board, open, files);
     const profile = await this.deps.readProfile(ev.projectId, ev.staffId);
@@ -4852,14 +4852,14 @@ export class TaskService {
     if (ok && seen.created) this.bySession.set(ev.sessionId, { projectId: ev.projectId, taskId: seen.created.id, role: 'work', auto: true });
     // O quadro de DEPOIS da própria gravação: de duas edições juntas, a que grava por último vê o arquivo da outra (ver `noteOverlaps`).
     if (ok && seen.card) {
-      const after = await readTasks(dir);
+      const after = await readActiveTasks(dir);
       await this.noteOverlaps(ev.projectId, after, after.find((t) => t.id === seen.card!.id) ?? seen.card, files);
     }
   }
 
   /** Junta `files` à lista da tarefa comum cuja conversa de trabalho é `sessionId` (só enquanto a tarefa está aberta e a conversa é a atual dela). Sem novidade, não grava. */
   private async noteTaskEdit(projectId: string, taskId: string, sessionId: string, dir: string, files: string[]): Promise<void> {
-    const board = await readTasks(dir);
+    const board = await readActiveTasks(dir);
     const current = board.find((t) => t.id === taskId);
     if (!current || current.sessionId !== sessionId || isClosed(current)) return;
     if (files.every((f) => current.changedFiles?.includes(f))) return this.noteOverlaps(projectId, board, current, files);
@@ -4871,7 +4871,7 @@ export class TaskService {
       }),
     );
     // O quadro de DEPOIS da própria gravação: de duas edições juntas, a que grava por último vê o arquivo da outra (ver `noteOverlaps`).
-    const after = await readTasks(dir);
+    const after = await readActiveTasks(dir);
     await this.noteOverlaps(projectId, after, after.find((t) => t.id === taskId) ?? current, files);
   }
 
@@ -4934,7 +4934,7 @@ export class TaskService {
     if (!send || !dir || this.inFlight.has(key)) return;
     this.inFlight.add(key);
     try {
-      const t = (await readTasks(dir)).find((x) => x.id === taskId);
+      const t = (await readActiveTasks(dir)).find((x) => x.id === taskId);
       const due = pendingOverlaps(t);
       if (!t?.sessionId || !t.staffId || isClosed(t) || !due.length || (t.status !== 'doing' && t.status !== 'planning')) return;
       if (await this.paused(projectId).catch(() => true)) return;
@@ -5309,7 +5309,7 @@ export class TaskService {
   private async sweepMerges(projectId: string, now: Date): Promise<void> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir || this.deps.closing?.() || (await this.paused(projectId).catch(() => true))) return;
-    const due = (await readTasks(dir))
+    const due = (await readActiveTasks(dir))
       .filter((t) => t.status === 'review' && t.autoMerge && !t.autoMerge.stopped && mergeDue(t.autoMerge, now.getTime()))
       .sort((a, b) => a.autoMerge!.since.localeCompare(b.autoMerge!.since));
     const jobs: Array<Promise<boolean>> = [];
@@ -6467,18 +6467,11 @@ export class TaskService {
     const finished: string[] = [];
     let freed = false;
     const run = prev.then(async () => {
-      // Leitura estrita: arquivo preso ou corrompido lança aqui, e nada é gravado por cima (ver `readTasksForWrite`).
-      const before = await readTasksForWrite(dir);
+      // Leitura estrita: arquivo preso ou corrompido lança aqui, e nada é gravado por cima (ver `readTasksForWrite`). `fn` recebe o quadro inteiro (o ativo e o arquivo morto).
+      const read = await readTasksForWrite(dir);
+      const before = mergeBoard(read.active, read.cold);
       const next = clearClosedHeld(clearStaleRanks(clearBlockAlerts(fn(before))));
-      const text = JSON.stringify(next, null, 2) + '\n';
-      try {
-        await writeAtomic(file, text);
-      } finally {
-        // Gravou (ou falhou no meio): o guardado já não vale; a próxima leitura vem do disco.
-        forgetTasks(dir);
-      }
-      // A cópia de segurança (no máximo uma a cada 10 min, ver boardGuard.ts): falha nela nunca derruba a gravação.
-      void backupTasks(dir, text).catch((err: Error) => console.warn(`[quadro] cópia de segurança de ${file} não gravada: ${err.message}`));
+      await writeBoard(dir, read, before, next);
       // Toda tarefa que ficou pronta por qualquer caminho (a tela, a aprovação da revisão, a mescla) passa por aqui: é o ponto do commit automático (ver `autoCommit`).
       const was = new Map(before.map((t) => [t.id, t.status]));
       for (const t of next) if (t.status === 'done' && was.has(t.id) && was.get(t.id) !== 'done') finished.push(t.id);
@@ -6507,13 +6500,30 @@ export class TaskService {
   }
 }
 
-const tasksFile = (dir: string) => path.join(dir, '.myco', 'tasks.json');
+const tasksFile = (dir: string) => boardFilePath(dir, 'tasks');
+const coldFile = (dir: string) => boardFilePath(dir, 'tasks-arquivo');
 
 /**
  * Pronto sem mudança há mais de 7 dias sai do quadro. Derivado na leitura, nunca gravado:
  * qualquer mudança nova (updatedAt) tira do arquivo sozinha, e nada é apagado. Aguardar não arquiva.
+ * Não confundir com o arquivo morto (`COLD_AFTER_MS`): aquele é onde a tarefa fica no disco, e não muda o que a tela vê.
  */
 export const ARCHIVE_AFTER_MS = 7 * 86_400_000;
+
+/**
+ * Arquivo morto (`.myco/tasks-arquivo.json`): a tarefa fechada (pronta ou cancelada) sem mudança há mais que isso sai do `tasks.json`, que é regravado inteiro (com fsync)
+ * a cada mudança do quadro; o morto quase nunca muda. Quem lê com `readTasks` vê os dois juntos, como antes: a tela, a fila e as rotinas não percebem a diferença.
+ * Mudou de novo (reaberta, nota nova: `updatedAt`), volta ao ativo na mesma gravação. Padrão de 6 h: depois de fechada, a tarefa quase não muda (no quadro do MyCo
+ * em 24/11/2026, 99% pararam em 11 h), e com 40 a 50 fechadas por dia um limiar em dias deixaria o ativo acima de 1 MB (14 dias: 5,7 de 6,3 MB).
+ * `MYCO_COLD_AFTER_HOURS` troca o número (horas, maior que zero). Ver SPEC "Desempenho" 1.
+ */
+export const COLD_AFTER_DEFAULT_MS = 6 * 3_600_000;
+export function coldAfterMs(env = process.env.MYCO_COLD_AFTER_HOURS): number {
+  const hours = Number(env);
+  return env !== undefined && env.trim() !== '' && Number.isFinite(hours) && hours > 0 ? hours * 3_600_000 : COLD_AFTER_DEFAULT_MS;
+}
+/** Entrada no arquivo morto: no máximo uma a cada isso por projeto (o morto tem MB e é regravado inteiro). Sair dele (reabrir, apagar) é sempre na hora. */
+export const COLD_ADMIT_EVERY_MS = 60 * 60_000;
 function withArchive(t: Task, now = Date.now()): Task {
   const since = Date.parse(t.updatedAt);
   if (t.status === 'done' && Number.isFinite(since) && now - since > ARCHIVE_AFTER_MS)
@@ -6564,14 +6574,80 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** Esquece o quadro guardado de `dir` (depois de gravar: a próxima leitura vem do disco). */
-function forgetTasks(dir: string): void {
-  tasksCache.delete(tasksFile(dir));
+/** Esquece o guardado de um arquivo do quadro de `dir` (depois de gravá-lo: a próxima leitura vem do disco). Só o gravado: o morto tem MB e quase nunca muda. */
+function forgetTasks(dir: string, board: BoardFile): void {
+  tasksCache.delete(boardFilePath(dir, board));
 }
 
-/** As tarefas do projeto (`.myco/tasks.json`), só leitura; lista vazia se não há arquivo. Guardadas por versão do arquivo (ver `tasksCache`). */
-export function readTasks(dir: string): Promise<Task[]> {
-  return loadTasks(dir, false);
+/**
+ * As tarefas do projeto, só leitura: o quadro inteiro (o ativo `.myco/tasks.json` e o arquivo morto `.myco/tasks-arquivo.json`, ver `coldAfterMs`), como se fosse um
+ * arquivo só; lista vazia se não há arquivo. Cada arquivo guardado por versão (ver `tasksCache`). A mesma tarefa nos dois (queda no meio de uma mudança de arquivo, ver
+ * `writeBoard`): vale a do ativo. Um dos dois corrompido sem conserto: lista vazia, como sempre foi com o `tasks.json` (sem o morto, a fila liberaria quem espera por uma
+ * cancelada que está nele).
+ */
+export async function readTasks(dir: string): Promise<Task[]> {
+  const key = boardKey(dir);
+  for (let attempt = 1; ; attempt++) {
+    // Mudança de arquivo em andamento (ver `coldMoves`): o quadro de antes dela (ou o de depois, já gravado o ativo), sem esperar as gravações de MB.
+    const move = coldMoves.get(key);
+    if (move?.running) return [...move.snapshot];
+    const gen = move?.gen ?? 0;
+    const active = await loadFile(dir, 'tasks', false);
+    const cold = await loadFile(dir, 'tasks-arquivo', false);
+    const after = coldMoves.get(key);
+    if (after?.running) return [...after.snapshot];
+    if ((after?.gen ?? 0) === gen || attempt >= MOVE_READ_ATTEMPTS) return active && cold ? mergeBoard(active, cold) : [];
+    // Uma mudança começou e terminou no meio desta leitura: os dois arquivos podem ser de momentos diferentes. Lê de novo.
+  }
+}
+
+/**
+ * Só o ativo (`.myco/tasks.json`): sem as tarefas fechadas há mais de `coldAfterMs`. Para caminho quente que só olha tarefa aberta (o card automático, os arquivos em comum,
+ * a mescla em revisão…) e não procura tarefa por id vindo de fora, nem dependência, pai/filho ou pronta com pendência: para esses, `readTasks`.
+ */
+export async function readActiveTasks(dir: string): Promise<Task[]> {
+  const active = await loadFile(dir, 'tasks', false);
+  // O morto estragado sem conserto trava o quadro inteiro, também aqui (só o `stat` dele, com ele guardado).
+  return active && (await loadFile(dir, 'tasks-arquivo', false)) ? [...active] : [];
+}
+
+/** O quadro inteiro: o ativo e, das tarefas do morto, as que não estão também no ativo (as cópias da mesma tarefa só existem depois de uma queda no meio da mudança). */
+function mergeBoard(active: readonly Task[], cold: readonly Task[]): Task[] {
+  if (!cold.length) return [...active];
+  const ids = new Set(active.map((t) => t.id));
+  return [...active, ...cold.filter((t) => !ids.has(t.id))];
+}
+
+/**
+ * Mudança de tarefa entre os dois arquivos em andamento, por projeto (`running`), e quantas já houve (`gen`). Ela só acontece dentro do `mutate` (uma gravação por vez por
+ * projeto), em duas ou três gravações seguidas (ver `writeBoard`). Durante ela, quem lê recebe `snapshot` (o quadro de antes; depois de gravado o ativo, o de depois); fora
+ * dela, quem lê os dois arquivos confere no fim que nenhuma começou no meio. Sem isso, ler o ativo antes de a tarefa entrar nele e o morto depois de ela sair daria um
+ * quadro sem ela (e a retenção apagaria a conversa dela).
+ */
+const coldMoves = new Map<string, { gen: number; running: Promise<void> | null; snapshot: readonly Task[] }>();
+/** Quando tarefas entraram no arquivo morto pela última vez, por projeto (ver `COLD_ADMIT_EVERY_MS`). Some no reinício: a primeira gravação depois de subir já pode mover. */
+const coldAdmitted = new Map<string, number>();
+/** Projetos sem cópia do arquivo morto em `.myco/backups/tasks-arquivo/`: o morto ausente é só que ainda não houve entrada nele. Gravar o morto tira daqui. Ver `coldShouldExist`. */
+const coldNoBackups = new Set<string>();
+const boardKey = (dir: string) => (process.platform === 'win32' ? path.resolve(dir).toLowerCase() : path.resolve(dir));
+const MOVE_READ_ATTEMPTS = 5;
+
+/** Só os testes: esquece o relógio de entrada no arquivo morto e o que se sabia dele. */
+export function resetColdState(): void {
+  coldAdmitted.clear();
+  coldNoBackups.clear();
+}
+
+/**
+ * O arquivo morto ausente devia estar lá? Sim se há cópia dele: já existiu, e sumir (apagado à mão, quarentena do antivírus) não é "quadro novo"; a próxima entrada
+ * recriaria o arquivo sem as tarefas dele. Sem cópia (nunca houve entrada, ou a pasta `.myco` foi apagada inteira para recomeçar), não. A resposta "não" fica guardada.
+ */
+async function coldShouldExist(dir: string): Promise<boolean> {
+  const key = boardKey(dir);
+  if (coldNoBackups.has(key)) return false;
+  if (await hasBackups(dir, 'tasks-arquivo')) return true;
+  coldNoBackups.add(key);
+  return false;
 }
 
 /** Erros de leitura em que vale tentar de novo (no Windows, antivírus ou indexador segurando o arquivo). */
@@ -6580,11 +6656,14 @@ const READ_ATTEMPTS = 6;
 const READ_BASE_MS = 50;
 
 /**
- * A leitura de quem vai gravar (`mutate`): nunca devolve lista vazia por engano. Arquivo preso que não solta: `StateBusyError` (503, nada gravado). Arquivo que não lê
- * como lista e não tem o que pôr no lugar: `BoardCorruptError` (503, nada gravado). Antes, as duas viravam `[]`, e a gravação seguinte trocava o quadro inteiro por quase nada.
+ * A leitura de quem vai gravar (`mutate`): nunca devolve lista vazia por engano. Arquivo preso que não solta (o ativo ou o morto): `StateBusyError` (503, nada gravado).
+ * Um dos dois não lê como lista (ou o morto sumiu) e não tem o que pôr no lugar: `BoardCorruptError` (503, nada gravado). Antes, as duas viravam `[]`, e a gravação
+ * seguinte trocava o quadro inteiro por quase nada. Roda dentro da vez do projeto, onde nenhuma mudança de arquivo está em andamento: lê direto.
  */
-function readTasksForWrite(dir: string): Promise<Task[]> {
-  return loadTasks(dir, true);
+async function readTasksForWrite(dir: string): Promise<{ active: readonly Task[]; cold: readonly Task[] }> {
+  const active = (await loadFile(dir, 'tasks', true))!;
+  const cold = (await loadFile(dir, 'tasks-arquivo', true))!;
+  return { active, cold };
 }
 
 /** `op` com novas tentativas enquanto o Windows segura o arquivo; ENOENT devolve null; esgotado, `StateBusyError` (503, nada gravado). */
@@ -6602,17 +6681,33 @@ async function retryBusy<T>(file: string, op: () => Promise<T>): Promise<T | nul
 }
 
 /**
- * `strict` (quem vai gravar): erro de leitura e quadro corrompido lançam. Senão (telas, rotinas): leitura que falhou devolve o último quadro lido (melhor que um
- * quadro vazio de mentira), e corrompido sem conserto devolve `[]` (o aviso na caixa explica). Arquivo que não lê como lista passa por `recoverTasks` (boardGuard.ts):
- * volta a cópia boa mais nova, ou a última versão lida.
+ * Um arquivo do quadro (o ativo ou o morto). `strict` (quem vai gravar): erro de leitura e arquivo corrompido lançam. Senão (telas, rotinas): leitura que falhou devolve a
+ * última versão lida (melhor que um quadro vazio de mentira), e corrompido sem conserto devolve null (o aviso na caixa explica). Arquivo que não lê como lista passa por
+ * `recoverTasks` (boardGuard.ts): volta a cópia boa mais nova, ou a última versão lida. O morto que sumiu depois de já ter existido também (ver `coldShouldExist`).
+ * Devolve a lista guardada: quem expõe copia. As tarefas do morto vêm sempre congeladas, também fora dos testes: a gravação descobre o que mudou nele pela identidade
+ * dos objetos (ver `splitCold`), e uma alteração no lugar se perderia calada.
  */
-async function loadTasks(dir: string, strict: boolean): Promise<Task[]> {
-  const file = tasksFile(dir);
+async function loadFile(dir: string, board: BoardFile, strict: boolean): Promise<readonly Task[] | null> {
+  const file = boardFilePath(dir, board);
   const hit = tasksCache.get(file);
-  const gone = () => {
+  const freeze = (tasks: Task[]) => (FREEZE_CACHED || board === 'tasks-arquivo' ? deepFreeze(tasks) : tasks);
+  /** O que vale quando não há o que mostrar: com `strict`, lança. */
+  const nothing = (): null => {
+    if (strict) throw new BoardCorruptError(file);
+    return null;
+  };
+  const recover = async (version: string | null, missing: boolean): Promise<readonly Task[] | null> => {
+    const restored = await recoverTasks(dir, parseTasks, hit ? [...hit.tasks] : null, version, board, missing);
+    tasksCache.delete(file);
+    return restored ? freeze(restored) : nothing();
+  };
+  const gone = async (): Promise<readonly Task[] | null> => {
+    // O morto que já existiu e sumiu (apagado à mão, quarentena): estragado, e volta da cópia. Sem cópia, é só que ainda não houve entrada nele.
+    // Já se sabe que ele sumiu e não volta agora: nem tenta de novo a cada leitura (só o `readdir` das cópias: tiradas as cópias também, é quadro sem morto).
+    if (board === 'tasks-arquivo' && (await coldShouldExist(dir))) return knownCorruptVersion(dir, Date.now(), board) === 'ausente' ? nothing() : recover('ausente', true);
     // Sem arquivo é quadro novo (ou apagado para recomeçar): o aviso de "corrompido" sai.
     tasksCache.delete(file);
-    boardReadOk(dir);
+    boardReadOk(dir, board);
     return [];
   };
   let st;
@@ -6624,59 +6719,209 @@ async function loadTasks(dir: string, strict: boolean): Promise<Task[]> {
       st = await fs.stat(file);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return gone();
-      return hit ? [...hit.tasks] : [];
+      return hit ? hit.tasks : null;
     }
   }
   const version = fileVersion(st);
-  if (hit && hit.version === version) return [...hit.tasks];
+  if (hit && hit.version === version) return hit.tasks;
   // Já se sabe que esta versão do arquivo não lê e não tem conserto agora: nem abre (6 MB por leitura, a cada poucos segundos, no HDD).
-  if (knownCorruptVersion(dir) === version) {
-    if (strict) throw new BoardCorruptError(file);
-    return hit ? [...hit.tasks] : [];
-  }
+  if (knownCorruptVersion(dir, Date.now(), board) === version) return hit ? (strict ? nothing() : hit.tasks) : nothing();
   const raw = strict ? await retryBusy(file, () => fs.readFile(file, 'utf8')) : await fs.readFile(file, 'utf8').catch(() => undefined);
   if (raw === null) return gone(); // sumiu entre o stat e a leitura
-  if (raw === undefined) return hit ? [...hit.tasks] : [];
+  // Leitura que falhou (arquivo preso) sem versão guardada: nada a mostrar, como o corrompido (sem o morto, a fila liberaria quem espera por uma cancelada dele).
+  if (raw === undefined) return hit ? hit.tasks : null;
   // A versão é a do `stat` de antes da leitura: se o arquivo mudou no meio, a próxima leitura vê outra versão e lê de novo.
   const tasks = parseTasks(raw);
-  if (!tasks) {
-    // Zerado, cortado ou JSON quebrado: nada disso fica guardado. Volta a cópia boa (ou a última versão lida); sem nenhuma, o quadro fica marcado como corrompido.
-    const restored = await recoverTasks(dir, parseTasks, hit?.tasks ?? null, version);
-    tasksCache.delete(file);
-    if (restored) return restored;
-    if (strict) throw new BoardCorruptError(file);
-    return [];
-  }
-  boardReadOk(dir);
+  // Zerado, cortado ou JSON quebrado: nada disso fica guardado. Volta a cópia boa (ou a última versão lida); sem nenhuma, o arquivo fica marcado como corrompido.
+  if (!tasks) return recover(version, false);
+  boardReadOk(dir, board);
   // Arquivo mexido há pouco (ver RACY_MS): não guarda; a versão dele ainda pode se repetir numa gravação seguinte.
   if (Date.now() - st.mtimeMs < RACY_MS) {
     tasksCache.delete(file);
-    return tasks;
+    return freeze(tasks);
   }
-  tasksCache.set(file, { version, tasks: FREEZE_CACHED ? deepFreeze(tasks) : tasks });
-  return [...tasks];
+  tasksCache.set(file, { version, tasks: freeze(tasks) });
+  return tasks;
 }
 
 /**
- * Como readTasks, mas sem engolir nada: arquivo que existe e não lê, JSON ruim, lista que não é lista ou tarefa sem id LANÇAM
- * (quem chama aborta). Ausente = lista vazia. Status desconhecido fica na lista (quem chama trata como não concluída).
- * Usado pela exclusão da retenção (server/retentionSweep.ts), onde ler pela metade protegeria menos do que deveria.
+ * Como readTasks (o quadro inteiro: o ativo e o arquivo morto), mas sem engolir nada: arquivo que existe e não lê, JSON ruim, lista que não é lista ou tarefa sem id
+ * LANÇAM (quem chama aborta), e o morto que sumiu depois de já ter existido também. Ausente = lista vazia. Status desconhecido fica na lista (quem chama trata como não
+ * concluída). Usado pela exclusão da retenção (server/retentionSweep.ts), onde ler pela metade protegeria menos do que deveria: por isso também espera a mudança de
+ * arquivo em andamento e não cai no meio de uma (ver `coldMoves`).
  */
 export async function readTasksStrict(dir: string): Promise<Task[]> {
+  const key = boardKey(dir);
+  for (let attempt = 1; attempt <= MOVE_READ_ATTEMPTS; attempt++) {
+    const running = coldMoves.get(key)?.running;
+    if (running) await running;
+    const gen = coldMoves.get(key)?.gen ?? 0;
+    const active = await readFileStrict(tasksFile(dir));
+    const cold = await readFileStrict(coldFile(dir));
+    if (!cold && (await coldShouldExist(dir))) throw new Error('o arquivo morto do quadro (tasks-arquivo.json) sumiu depois de já ter existido');
+    const now = coldMoves.get(key);
+    if ((now?.gen ?? 0) === gen && !now?.running) return mergeBoard(active ?? [], cold ?? []);
+  }
+  throw new Error('o quadro mudou de arquivo durante a leitura');
+}
+
+/** Um arquivo do quadro, sem engolir nada (ver `readTasksStrict`); null se não existe. */
+async function readFileStrict(file: string): Promise<Task[] | null> {
   let raw: string;
   try {
-    raw = await fs.readFile(tasksFile(dir), 'utf8');
+    raw = await fs.readFile(file, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
   }
+  const name = path.basename(file);
   const data = JSON.parse(raw.replace(/^﻿/, '')) as unknown;
-  if (!Array.isArray(data)) throw new Error('tasks.json não é uma lista');
+  if (!Array.isArray(data)) throw new Error(`${name} não é uma lista`);
   return data.map((t) => {
-    if (!t || typeof t !== 'object' || typeof (t as Task).id !== 'string') throw new Error('tarefa sem id no tasks.json');
+    if (!t || typeof t !== 'object' || typeof (t as Task).id !== 'string') throw new Error(`tarefa sem id no ${name}`);
     const task = t as Task;
     return { ...task, status: fromLegacy(task.status) };
   });
+}
+
+/** O texto gravado de um arquivo do quadro. */
+const boardText = (tasks: readonly Task[]): string => JSON.stringify(tasks, null, 2) + '\n';
+
+/** A mesma tarefa? Primeiro a identidade (o guardado é reaproveitado, e quem não muda a tarefa devolve o mesmo objeto); objeto novo, compara o conteúdo. */
+const sameTask = (a: Task, b: Task): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Para onde vai cada tarefa do quadro `next` depois de uma mudança, sabendo onde cada uma estava (`read`):
+ *   - `kept`: estava no morto e não mudou: fica nele.
+ *   - `admitted`: fechada (pronta ou cancelada) sem mudança há mais de `limit`, fora do morto, com a entrada liberada (`admit`, ver `COLD_ADMIT_EVERY_MS`): entra nele.
+ *   - o resto fica (ou volta) no ativo, inclusive a tarefa do morto que mudou (reaberta, nota nova, limpeza): assim a mudança de verdade só é gravada no ativo, e o
+ *     morto só ganha cópias de tarefas que não mudaram (ver `writeBoard`).
+ * `leaving`: as entradas do arquivo morto que saem dele (mudaram, foram apagadas, ou eram a cópia velha de uma tarefa que também está no ativo).
+ */
+export function splitCold(next: readonly Task[], read: { active: readonly Task[]; cold: readonly Task[] }, now: number, admit: boolean, limit = coldAfterMs()) {
+  const inActive = new Set(read.active.map((t) => t.id));
+  // A cópia que vale de cada tarefa do morto (a repetida no ativo vale lá: esta é velha).
+  const wasCold = new Map(read.cold.filter((t) => !inActive.has(t.id)).map((t) => [t.id, t]));
+  const stale = (t: Task) => isClosed(t) && Date.parse(t.updatedAt) < now - limit; // updatedAt inválido: NaN, fica no ativo
+  const active: Task[] = [];
+  const cold: Task[] = [];
+  const kept: Task[] = [];
+  let admitted = 0;
+  for (const t of next) {
+    const prev = wasCold.get(t.id);
+    if (prev && sameTask(prev, t)) {
+      cold.push(prev);
+      kept.push(prev);
+    } else if (!prev && admit && stale(t)) {
+      cold.push(t);
+      admitted++;
+    } else active.push(t);
+  }
+  const ids = new Set(cold.map((t) => t.id));
+  const leaving = read.cold.filter((t) => !ids.has(t.id));
+  return { active, cold, kept, admitted, leaving };
+}
+
+/**
+ * Grava o quadro `next` nos dois arquivos (ver `splitCold`). Sem mudança no morto (o caso de quase toda gravação), só o ativo, como sempre foi. Com mudança, a ordem é a que
+ * nunca deixa uma tarefa fora dos dois arquivos, nem numa queda de energia entre uma gravação e outra (cada uma é `writeAtomic`, com fsync):
+ *   A. entra tarefa no morto: grava o morto com elas (mantendo as que vão sair dele) e a cópia dele, antes de seguir. Sem a cópia, a entrada fica para depois: uma cópia
+ *      mais velha que o morto, restaurada, perderia as tarefas que já tinham saído do ativo.
+ *   B. o ativo, já sem as que entraram no morto e com as que saem dele. Falhou, nada mudou para quem lê (o morto só ganhou cópias de tarefas que não mudaram), e o
+ *      erro sobe como sempre.
+ *   C. sai tarefa do morto: a que volta ao ativo, depois de uma cópia do ativo sem limite; grava o morto sem ela. Falhou, fica só no log: a tarefa está nos dois, vale a
+ *      do ativo, e a gravação seguinte tira a repetida. A apagada, essa, só sai do quadro aqui: falhou, o erro sobe (o ativo já foi gravado; apagar de novo termina).
+ * Queda entre A e B: a tarefa que entra está nos dois, igual. Entre B e C: a que sai está nos dois, e vale a do ativo, a mais nova.
+ */
+async function writeBoard(dir: string, read: { active: readonly Task[]; cold: readonly Task[] }, before: readonly Task[], next: readonly Task[]): Promise<void> {
+  const file = tasksFile(dir);
+  const writeActive = async (tasks: readonly Task[]) => {
+    const text = boardText(tasks);
+    try {
+      await writeAtomic(file, text);
+    } finally {
+      // Gravou (ou falhou no meio): o guardado já não vale; a próxima leitura vem do disco.
+      forgetTasks(dir, 'tasks');
+    }
+    // A cópia de segurança (no máximo uma a cada 10 min, ver boardGuard.ts): falha nela nunca derruba a gravação.
+    void backupTasks(dir, text).catch((err: Error) => console.warn(`[quadro] cópia de segurança de ${file} não gravada: ${err.message}`));
+    return text;
+  };
+  const key = boardKey(dir);
+  const now = Date.now();
+  const split = splitCold(next, read, now, now - (coldAdmitted.get(key) ?? -Infinity) >= COLD_ADMIT_EVERY_MS);
+  if (!split.admitted && !split.leaving.length) {
+    await writeActive(split.active);
+    return;
+  }
+
+  const cfile = coldFile(dir);
+  const writeCold = async (tasks: readonly Task[]) => {
+    const text = boardText(tasks);
+    try {
+      await writeAtomic(cfile, text);
+    } finally {
+      forgetTasks(dir, 'tasks-arquivo');
+    }
+    coldNoBackups.delete(key);
+    return text;
+  };
+  const state = coldMoves.get(key) ?? { gen: 0, running: null, snapshot: [] };
+  coldMoves.set(key, state);
+  let finish!: () => void;
+  state.running = new Promise<void>((resolve) => (finish = resolve));
+  state.snapshot = before;
+  state.gen++;
+  try {
+    // A. Entrada: o morto com as que entram, e a cópia dele (obrigatória, sem o limite de 10 min). Qualquer falha adia a entrada (a próxima, daqui a `COLD_ADMIT_EVERY_MS`).
+    let admitted = false;
+    let coldDirty = false;
+    if (split.admitted) {
+      coldAdmitted.set(key, now);
+      try {
+        coldDirty = true;
+        const text = await writeCold([...split.cold, ...split.leaving]);
+        await backupTasks(dir, text, Date.now(), 'tasks-arquivo', 0);
+        admitted = true;
+      } catch (err) {
+        console.warn(`[quadro] entrada no arquivo morto adiada (${(err as Error).message}): as tarefas seguem no ${path.basename(file)}`);
+      }
+    }
+    // B. O ativo. A entrada que não deu certo deixa as que entrariam nele.
+    const finalCold = admitted ? split.cold : split.kept;
+    const keep = new Set(finalCold.map((t) => t.id));
+    const activeText = await writeActive(admitted ? split.active : next.filter((t) => !keep.has(t.id)));
+    state.snapshot = next;
+    // C. A saída (e, com a entrada adiada, a limpeza do que o passo A chegou a gravar). A que volta ao ativo passa a existir só nele: antes de tirá-la do morto, a cópia do
+    // ativo, sem o limite de 10 min (a de antes não a tem; restaurada, perderia a tarefa). Sem essa cópia, a que voltou fica repetida no morto (vale a do ativo).
+    const inNext = new Set(next.map((t) => t.id));
+    const movedOut = split.leaving.filter((t) => inNext.has(t.id));
+    const deleted = split.leaving.filter((t) => !inNext.has(t.id));
+    let activeCopied = !movedOut.length;
+    if (movedOut.length)
+      activeCopied = await backupTasks(dir, activeText, Date.now(), 'tasks', 0).then(
+        () => true,
+        (err: Error) => (console.warn(`[quadro] cópia de segurança de ${file} não gravada: ${err.message}; as tarefas que voltaram dele seguem também no ${path.basename(cfile)}`), false),
+      );
+    const target = activeCopied ? finalCold : [...finalCold, ...movedOut];
+    if (deleted.length || (movedOut.length && activeCopied) || (coldDirty && !admitted)) {
+      try {
+        const text = await writeCold(target);
+        // A cópia do morto também sem limite: uma mais velha, restaurada, traria de volta a apagada.
+        await backupTasks(dir, text, Date.now(), 'tasks-arquivo', 0).catch((err: Error) => console.warn(`[quadro] cópia de segurança de ${cfile} não gravada: ${err.message}`));
+      } catch (err) {
+        // A apagada só sai do quadro aqui: sem isso, ela voltaria na próxima leitura com o "apagou" já respondido. O erro sobe (o ativo já está gravado; apagar de novo termina).
+        if (deleted.length) throw err;
+        console.warn(`[quadro] ${cfile} não foi regravado (${(err as Error).message}): as tarefas que saíram dele ficam repetidas até a próxima gravação (vale a do ${path.basename(file)})`);
+      }
+    }
+    if (admitted) console.log(`[quadro] ${split.admitted} tarefa(s) fechada(s) foram para o arquivo morto (${path.basename(cfile)}); o ativo ficou com ${split.active.length}`);
+  } finally {
+    state.gen++;
+    state.running = null;
+    state.snapshot = [];
+    finish();
+  }
 }
 
 /**

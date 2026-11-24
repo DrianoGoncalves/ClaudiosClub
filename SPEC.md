@@ -81,14 +81,17 @@ O Claudio's Club roda numa máquina comum (Windows, 4 núcleos, HDD, pouca RAM l
 responder rotas triviais em 30 s e arquivos estáticos em 99 s. As causas medidas estão abaixo, com a regra que impede cada uma de voltar. Quem mexer
 nessas áreas confere a regra antes de entregar; mudar uma delas pede medição (antes e depois) no pedido de revisão.
 
-### 1. O quadro (`.myco/tasks.json`) é lido uma vez por versão do arquivo
+### 1. O quadro (`.myco/tasks.json` e o arquivo morto) é lido uma vez por versão do arquivo
 
-- Toda leitura passa por `readTasks` (guardado por versão do arquivo: mtime, ctime, tamanho e inode). Não ler o `tasks.json` por outro caminho em rota ou rotina.
-- Toda gravação passa por `mutate` (que descarta o guardado). Nunca gravar o `tasks.json` fora dele.
-- Tarefa lida nunca é alterada no lugar: sempre objeto novo (`{ ...t, campo }`). O guardado é o mesmo para todos os leitores; nos testes ele vem congelado e a alteração no lugar quebra o teste.
+- O quadro são dois arquivos: o ativo (`.myco/tasks.json`) e o arquivo morto (`.myco/tasks-arquivo.json`), com as tarefas fechadas (prontas ou canceladas) sem mudança há mais de 6 h (`MYCO_COLD_AFTER_HOURS` troca). O ativo é regravado inteiro, com fsync, a cada mudança; o morto quase nunca muda.
+- Toda leitura passa por `readTasks` (os dois arquivos juntos, cada um guardado por versão do arquivo: mtime, ctime, tamanho e inode) ou por `readActiveTasks` (só o ativo). Não ler nenhum dos dois por outro caminho em rota ou rotina.
+- `readActiveTasks` só em caminho que olha tarefa aberta e não procura tarefa por id vindo de fora, nem dependência, pai/filho, idempotência ou pronta com pendência (commit, vaga de escrita, aviso da caixa). Na dúvida, `readTasks`: a cancelada do morto ainda bloqueia quem espera por ela.
+- Toda gravação passa por `mutate` (que descarta o guardado do arquivo gravado). Nunca gravar nenhum dos dois fora dele. A mudança de arquivo segue a ordem de `writeBoard`: o morto ganha a tarefa (e a cópia dele sai) antes de o ativo perdê-la; o ativo ganha a reaberta antes de o morto perdê-la. Em nenhum instante, nem numa queda de energia, a tarefa fica fora dos dois; repetida nos dois, vale a do ativo. Tarefa do morto que muda volta ao ativo: a única gravação que decide é a do ativo.
+- Entrada no morto no máximo uma vez por hora por projeto; saída na hora. Quem lê durante uma mudança de arquivo recebe o quadro de antes dela, sem esperar as gravações.
+- Tarefa lida nunca é alterada no lugar: sempre objeto novo (`{ ...t, campo }`). O guardado é o mesmo para todos os leitores; nos testes ele vem congelado e a alteração no lugar quebra o teste. As do morto vêm congeladas sempre: a gravação descobre o que mudou nele pela identidade dos objetos.
 - Arquivo mexido há menos de 3 s não é guardado (o mtime do Windows anda em degraus de ~15,6 ms: duas gravações seguidas de mesmo tamanho dariam a mesma versão).
 
-*Por quê:* o arquivo passa de 5 MB; reler e refazer o parse a cada listagem, rodada da fila e mudança era o maior gasto de CPU do servidor.
+*Por quê:* o arquivo passa de 5 MB; reler e refazer o parse a cada listagem, rodada da fila e mudança era o maior gasto de CPU do servidor. Com o fsync (regra 6), regravar os 6,3 MB custava 204 ms (mediana no HDD); só o ativo (0,23 MB, em 24/11/2026), 67 ms.
 
 ### 2. Caminho quente sem varrer transcripts
 
@@ -124,9 +127,10 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 ### 6. Gravação atômica tolerante ao Windows e à queda de energia
 
 - O rename do `writeAtomic` tenta por pelo menos ~3 s (backoff com jitter) antes de desistir: no HDD, o antivírus segura o destino por mais que meio segundo. A desistência vai para o log; ela nunca é silenciosa.
-- O `writeAtomic` força os dados no disco (`sync`) **antes** do rename. Sem isso, uma queda de energia logo depois deixa o arquivo com o tamanho certo e só zeros: em 23/11/2026 o `tasks.json` do MyCo (6,3 MB) voltou assim, e só foi recuperado varrendo o disco inteiro. Custo medido no HDD para esses 6,3 MB: de 22 para 205 ms por gravação (mediana). Encolher o arquivo (tirar as tarefas prontas antigas) é o que baixa esse custo; tirar o `sync`, não.
+- O `writeAtomic` força os dados no disco (`sync`) **antes** do rename. Sem isso, uma queda de energia logo depois deixa o arquivo com o tamanho certo e só zeros: em 23/11/2026 o `tasks.json` do MyCo (6,3 MB) voltou assim, e só foi recuperado varrendo o disco inteiro. Custo medido no HDD para esses 6,3 MB: de 22 para 205 ms por gravação (mediana). Encolher o arquivo (tirar as tarefas prontas antigas) é o que baixa esse custo; tirar o `sync`, não. Foi o que o arquivo morto fez (regra 1).
 - Quem vai gravar o quadro lê de forma estrita (`readTasksForWrite`): arquivo preso que não solta vira `StateBusyError`, e quadro que não lê como lista vira `BoardCorruptError`. Nunca `[]`. Antes, as duas viravam lista vazia, e a gravação seguinte trocava o quadro inteiro por quase nada.
 - O quadro tem cópias em `.myco/backups/tasks/` (no máximo uma a cada 10 min; ficam as 6 mais novas e a última de cada dia por 7 dias). Arquivo que não lê como lista é guardado ao lado (`tasks.json.corrompido-<data>`) e volta a cópia boa mais nova, ou a última versão lida pelo servidor. Sem nenhuma das duas, as gravações são recusadas até o arquivo ser consertado. Qualquer desses casos vira aviso na caixa "precisa de mim" (`server/boardGuard.ts`).
+- O arquivo morto tem a mesma proteção, com cópias em `.myco/backups/tasks-arquivo/`: uma a cada entrada de tarefa nele (sem o limite de 10 min, e antes de a tarefa sair do ativo; sem a cópia, a entrada fica para depois). Morto que já existiu (tem cópia) e sumiu conta como estragado e volta da cópia. Estragado sem conserto trava o quadro inteiro, como o ativo: nada aparece e nada é gravado (sem ele, a fila liberaria quem espera por uma cancelada que está nele). Para zerar o quadro de propósito, com o servidor parado, apague também `.myco/backups/tasks-arquivo/`.
 
 ### 7. Estáticos e subida
 
