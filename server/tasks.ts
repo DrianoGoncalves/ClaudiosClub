@@ -2253,9 +2253,11 @@ export class TaskService {
     const runId = run && !sw ? await this.logStart(projectId, task, run.trigger ?? 'manual', run.skills ?? (await this.skillsOf(projectId, profile))) : undefined;
     const branch = card.wt?.branch ?? (await this.deps.branchFor(dir, profile).catch(() => null));
     // Onde o código do card é escrito, gravado agora: a conversa já abriu, então a worktree dele (a do card, ou a da ficha se ela pede uma) existe. A mescla e a aprovação decidem por isto (ver `locateTaskCode`),
-    // não pela worktree que ele tiver depois. A troca de motor no meio do turno é do mesmo card: não regrava. Card que não ganhou worktree por um motivo (`card.why`) grava o motivo.
-    const located = sw || card.wt ? null : await locateCode(dir, profile.id, !!profile.worktree).catch(() => null);
-    const codeAt: Task['codeAt'] | null = sw
+    // não pela worktree que ele tiver depois. Só a PRIMEIRA partida grava: a troca de motor no meio do turno e o recomeço depois de parar (limite, reinício) são do mesmo card e não regravam, senão o card
+    // feito pela metade no principal passaria a apontar para a worktree que a ficha ganhou no meio. Card que não ganhou worktree por um motivo (`card.why`) grava o motivo.
+    const first = !sw && !task.codeAt;
+    const located = !first || card.wt ? null : await locateCode(dir, profile.id, !!profile.worktree).catch(() => null);
+    const codeAt: Task['codeAt'] | null = !first
       ? null
       : card.wt
         ? { where: 'worktree', branch: card.wt.branch, path: card.wt.path, card: true, base: card.wt.base, ...(card.port && { port: card.port }) }
@@ -2277,7 +2279,7 @@ export class TaskService {
           ...t,
           sessionId,
           branch: branch ?? t.branch,
-          ...(codeAt && { codeAt }),
+          ...(codeAt && !t.codeAt && { codeAt }),
           queuedAt: null,
           queuedForce: false,
           resourceWait: null,
