@@ -5023,10 +5023,11 @@ export class TaskService {
     if (plan.repoNote) return auto ? attempt(plan.repoNote) : refuse(plan.repoNote);
     const view = plan.view;
     if (!plan.status || !plan.head) return auto ? attempt('não consegui ler o git') : refuse('não consegui ler o git agora: tente de novo');
-    if (!view) return refuse('os arquivos de fora já não têm mudança no git (commitados ou desfeitos): nada a commitar');
+    // Chegou ao git e não há o que levar (commitadas ou desfeitas à mão, ou o aviso já é de erro): o automático grava a tentativa, senão `autoLeft` (que só olha o quadro) segue verdadeiro e o `tick` leria o git de novo a cada volta.
+    if (!view) return auto ? attempt(null) : refuse('os arquivos de fora já não têm mudança no git (commitados ou desfeitos): nada a commitar');
     if (view.state === 'waiting')
       return refuse(`ainda há card aberto mexendo nos arquivos de fora: ${view.blockers.map((b) => `${b.id} (“${untrustedLine(b.title, 80)}”, ${b.status}): ${b.paths.slice(0, 3).map((p) => untrustedLine(p, 120)).join(', ')}`).join('; ')}`);
-    if (!redoOpen(view)) return refuse('este aviso é de erro do git, não de arquivos de fora: nada a refazer');
+    if (!redoOpen(view)) return auto ? attempt(null) : refuse('este aviso é de erro do git, não de arquivos de fora: nada a refazer');
     let take = plan.take;
     let rest = plan.remaining;
     if (auto) {
@@ -5044,7 +5045,7 @@ export class TaskService {
     if (!take.length) return refuse(`nenhum arquivo de fora pode ir pelo botão (segredo, conflito ou staged por você): resolva no git. De fora: ${leftText(plan.remaining)}`);
     if (!auto && plan.digest !== (mode as { digest: string }).digest) return refuse('os arquivos mudaram desde que você viu o diff: confira de novo e confirme');
     const made = await commitPaths(dir, plan.head, take, commitMessage(`Sobras de ${task.title}`, task.id)).catch((err) => (auto ? attempt(`o git recusou o commit: ${summarize(err)}`) : refuse(`o git recusou o commit: ${summarize(err)}`)));
-    if (!made) return refuse('os arquivos de fora já estão no HEAD: nada a commitar');
+    if (!made) return auto ? attempt(null) : refuse('os arquivos de fora já estão no HEAD: nada a commitar');
     const taken = take.slice(0, COMMIT_LIST_MAX);
     const line = `commit complementar${auto ? ' automático' : ''} ${made.sha}: ${take.length} ${take.length === 1 ? 'arquivo' : 'arquivos'} das sobras${c.sha ? ` do commit ${c.sha}` : ''}${rest.length ? `; de fora: ${leftText(rest, 5)}` : ''}${made.problem ? ` (${made.problem})` : ''}`;
     let updated: TaskCommit | undefined;
