@@ -7,16 +7,11 @@
 
 ## Visão
 
-<!--
-O que é o projeto, em duas ou três frases, e para quem é.
--->
+Uma plataforma que organiza projetos e estipula funcionários com memórias persistentes para trabalhar com multi motores de IA. Simulando uma software factory, permite automatizar e centralizar o workflow de maneira visual e profissional.
 
 ## Problema que resolve
 
-<!--
-Qual dor existe hoje e o que muda para quem usa
-quando o projeto estiver pronto.
--->
+Unifica as memórias de AI Dev e integra com Codex e Claude signatures. Permite enxergar todo o fluxo de trabalho dos agentes de maneira visual e dedicado, melhorando a consistência, qualidade e economia de tokens.
 
 ## Escopo
 
