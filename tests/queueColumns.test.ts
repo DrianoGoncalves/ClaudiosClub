@@ -40,6 +40,9 @@ async function club(dirName: string) {
   const dir = path.join(root, dirName);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+  // O arquivo que o card "alterou": as provas da entrega (testes relacionados) rodam sobre os arquivos alterados.
+  await fs.mkdir(path.join(dir, 'src'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'src', 'feature.ts'), 'export const feature = 1;\n');
   const people: Record<string, StaffProfile> = {
     'gio-1': profile('gio-1', 'Gio', { role: 'Orquestrador' }),
     'ana-1': profile('ana-1', 'Ana', { reportsTo: ['gio-1'] }),
@@ -97,6 +100,10 @@ async function club(dirName: string) {
   const add = async (title: string, staffId: string, extra: { reviewerId?: string; blockedBy?: string[]; start?: boolean } = {}) => {
     const t = (await svc.create('p', { title, description: 'Faça.', staffId, reviewerId: extra.reviewerId ?? null, ...(extra.blockedBy && { blockedBy: extra.blockedBy }), start: extra.start ?? true }, 'gio-1', 'gio-s'))!;
     if (extra.start !== false) await svc.start('p', t.id);
+    const file = path.join(dir, '.myco', 'tasks.json');
+    const tasks = JSON.parse(await fs.readFile(file, 'utf8')) as Array<Record<string, any>>;
+    tasks.find((x) => x.id === t.id)!.changedFiles = ['src/feature.ts'];
+    await fs.writeFile(file, JSON.stringify(tasks));
     return { id: t.id, work: (await get(t.id)).sessionId ?? null };
   };
   /** O turno da conversa acaba (a entrega começa, e a fila dele anda). */

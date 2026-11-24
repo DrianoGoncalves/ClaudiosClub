@@ -6,7 +6,7 @@ import path from 'node:path';
 // continuam versionáveis. Se você editou o arquivo, só as linhas que faltam são acrescentadas.
 
 const HEADER = '# Gerado pelo Claudio’s Club: imagens (retratos e imagem do projeto) e registros de execução ficam fora do git.';
-export const IGNORED_IMAGES = ['staff/*.png', 'staff/*.jpg', 'staff/*.webp', 'project.png', 'project.jpg', 'project.webp', 'attachments/', 'task-runs.jsonl*'];
+export const IGNORED_IMAGES = ['staff/*.png', 'staff/*.jpg', 'staff/*.webp', 'project.png', 'project.jpg', 'project.webp', 'attachments/', 'task-runs.jsonl*', 'proof-baseline.json'];
 
 export async function ensureMycoGitignore(projectPath: string): Promise<void> {
   const file = path.join(projectPath, '.myco', '.gitignore');

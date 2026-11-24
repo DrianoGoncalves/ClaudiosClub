@@ -27,12 +27,16 @@ export interface AcquireOptions {
   pollMs?: number;
   /** Chamada uma vez, quando a trava está com outro e vai esperar. */
   onWait?: (holder: HeavyHolder) => void;
+  /** Quem pediu desistiu da vez: a espera acaba na hora com `acquired: false, aborted: true`, sem pegar a trava. */
+  signal?: AbortSignal;
   now?: () => number;
   alive?: (pid: number) => boolean;
 }
 
 export interface AcquireResult {
   acquired: boolean;
+  /** A espera foi cancelada pelo `signal` (nunca com `acquired: true`). */
+  aborted?: boolean;
   waitedMs: number;
   /** Com `acquired: false`, quem segurava ao fim da espera. */
   holder: HeavyHolder | null;

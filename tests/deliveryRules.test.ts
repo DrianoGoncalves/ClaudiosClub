@@ -20,27 +20,31 @@ afterAll(() => removeTemp(root));
 const ENGINES: Engine[] = ['claude', 'codex'];
 
 describe('os textos fixos', () => {
-  it('o formato da entrega tem os 5 itens, nesta ordem', () => {
+  it('o formato da entrega tem os 4 itens, nesta ordem (o tsc e os testes relacionados saíram: o Club os anexa)', () => {
     const lines = DELIVERY_FORMAT.split('\n');
-    expect(lines[0]).toBe('Quando terminar, a sua última mensagem é a entrega, curta e neste formato fixo, nesta ordem (o Claudio’s Club já anexa o critério de aceite e o resultado dos testes que ele roda: não os copie):');
+    expect(lines[0]).toBe(
+      'Quando terminar, a sua última mensagem é a entrega, curta e neste formato fixo, nesta ordem (o Claudio’s Club já anexa o critério de aceite e roda o tsc e os testes relacionados aos arquivos que você alterou, com comando, código de saída, contagem e a comparação com a base: não os copie nem os redigite):',
+    );
     expect(lines[1]).toMatch(/^1\. Critério de pronto: um item por linha, pelo NÚMERO ou por um trecho curto dele \(sem copiar o texto do item\), com feito, não feito ou parcial/);
-    expect(lines[2]).toBe('2. tsc: o resultado em uma linha (ou "não se aplica", se o projeto não tem).');
-    expect(lines[3]).toBe('3. Testes do tema: os arquivos rodados e a contagem (passaram e falharam), sem colar a saída.');
-    expect(lines[4]).toBe('4. Prints: o caminho absoluto de cada um, com a hora, quando o critério pedir.');
-    expect(lines[5]).toBe('5. O que ficou de fora e por quê.');
-    expect(lines).toHaveLength(6);
+    expect(lines[2]).toBe('2. Testes do tema: só os que VOCÊ rodou além dos relacionados que o Club anexa: os arquivos e a contagem (passaram e falharam), sem colar a saída; se não rodou nenhum além deles, escreva "só os relacionados".');
+    expect(lines[3]).toBe('3. Prints: o caminho absoluto de cada um, com a hora, quando o critério pedir.');
+    expect(lines[4]).toBe('4. O que ficou de fora e por quê.');
+    expect(lines).toHaveLength(5);
+    expect(DELIVERY_FORMAT).not.toMatch(/^\d\. tsc/m); // o executor não digita mais o tsc
   });
 
-  it('o formato enxuto: não pede o texto do critério nem a saída dos testes (o Club já anexa), mas mantém a contagem dos testes do tema', () => {
+  it('o formato enxuto: não pede o texto do critério, nem a saída dos testes, nem o tsc (o Club já anexa), mas mantém a contagem dos testes do tema', () => {
     expect(DELIVERY_FORMAT).not.toContain('cada item do critério de aceite'); // a cópia do critério saiu: o número ou um trecho curto basta
-    expect(DELIVERY_FORMAT).toContain('não os copie');
+    expect(DELIVERY_FORMAT).toContain('não os copie nem os redigite');
     expect(DELIVERY_FORMAT).toContain('sem colar a saída');
-    expect(DELIVERY_FORMAT).toContain('a contagem (passaram e falharam)'); // a testsLine não traz a contagem quando passam: ela continua vindo da entrega
+    expect(DELIVERY_FORMAT).toContain('a contagem (passaram e falharam)'); // os testes do tema que o executor rodou além dos relacionados: o Club não os vê
     expect(DELIVERY_FORMAT).toContain('o caminho absoluto de cada um, com a hora');
     expect(DELIVERY_FORMAT).not.toMatch(/revisor/i); // a ficha do Codex não pode ter a palavra, e o texto vale para os dois motores
     expect(REQUIRED_PROOFS_LINE).toContain('cada item do critério pelo número, com feito, não feito ou parcial, sem copiar o texto');
     expect(REQUIRED_PROOFS_LINE).toContain('testes do tema com arquivos e contagem, sem a saída');
     expect(REQUIRED_PROOFS_LINE).toContain('caminho absoluto e hora de cada print quando o critério pedir');
+    expect(REQUIRED_PROOFS_LINE).toContain('O tsc e os testes relacionados aos arquivos alterados o Claudio’s Club roda e anexa ao pedido de revisão');
+    expect(REQUIRED_PROOFS_LINE).not.toContain('tsc em uma linha');
   });
 
   it('as 2 linhas do brief: escopo é orientação (helper/teste novo ligado à tarefa pode, com justificativa; fora do assunto, não) e premissa que não bate = DÚVIDA antes de implementar', () => {
@@ -58,6 +62,14 @@ describe('os textos fixos', () => {
     expect(REVIEW_RUBRIC).toContain('- Não reprova (no máximo 🟡 ou 🟢): prova que o critério não pede (se valer a pena, vira follow-up)');
     expect(REVIEW_RUBRIC).toContain('só escopo fora do assunto reprova');
     expect(REVIEW_RUBRIC).toContain('Na dúvida sobre a premissa do pedido (o código já é outro, o arquivo citado não existe), pergunte em vez de reprovar.');
+  });
+
+  it('a rubrica das provas do Club: não cobra do executor, só falha nova que toca a tarefa conta, o resto é no máximo 🟡, indisponível não reprova nem consome rodada', () => {
+    expect(REVIEW_RUBRIC).toContain('Provas do Claudio’s Club (tsc e testes relacionados, anexados ao pedido): o executor não as redigita, e a falta delas no relato dele não reprova.');
+    expect(REVIEW_RUBRIC).toContain('Só falha NOVA (que não já falhava na base) e que vem dos arquivos da tarefa conta contra a entrega');
+    expect(REVIEW_RUBRIC).toContain('erro de tsc ou falha de teste que já existia na base ou que não vem dos arquivos da tarefa é no máximo 🟡');
+    expect(REVIEW_RUBRIC).toContain('Prova marcada "indisponível" ou "não se aplica" não reprova e não consome rodada.');
+    expect(REVIEW_RUBRIC).not.toMatch(/revisor/i);
   });
 });
 
@@ -98,7 +110,7 @@ describe('o brief da tarefa (nos dois motores): começo, retomada na fila e hand
     // Nesta ordem, no fim do texto, depois do critério de aceite e da linha de cancelar.
     expect(text.indexOf(SCOPE_LINE)).toBeLessThan(text.indexOf(PREMISE_LINE));
     expect(text.indexOf(PREMISE_LINE)).toBeLessThan(text.indexOf(DELIVERY_FORMAT));
-    expect(text.trimEnd().endsWith('5. O que ficou de fora e por quê.')).toBe(true);
+    expect(text.trimEnd().endsWith('4. O que ficou de fora e por quê.')).toBe(true);
     expect(text).not.toContain('responda com um resumo curto do que foi feito e do que falta'); // o fim antigo saiu
   };
 

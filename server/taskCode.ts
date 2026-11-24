@@ -5,6 +5,7 @@ import type { TaskCode, TaskCodeFile, TestRun } from '../shared/model';
 import { cleanEnv } from './auth';
 import { killTree } from './chat/registry';
 import { HEAVY_HELD_ENV, withHeavyLock, type HeavyWaitFn } from './heavyQueue';
+import { recordSuite } from './proofBaseline';
 import { worktreeFor } from './staff/worktree';
 import { TestScan } from './testFailures';
 
@@ -188,7 +189,18 @@ export async function mergeCode(
     }
   });
   const sha = (await git(projectPath, ['rev-parse', '--short', 'HEAD'])).trim();
+  await rememberSuite(projectPath, tests);
   return { sha, base: code.base, branch: place.branch, tests };
+}
+
+/**
+ * Guarda a suíte completa da junção para o baseline das provas da entrega (ver proofBaseline.ts): a árvore testada é a do commit `rev` (o HEAD depois de a junção commitar). Nunca derruba a
+ * junção: a memória é só ganho de tempo.
+ */
+async function rememberSuite(projectPath: string, tests: TestRun | null, rev = 'HEAD'): Promise<void> {
+  if (!tests) return;
+  const sha = (await git(projectPath, ['rev-parse', '--verify', rev]).catch(() => '')).trim();
+  if (sha) await recordSuite(projectPath, sha, tests).catch(() => {});
 }
 
 /** Quantas vezes a junção do card refaz a atualização + os testes quando o principal anda no meio (commit do dono, outro card junto). Passou disso: erro passageiro, a retentativa refaz. */
@@ -296,7 +308,10 @@ async function mergeCard(
 
     // Já está no principal (nada a juntar): não há commit a criar.
     const inMain = await git(projectPath, ['merge-base', '--is-ancestor', tip, mainHead]).then(() => true, () => false);
-    if (inMain) return { sha: (await git(projectPath, ['rev-parse', '--short', mainHead])).trim(), base, branch, tests };
+    if (inMain) {
+      await rememberSuite(projectPath, tests, tip);
+      return { sha: (await git(projectPath, ['rev-parse', '--short', mainHead])).trim(), base, branch, tests };
+    }
     const tree = await parse(place.path, `${tip}^{tree}`);
     let joined: string;
     try {
@@ -311,6 +326,8 @@ async function mergeCard(
       }
       throw new CodeError(`não deu para juntar o card no principal: ${firstLine(text)}`);
     }
+    // A árvore do commit de junção é a da ponta do card (a que os testes viram).
+    await rememberSuite(projectPath, tests, joined);
     return { sha: (await git(projectPath, ['rev-parse', '--short', 'HEAD'])).trim(), base, branch, tests };
   }
   throw new CodeError('o principal andou durante os testes várias vezes seguidas: a junção tenta de novo');
@@ -381,12 +398,15 @@ export function timeoutNote(limitMs: number): string {
  * por si, mas espera a vez como a suíte, para não rodar por cima de outra validação pesada e piorar a carga que causou a falha. `onWait`: avisa quando a suíte começa e quando deixa
  * de esperar a vez (ver `HeavyWaitFn`), para o estado da fila do funcionário mostrar a espera.
  */
-export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS, queueAs = command, onWait?: HeavyWaitFn): Promise<TestRun> {
-  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + LEASE_MARGIN_MS, onWait });
+export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS, queueAs = command, onWait?: HeavyWaitFn, signal?: AbortSignal): Promise<TestRun> {
+  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held, signal), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + LEASE_MARGIN_MS, onWait, signal });
 }
 
-/** `held`: a chave da trava da fila que esta execução segura; vai no ambiente dela (ver `HEAVY_HELD_ENV`). */
-function spawnTests(dir: string, command: string, timeoutMs: number, held: string | null): Promise<TestRun> {
+/**
+ * `held`: a chave da trava da fila que esta execução segura; vai no ambiente dela (ver `HEAVY_HELD_ENV`). `signal`: abortado com a rodada em andamento, a árvore de processos sai e a rodada volta com
+ * `aborted` (e `ok: false`); abortado antes de rodar, não roda (ver `withHeavyLock`).
+ */
+function spawnTests(dir: string, command: string, timeoutMs: number, held: string | null, signal?: AbortSignal): Promise<TestRun> {
   const started = Date.now();
   return new Promise((resolve) => {
     let out = '';
@@ -404,17 +424,29 @@ function spawnTests(dir: string, command: string, timeoutMs: number, held: strin
     child.stdout.on('data', keep(0));
     child.stderr.on('data', keep(1));
     let cut = false;
-    const timer = setTimeout(() => {
-      cut = true;
+    let aborted = false;
+    const stop = () => {
       if (child.pid) void killTree(child.pid);
       else child.kill();
+    };
+    const timer = setTimeout(() => {
+      cut = true;
+      stop();
     }, timeoutMs);
+    const onAbort = () => {
+      aborted = true;
+      stop();
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       scan.end();
       const read = scan.result();
       // Cortada só se o corte valeu: a suíte que acabou limpa (código 0) no instante do corte passou.
-      const timedOut = cut && code !== 0;
+      const timedOut = cut && !aborted && code !== 0;
+      const abortedRun = aborted && code !== 0;
       const output = timedOut ? `${out.trim()}\n${timeoutNote(timeoutMs)}`.trim() : out.trim();
       resolve({
         command,
@@ -422,14 +454,20 @@ function spawnTests(dir: string, command: string, timeoutMs: number, held: strin
         output,
         ms: Date.now() - started,
         at: new Date().toISOString(),
+        ...(code !== null && { exitCode: code }),
         ...(read.files !== undefined && { files: read.files }),
+        ...(read.counts && { counts: read.counts }),
+        ...(read.failureIds && { failureIds: read.failureIds }),
+        ...(read.typeErrors && { typeErrors: read.typeErrors, typeErrorsTotal: read.typeErrorsTotal }),
         ...(code !== 0 && read.failedFiles && { failedFiles: read.failedFiles }),
         ...(timedOut && { timedOut: true, limitMs: timeoutMs }),
+        ...(abortedRun && { aborted: true }),
       });
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      resolve({ command, ok: false, output: err.message, ms: Date.now() - started, at: new Date().toISOString() });
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ command, ok: false, output: err.message, ms: Date.now() - started, at: new Date().toISOString(), spawnFailed: true });
     });
   });
 }

@@ -15,7 +15,18 @@ export const LOCK_FILE = 'heavy.lock';
 /** Trava que não dá para ler (ainda sendo escrita): vale por tanto tempo, depois é lixo. */
 const UNREADABLE_MS = 5_000;
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Espera `ms`; com `signal`, acaba antes se ele abortar (o timer sai junto, sem segurar o processo). */
+const sleep = (ms, signal) =>
+  new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
 
 /** O processo existe (o mesmo critério de server/chat/registry.ts). */
 export function pidAlive(pid) {
@@ -89,14 +100,16 @@ async function attempt(file, rec, now, alive) {
 /**
  * Espera a vez e pega a trava. `acquired: false` = passou de `maxWaitMs` (quem chama decide; o normal é seguir sem trava).
  * `key` identifica a chamada (quem pega solta com a mesma); `owner`, quem a pediu (uma conversa); `pid`, o processo que a segura
- * enquanto vale (morreu = órfã); `leaseMs`, o prazo.
+ * enquanto vale (morreu = órfã); `leaseMs`, o prazo. `signal`: quem pediu desistiu da vez; a espera acaba na hora com `acquired: false, aborted: true`
+ * (e a trava não é pega: quem chama não deve rodar nada).
  */
-export async function acquire({ dir, key, owner = null, pid, label = '', leaseMs, maxWaitMs, pollMs = 1_000, onWait, now = () => Date.now(), alive = pidAlive }) {
+export async function acquire({ dir, key, owner = null, pid, label = '', leaseMs, maxWaitMs, pollMs = 1_000, onWait, signal, now = () => Date.now(), alive = pidAlive }) {
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, LOCK_FILE);
   const started = now();
   let notified = false;
   for (;;) {
+    if (signal?.aborted) return { acquired: false, aborted: true, waitedMs: now() - started, holder: null };
     const at = now();
     const rec = { key, owner, pid, label: String(label).slice(0, 120), since: at, expiresAt: at + leaseMs };
     const holder = await attempt(file, rec, at, alive);
@@ -111,7 +124,7 @@ export async function acquire({ dir, key, owner = null, pid, label = '', leaseMs
       onWait?.(holder);
     }
     // Com folga aleatória (as esperas não batem juntas na trava), sem passar do limite de espera.
-    await sleep(Math.max(10, Math.min(pollMs + Math.random() * pollMs * 0.5, maxWaitMs - (now() - started))));
+    await sleep(Math.max(10, Math.min(pollMs + Math.random() * pollMs * 0.5, maxWaitMs - (now() - started))), signal);
   }
 }
 

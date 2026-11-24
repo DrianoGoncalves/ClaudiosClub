@@ -376,10 +376,20 @@ describe('tarefa pedida por um gestor', () => {
     const t = (await svc.create('p', { title: 'Botão', description: '', staffId: 'lu-1', reviewerId: null }, 'gio-1'))!;
     expect(t.requestedSession).toBe('s-gio-pediu');
     await svc.start('p', t.id);
+    // O arquivo que ela alterou: as provas da entrega rodam os testes relacionados a ele (não a suíte inteira).
+    await fs.mkdir(path.join(dir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'src', 'botao.ts'), 'export {};\n');
+    const file = path.join(dir, '.myco', 'tasks.json');
+    const all = JSON.parse(await fs.readFile(file, 'utf8')) as Array<Record<string, unknown>>;
+    all.find((x) => x.id === t.id)!.changedFiles = ['src/botao.ts'];
+    await fs.writeFile(file, JSON.stringify(all));
     await svc.onTurnDone('s-lu2');
-    expect(ran).toEqual([`${dir}|npm test`]);
-    expect(notified).toEqual([{ sessionId: 's-gio-pediu', text: expect.stringContaining('FALHARAM. Fim da saída:\nFAIL botao.test.ts') }]);
-    expect((await svc.list('p'))![0]!.tests).toMatchObject({ ok: false, command: 'npm test' });
+    const related = 'npx vitest related --run --passWithNoTests src/botao.ts';
+    expect(ran).toEqual([`${dir}|${related}`]);
+    // A saída não é a do vitest (sem falha lida): a prova fica indisponível e diz por quê, em vez de inventar falha.
+    expect(notified).toEqual([{ sessionId: 's-gio-pediu', text: expect.stringContaining('Testes relacionados aos arquivos alterados: INDISPONÍVEL') }]);
+    expect(notified[0]!.text).toContain('sem nenhuma falha de teste lida na saída');
+    expect((await svc.list('p'))![0]!.tests).toMatchObject({ ok: false, command: related });
   });
 
   it('pedida pela API com o token do gestor: a entrega volta para a conversa do token, não para a do turno', async () => {
@@ -1668,10 +1678,18 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
     const t = await make('Botão');
     expect(t).toMatchObject({ requestedBy: 'gio-1', reviewerId: 'gio-1' });
     await svc.start('p', t.id); // s-1 (Luana)
+    // O arquivo que ela alterou: as provas da entrega rodam os testes relacionados a ele.
+    const dir = path.join(root, 'self-entrega');
+    await fs.mkdir(path.join(dir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'src', 'botao.ts'), 'export {};\n');
+    const file = path.join(dir, '.myco', 'tasks.json');
+    const all = JSON.parse(await fs.readFile(file, 'utf8')) as Array<Record<string, unknown>>;
+    all.find((x) => x.id === t.id)!.changedFiles = ['src/botao.ts'];
+    await fs.writeFile(file, JSON.stringify(all));
     await svc.onTurnDone('s-1');
     expect(notified).toEqual([]);
     expect(sent.at(-1)).toMatchObject({ staffId: 'gio-1', session: 's-2' });
-    expect(sent.at(-1)!.text).toContain('passaram em 2 s. Não rode de novo.');
+    expect(sent.at(-1)!.text).toContain('(`npx vitest related --run --passWithNoTests src/botao.ts`, código de saída 0, 2 s)');
     expect(await current()).toMatchObject({ status: 'review', tests: { ok: true }, review: { staffId: 'gio-1', sessionId: 's-2' } });
   });
 

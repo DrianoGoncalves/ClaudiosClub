@@ -56,12 +56,34 @@ describe('TestScan: a lista vem da saída inteira', () => {
     scan.end();
     expect(scan.result()).toEqual({
       files: 4,
+      counts: { passed: 2, failed: 3, total: 5 },
+      // O id de cada falha: arquivo e caminho do teste; o arquivo que nem carregou vira `[carga]`.
+      failureIds: ['tests/b.test.ts [carga]', 'tests/a.test.ts > um', 'tests/a.test.ts > dois', 'tests/d.test.ts > g > falha > com seta'],
       failedFiles: [
         { file: 'tests/a.test.ts', failed: 2 },
         { file: 'tests/b.test.ts', failed: 1 },
         { file: 'tests/d.test.ts', failed: 1 },
       ],
     });
+  });
+
+  it('erros do tsc (sem cores, com cores e sem arquivo): o id não leva linha nem coluna; o mesmo erro repetido conta uma vez', () => {
+    const scan = new TestScan();
+    scan.feed(
+      [
+        'server/a.ts(12,5): error TS2322: Type \'string\' is not assignable to type \'number\'.',
+        '  Type continua na linha seguinte (indentada: não é erro novo)',
+        'server/a.ts(40,1): error TS2322: Type \'string\' is not assignable to type \'number\'.', // outra linha, o mesmo erro
+        '\u001b[96mclient/b.tsx\u001b[0m:3:9 - \u001b[91merror\u001b[0m\u001b[90m TS2304: \u001b[0mCannot find name \'x\'.',
+        'error TS5083: Cannot read file \'tsconfig.x.json\'.',
+        'Found 3 errors.',
+      ].join('\n') + '\n',
+    );
+    scan.end();
+    const read = scan.result();
+    expect(read.typeErrors).toEqual(["server/a.ts: TS2322 Type 'string' is not assignable to type 'number'.", "client/b.tsx: TS2304 Cannot find name 'x'.", "(projeto): TS5083 Cannot read file 'tsconfig.x.json'."]);
+    expect(read.typeErrorsTotal).toBe(3);
+    expect(read.failureIds).toBeUndefined(); // erro de tipos não vira falha de teste
   });
 
   it('pedaços que cortam a linha no meio, cores ANSI e o fim sem quebra de linha dão o mesmo resultado', () => {
@@ -322,7 +344,10 @@ describe('o pedido de revisão e o aviso ao gestor (TaskService)', () => {
     'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
   };
 
-  /** A tarefa da Ana pedida pela Giovana, que revisa o Rui; a suíte "roda" com `suite`, e a nova rodada com `again`. */
+  /**
+   * A tarefa da Ana pedida pela Giovana, que revisa o Rui; os testes RELACIONADOS (a rodada da entrega: ver deliveryProofs.ts) "rodam" com `suite`, e a nova rodada só dos arquivos que falharam com `again`.
+   * O projeto não tem tsconfig, nem git: o tsc é "não se aplica" e a base fica indisponível.
+   */
   async function flow(name: string, suite: TestRun, again: (command: string) => TestRun) {
     const dir = await project(name);
     const sent: string[] = [];
@@ -345,7 +370,7 @@ describe('o pedido de revisão e o aviso ao gestor (TaskService)', () => {
       apiUrl: 'http://127.0.0.1:4848',
       runTests: async (_cwd, command, timeoutMs, queueAs) => {
         ran.push({ command, timeoutMs, queueAs });
-        return command === 'npm test' ? suite : again(command);
+        return command.startsWith('npx vitest related') ? { ...suite, command } : again(command);
       },
     });
     const file = path.join(dir, '.myco', 'tasks.json');
@@ -357,77 +382,116 @@ describe('o pedido de revisão e o aviso ao gestor (TaskService)', () => {
     return { svc, sent, told, ran, id: t.id };
   }
 
-  const suite = run({
-    files: 187,
+  const RELATED = 'npx vitest related --run --passWithNoTests server/y.ts';
+  const red = run({
+    files: 5,
     output: 'fim da saída sem lista',
+    exitCode: 1,
+    counts: { passed: 2, failed: 3, total: 5 },
+    failureIds: ['tests/a.test.ts > um', 'tests/a.test.ts > dois', 'tests/c.test.ts > tres'],
     failedFiles: [
-      { file: 'tests/a.test.ts', failed: 3 },
-      { file: 'tests/c.test.ts', failed: 4 },
+      { file: 'tests/a.test.ts', failed: 2 },
+      { file: 'tests/c.test.ts', failed: 1 },
     ],
   });
-  const again = (command: string): TestRun => ({ command, ok: false, output: '', ms: 2000, at: '2026-11-19T12:02:00Z', files: 2, failedFiles: [{ file: 'tests/a.test.ts', failed: 3 }] });
+  /** A nova rodada só dos arquivos que falharam: o `a` falha de novo, o `c` passa sozinho. */
+  const again = (command: string): TestRun => ({ command, ok: false, output: '', ms: 2000, at: '2026-11-19T12:02:00Z', files: 2, failedFiles: [{ file: 'tests/a.test.ts', failed: 2 }] });
 
-  it('a entrega com a suíte vermelha roda a nova rodada só dos arquivos que falharam, e o pedido de revisão e o aviso ao gestor trazem a lista e o destaque', async () => {
-    const f = await flow('fluxo', suite, again);
+  it('os testes relacionados vermelhos: o pedido de revisão e o aviso ao gestor trazem comando, código de saída, contagem e cada falha marcada; só o que passa sozinho sai da conta', async () => {
+    const f = await flow('fluxo', red, again);
     await f.svc.onTurnDone('s-1');
-    expect(f.ran.map((r) => r.command)).toEqual(['npm test', 'npm test -- tests/a.test.ts tests/c.test.ts']);
+    // Só os relacionados aos arquivos da entrega (nunca a suíte inteira) e, uma vez, só os arquivos que falharam (a fila é a da suíte).
+    expect(f.ran.map((r) => r.command)).toEqual([RELATED, 'npm test -- tests/a.test.ts tests/c.test.ts']);
     expect(f.ran[1]).toMatchObject({ queueAs: 'npm test', timeoutMs: 180_000 });
 
     const review = f.sent.at(-1)!;
     expect(review).toContain('[Revisão da tarefa "Corrigir o X"]');
-    expect(review).toContain('FALHARAM. Não rode a suíte de novo');
-    expect(review).toContain('Arquivos com falha: 2 de 187 (7 falhas no total).');
-    expect(review).toContain('- `tests/a.test.ts`: 3 falhas na suíte; falha também isolado (3); ⚠ importa `server/y.ts` (direta ou indiretamente), que é desta entrega: confira primeiro');
-    expect(review).toContain('- `tests/c.test.ts`: 4 falhas na suíte; passa isolado');
+    expect(review).toContain('Provas geradas pelo Claudio’s Club para esta entrega');
+    expect(review).toContain('- Tipos (tsc): não se aplica (o projeto não tem script de tipos (typecheck, type-check, tsc) nem tsconfig com o tsc instalado).');
+    expect(review).toContain(`- Testes relacionados aos arquivos alterados (\`${RELATED}\`, código de saída 1,`);
+    expect(review).toContain('2 passaram, 3 falharam (de 5)');
+    // Sem git: a base não ficou disponível. A que toca a entrega (importa server/y.ts) é "confira"; a que passa sozinha não conta.
+    expect(review).toContain('- `tests/a.test.ts > um`: sem base para comparar, mas toca a entrega (importa `server/y.ts`): confira');
+    expect(review).toContain('- `tests/c.test.ts > tres`: passa sozinha (instável sob carga ou por ordem): não conta');
+    expect(review).not.toContain('INDISPONÍVEL'); // a prova de testes rodou
     expect(review).not.toContain('fim da saída sem lista'); // com a lista, o rabo da saída não aparece
-    expect(f.told.join('\n')).toContain('Arquivos com falha: 2 de 187'); // o gestor recebe o mesmo
+    expect(f.told.join('\n')).toContain('Testes relacionados aos arquivos alterados'); // o gestor recebe o mesmo
 
     const saved = (await f.svc.list('p'))![0]!;
-    expect(saved.tests?.isolated).toMatchObject({ command: 'npm test -- tests/a.test.ts tests/c.test.ts', files: [{ file: 'tests/a.test.ts', status: 'fail' }, { file: 'tests/c.test.ts', status: 'pass' }] });
+    expect(saved.proofs?.tests).toMatchObject({ status: 'ran', command: RELATED, exitCode: 1, counts: { passed: 2, failed: 3, total: 5 }, failuresTotal: 3 });
+    expect(saved.proofs?.tests.failures?.map((x) => [x.id, x.baseline, !!x.flaky])).toEqual([
+      ['tests/a.test.ts > dois', 'unknown', false],
+      ['tests/a.test.ts > um', 'unknown', false],
+      ['tests/c.test.ts > tres', 'unknown', true],
+    ]);
+    expect(saved.proofs?.typecheck).toEqual({ status: 'na', reason: 'o projeto não tem script de tipos (typecheck, type-check, tsc) nem tsconfig com o tsc instalado' });
+    expect(saved.tests).toMatchObject({ command: RELATED, ok: false }); // a tela segue lendo o último teste do card
   });
 
-  it('suíte verde: não há nova rodada; suíte vermelha sem lista (outro executor): o fim da saída, como era', async () => {
-    const green = await flow('verde', run({ ok: true, ms: 5000 }), again);
+  it('testes relacionados verdes: uma linha com comando, código de saída e contagem, sem nova rodada; sem lista lida, a prova não inventa falha', async () => {
+    const green = await flow('verde', run({ ok: true, ms: 5000, exitCode: 0, counts: { passed: 120, failed: 0, total: 120 } }), again);
     await green.svc.onTurnDone('s-1');
-    expect(green.ran.map((r) => r.command)).toEqual(['npm test']);
-    expect(green.sent.at(-1)).toContain('passaram em 5 s. Não rode de novo.');
+    expect(green.ran.map((r) => r.command)).toEqual([RELATED]);
+    expect(green.sent.at(-1)).toContain(`(\`${RELATED}\`, código de saída 0, 5 s): 120 passaram, 0 falharam (de 120).`);
 
-    const plain = await flow('sem-formato', run({ output: 'quebrou de um jeito que ninguém lê' }), again);
+    // O comando saiu com erro e a saída não é a do vitest: não há falha lida, e a prova não finge uma (fica indisponível, e diz por quê).
+    const plain = await flow('sem-formato', run({ output: 'quebrou de um jeito que ninguém lê', exitCode: 1 }), again);
     await plain.svc.onTurnDone('s-1');
-    expect(plain.ran.map((r) => r.command)).toEqual(['npm test']);
-    expect(plain.sent.at(-1)).toContain('FALHARAM. Fim da saída:\nquebrou de um jeito que ninguém lê');
+    expect(plain.ran.map((r) => r.command)).toEqual([RELATED]);
+    expect(plain.sent.at(-1)).toContain('INDISPONÍVEL');
+    expect(plain.sent.at(-1)).toContain('o comando terminou com código 1 sem nenhuma falha de teste lida na saída');
+    expect(plain.sent.at(-1)).toContain('NÃO é motivo de reprovação e não consome rodada');
+    expect((await plain.svc.list('p'))![0]!.status).toBe('review'); // a revisão segue
   });
 
-  it('suíte cortada no tempo-limite: o pedido de revisão e o aviso ao gestor dizem TEMPO ESGOTADO (não FALHARAM) e o card guarda a marca', async () => {
-    const f = await flow('tempo-esgotado', run({ ms: 1_800_000, output: 'cortada', timedOut: true, limitMs: 1_800_000 }), again);
+  it('tempo estourado: a prova fica INDISPONÍVEL (não é falha de teste) e a revisão é pedida do mesmo jeito', async () => {
+    const f = await flow('tempo-esgotado', run({ ms: 600_000, output: 'cortada', timedOut: true, limitMs: 600_000 }), again);
     await f.svc.onTurnDone('s-1');
-    expect(f.ran.map((r) => r.command)).toEqual(['npm test']); // sem lista de falhas: não há o que rodar de novo
+    expect(f.ran.map((r) => r.command)).toEqual([RELATED]); // sem lista de falhas: não há o que rodar de novo
     for (const text of [f.sent.at(-1)!, f.told.join('\n')]) {
-      expect(text).toContain('TEMPO ESGOTADO, cortados aos 30 min sem terminar');
-      expect(text).toContain('Isto NÃO é falha de teste');
+      expect(text).toContain('INDISPONÍVEL');
+      expect(text).toContain('tempo esgotado: cortado aos 10 min; não diz nada sobre o código');
       expect(text).not.toContain('FALHARAM');
     }
-    expect((await f.svc.list('p'))![0]!.tests).toMatchObject({ ok: false, timedOut: true, limitMs: 1_800_000 });
+    const saved = (await f.svc.list('p'))![0]!;
+    expect(saved.status).toBe('review');
+    expect(saved.review?.staffId).toBe('rev-1');
+    expect(saved.proofs?.tests).toMatchObject({ status: 'unavailable', command: RELATED });
+    expect(saved.tests).toMatchObject({ ok: false, timedOut: true, limitMs: 600_000 });
   });
 
-  it('cortada no tempo-limite depois de alguns arquivos já terem falhado: o aviso diz as duas coisas, sem chamar a rodada de falha', async () => {
-    const f = await flow('tempo-esgotado-lista', run({ ms: 1_800_000, timedOut: true, limitMs: 1_800_000, files: undefined, failedFiles: [{ file: 'tests/a.test.ts', failed: 3 }] }), again);
-    await f.svc.onTurnDone('s-1');
-    const review = f.sent.at(-1)!;
-    expect(review).toContain('TEMPO ESGOTADO');
-    expect(review).toContain('Antes do corte, estes arquivos já tinham falhado:');
-    expect(review).toContain('Arquivos com falha: 1');
-    expect(review).not.toContain('FALHARAM');
-  });
-
-  it('a nova rodada que dá erro não derruba a entrega: o pedido sai com a lista da suíte', async () => {
-    const f = await flow('erro-rodada', suite, () => {
-      throw new Error('sem rede');
+  it('o comando que quebra (a rodada lança): a prova fica INDISPONÍVEL com o motivo, e a entrega não cai', async () => {
+    const dir = await project('quebrou');
+    const sent: string[] = [];
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, _staff, text) => (sent.push(text), `s-${sent.length}`),
+      sendTo: async (_p, session) => session,
+      branchFor: async () => null,
+      isWorking: () => false,
+      isSessionWorking: () => false,
+      lastText: () => 'Pronto.',
+      notify: async () => {},
+      hasAsk: () => false,
+      answerAsk: () => false,
+      awaitingLimit: async () => false,
+      apiUrl: 'http://127.0.0.1:4848',
+      runTests: async () => {
+        throw new Error('sem rede');
+      },
     });
-    await f.svc.onTurnDone('s-1');
-    const review = f.sent.at(-1)!;
-    expect(review).toContain('Arquivos com falha: 2 de 187');
-    expect(review).toContain('Nova rodada só desses arquivos não feita: a nova rodada não rodou: sem rede.');
-    expect((await f.svc.list('p'))![0]!.status).toBe('review');
+    const t = (await svc.create('p', { title: 'Corrigir o X', description: 'Pedido', acceptance: 'O X funciona.', staffId: 'ana-1', reviewerId: 'rev-1' }, 'gio-1'))!;
+    await svc.start('p', t.id);
+    const file = path.join(dir, '.myco', 'tasks.json');
+    const all = JSON.parse(await fs.readFile(file, 'utf8')) as Array<Record<string, unknown>>;
+    all.find((x) => x.id === t.id)!.changedFiles = ['server/y.ts'];
+    await fs.writeFile(file, JSON.stringify(all));
+    await svc.onTurnDone('s-1');
+    const review = sent.at(-1)!;
+    expect(review).toContain('INDISPONÍVEL');
+    expect(review).toContain('o comando não rodou: sem rede');
+    expect((await svc.list('p'))![0]!.status).toBe('review');
   });
 });

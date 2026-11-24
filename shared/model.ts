@@ -1029,6 +1029,8 @@ export interface Task {
   codeAt?: { where: 'worktree' | 'project'; branch: string | null; path?: string; card?: true; port?: number; base?: string | null; why?: string; cleanup?: { reason: string; since: string } };
   /** Último teste rodado pelo Claudio’s Club para esta tarefa. */
   tests?: TestRun | null;
+  /** As provas que o Claudio’s Club gerou na última entrega (tsc e testes relacionados, com baseline); só o servidor grava. Ver `DeliveryProofs`. */
+  proofs?: DeliveryProofs;
   /** Segunda opinião do Codex sobre o diff (Markdown), quando você pediu. */
   secondOpinion?: { at: string; text: string } | null;
   /** Gestor (funcionário) que pediu a tarefa pela API; recebe o resumo quando ela é entregue. */
@@ -1795,6 +1797,73 @@ export interface TestRun {
   timedOut?: boolean;
   /** O tempo-limite que valia, em ms; vem junto com `timedOut`. */
   limitMs?: number;
+  /** O código de saída do comando (ausente se ele foi morto por sinal ou nem abriu). */
+  exitCode?: number;
+  /** As linhas "Tests" do vitest: quantos testes passaram, falharam e o total; ausente se a saída não é a do vitest. */
+  counts?: TestCounts;
+  /** Um id por falha (`arquivo > suíte > teste`), lido da saída inteira; é o que o baseline compara. Ausente sem falha lida. */
+  failureIds?: string[];
+  /** Os erros do tsc lidos da saída inteira (`arquivo: TS1234 mensagem`, sem a linha), e quantos eram (a lista tem teto); ausentes sem erro do tsc na saída. */
+  typeErrors?: string[];
+  typeErrorsTotal?: number;
+  /** A rodada foi cancelada (o orçamento das provas acabou) com o comando em andamento: não diz nada sobre o código. */
+  aborted?: boolean;
+  /** O comando não abriu (erro do sistema): `output` é a mensagem do erro. */
+  spawnFailed?: boolean;
+}
+
+export interface TestCounts {
+  passed: number;
+  failed: number;
+  total: number;
+}
+
+/** Como uma prova ficou: `ran` rodou (passou ou falhou); `na` não se aplica ao projeto ou à entrega (`reason`); `unavailable` não deu para provar (tempo, fila, comando quebrado; `reason`). */
+export type ProofStatus = 'ran' | 'na' | 'unavailable';
+
+/** Falha de uma prova contra a base: `new` só aparece nesta entrega; `base` já falhava na base; `unknown` a base não ficou disponível. */
+export type ProofBaseline = 'new' | 'base' | 'unknown';
+
+export interface ProofFailure {
+  /** teste: `arquivo > suíte > teste`; tsc: `arquivo: TS1234 mensagem` (sem a linha). */
+  id: string;
+  /** O arquivo da falha (o de teste, ou o do erro do tsc). */
+  file: string;
+  baseline: ProofBaseline;
+  /** Em `new`/`unknown`: o arquivo da entrega que o arquivo da falha é ou importa; ausente = não vem dos arquivos da tarefa. */
+  touches?: string;
+  /** Só em teste: o arquivo passa quando roda sozinho (instável sob carga ou por ordem); não conta contra a entrega. */
+  flaky?: boolean;
+}
+
+export interface DeliveryProof {
+  status: ProofStatus;
+  /** O comando que o Club rodou (só em `ran`/`unavailable` depois de montado). */
+  command?: string;
+  exitCode?: number;
+  ms?: number;
+  /** Contagem de testes (só nos testes, e só com a saída do vitest). */
+  counts?: TestCounts;
+  /** Quantos erros o tsc deu (só no tsc que rodou e falhou). */
+  errors?: number;
+  /** As falhas lidas, até `PROOF_FAILURES_MAX`; `failuresTotal` é quantas eram. */
+  failures?: ProofFailure[];
+  failuresTotal?: number;
+  /** O fim da saída quando não há lista (outro executor, saída que não deu para ler). */
+  tail?: string;
+  /** `na`: por que não se aplica; `unavailable`: por que não deu para provar. */
+  reason?: string;
+  /** O commit da base contra o qual as falhas foram comparadas; ausente = sem comparação (sem falha, ou base indisponível). */
+  baseSha?: string;
+  /** De onde veio o baseline: `suite` = a última suíte completa no mesmo sha, `checkout` = rodada num checkout destacado, `cache` = rodada anterior de só estes arquivos. */
+  baseFrom?: 'suite' | 'checkout' | 'cache';
+}
+
+/** As provas da entrega: a hora em que foram geradas (comparada com `delivery.at` para saber se são desta entrega). */
+export interface DeliveryProofs {
+  at: string;
+  typecheck: DeliveryProof;
+  tests: DeliveryProof;
 }
 
 export interface TestFailedFile {

@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { TestFailedFile, TestIsolatedFile, TestIsolation, TestRun } from '../shared/model';
+import type { TestCounts, TestFailedFile, TestIsolatedFile, TestIsolation, TestRun } from '../shared/model';
 import { isHeavyCommand } from '../scripts/hooks/heavy-lock.mjs';
 
 // As falhas da suíte para o pedido de revisão: quais arquivos de teste falharam (e quantas falhas cada um), se passam ao rodar de novo só eles, e quais
@@ -24,7 +24,14 @@ const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const FAIL_LINE = /^\s*FAIL\s+(\S+)(?:\s+>|\s+\[|\s*$)/;
 /** ` Test Files  3 failed | 1 passed (4)`. */
 const FILES_LINE = /^\s*Test Files\s.*\((\d+)\)\s*$/;
+/** `      Tests  3 failed | 2 passed (5)`. */
+const TESTS_LINE = /^\s*Tests\s+(.*)\((\d+)\)\s*$/;
+/** Erro do tsc: `src/a.ts(12,5): error TS2322: msg` (saída sem cores), `src/a.ts:12:5 - error TS2322: msg` (com cores) ou, sem arquivo, `error TS5083: msg`. */
+const TS_LINE = /^(?:(\S.*?)(?:\(\d+,\d+\)|:\d+:\d+)\s*[:-]\s+)?error\s+(TS\d+):\s+(.*\S)\s*$/;
 const SOURCE = /\.[cm]?[jt]sx?$/;
+/** Quantos ids de falha a leitura guarda, e o tamanho de cada um: o baseline compara ids, e a saída de uma suíte quebrada pode ter milhares. */
+export const IDS_MAX = 500;
+const ID_MAX = 300;
 
 /** Caminho de arquivo de teste que vale: relativo ao projeto, sem `..`, só caracteres de caminho e sem hífen no começo. Vai para a linha de comando da nova rodada. */
 export function testFileOf(name: string): string | null {
@@ -39,7 +46,11 @@ export function testFileOf(name: string): string | null {
 export class TestScan {
   private readonly rest = ['', ''];
   private readonly failed = new Map<string, number>();
+  private readonly ids = new Set<string>();
+  private readonly typeIds = new Set<string>();
+  private typeTotal = 0;
   private total: number | null = null;
+  private counts: TestCounts | null = null;
 
   feed(chunk: string, stream: 0 | 1 = 0): void {
     const lines = (this.rest[stream]! + chunk).split(/\r?\n/);
@@ -61,17 +72,46 @@ export class TestScan {
     const fail = FAIL_LINE.exec(text);
     if (fail) {
       const file = testFileOf(fail[1]!);
-      if (file) this.failed.set(file, (this.failed.get(file) ?? 0) + 1);
+      if (file) {
+        this.failed.set(file, (this.failed.get(file) ?? 0) + 1);
+        // O id da falha: o arquivo e o caminho do teste (`arquivo > suíte > teste`); o arquivo que nem carregou vira `arquivo [carga]`.
+        const rest = text.replace(/^\s*FAIL\s+/, '').trim();
+        if (this.ids.size < IDS_MAX) this.ids.add((/^\S+\s+\[/.test(rest) ? `${file} [carga]` : rest).slice(0, ID_MAX));
+      }
       return;
     }
     const files = FILES_LINE.exec(text);
-    if (files) this.total = Number(files[1]);
+    if (files) {
+      this.total = Number(files[1]);
+      return;
+    }
+    const tests = TESTS_LINE.exec(text);
+    if (tests) {
+      const n = (word: string) => Number(new RegExp(`(\\d+)\\s+${word}\\b`).exec(tests[1]!)?.[1] ?? 0);
+      this.counts = { passed: n('passed'), failed: n('failed'), total: Number(tests[2]) };
+      return;
+    }
+    const ts = TS_LINE.exec(text);
+    if (ts) {
+      // O id não leva a linha nem a coluna (mudam com qualquer edição acima do erro): o mesmo erro no mesmo arquivo é o mesmo id.
+      const id = `${(ts[1] ?? '(projeto)').replace(/\\/g, '/')}: ${ts[2]} ${ts[3]}`.slice(0, ID_MAX);
+      if (!this.typeIds.has(id)) {
+        this.typeTotal++;
+        if (this.typeIds.size < IDS_MAX) this.typeIds.add(id);
+      }
+    }
   }
 
-  /** `failedFiles` só vem com falha lida; `files` só com a linha do vitest. Mais falhas primeiro. */
-  result(): { files?: number; failedFiles?: TestFailedFile[] } {
+  /** `failedFiles` só vem com falha lida; `files` e `counts` só com as linhas do vitest; `typeErrors`, com erro do tsc lido. Mais falhas primeiro. */
+  result(): { files?: number; counts?: TestCounts; failureIds?: string[]; failedFiles?: TestFailedFile[]; typeErrors?: string[]; typeErrorsTotal?: number } {
     const failedFiles = [...this.failed].map(([file, failed]) => ({ file, failed })).sort((a, b) => b.failed - a.failed || a.file.localeCompare(b.file));
-    return { ...(this.total !== null && { files: this.total }), ...(failedFiles.length && { failedFiles }) };
+    return {
+      ...(this.total !== null && { files: this.total }),
+      ...(this.counts && { counts: this.counts }),
+      ...(this.ids.size && { failureIds: [...this.ids] }),
+      ...(failedFiles.length && { failedFiles }),
+      ...(this.typeIds.size && { typeErrors: [...this.typeIds], typeErrorsTotal: this.typeTotal }),
+    };
   }
 }
 
@@ -96,12 +136,13 @@ const isFile = (p: string) => fs.stat(p).then((s) => s.isFile(), () => false);
  * Roda de novo UMA vez só os arquivos que falharam (até `ISOLATED_MAX`), sem a suíte inteira e sem a suíte no HEAD: o custo de uma nova rodada. Diz, por arquivo, se passa
  * isolado (instável na suíte inteira: carga ou ordem) ou falha de novo, e neste caso se ele é ou importa algo da entrega (`delivered`, os arquivos que a tarefa alterou).
  * Sem lista de falhas (outro executor) ou com a suíte que passou: undefined. Rodar não é possível (`test` do projeto não é o vitest simples, arquivo sumiu, a rodada caiu): devolve o motivo.
+ * `projectCommand`: o comando de testes do projeto quando `run` não é ele (a rodada dos relacionados, ver deliveryProofs.ts): é ele que decide se dá para rodar só os arquivos e a fila da nova rodada.
  */
-export async function isolateFailures(dir: string, run: TestRun, delivered: string[], rerun: Rerun): Promise<TestIsolation | undefined> {
+export async function isolateFailures(dir: string, run: TestRun, delivered: string[], rerun: Rerun, projectCommand = run.command): Promise<TestIsolation | undefined> {
   const failed = run.failedFiles;
   if (run.ok || !failed?.length) return undefined;
   const unknown = (): TestIsolatedFile[] => failed.map((f) => ({ file: f.file, failed: f.failed, status: 'unknown' }));
-  if (!(await plainVitest(dir, run.command))) return { skipped: 'o comando de testes do projeto não é `npm test` com `vitest run`: não dá para rodar só os arquivos que falharam', files: unknown() };
+  if (!(await plainVitest(dir, projectCommand))) return { skipped: 'o comando de testes do projeto não é `npm test` com `vitest run`: não dá para rodar só os arquivos que falharam', files: unknown() };
 
   const runnable: TestFailedFile[] = [];
   for (const f of failed) {
@@ -115,7 +156,7 @@ export async function isolateFailures(dir: string, run: TestRun, delivered: stri
 
   let again: TestRun;
   try {
-    again = await rerun(dir, command, ISOLATED_TIMEOUT_MS, run.command);
+    again = await rerun(dir, command, ISOLATED_TIMEOUT_MS, projectCommand);
   } catch (err) {
     return { skipped: `a nova rodada não rodou: ${err instanceof Error ? err.message : String(err)}`, files: unknown() };
   }
@@ -146,7 +187,7 @@ const IMPORT = /(?:\bfrom|\bimport|\brequire|\bmock|\bimportActual)\s*\(?\s*['"]
  * Os arquivos do projeto que um teste importa, direta ou indiretamente (só importação relativa, até `IMPORT_DEPTH` níveis e `IMPORT_FILES_MAX` arquivos): se algum é da entrega, o
  * teste a exercita. O próprio teste da entrega também conta. Leitura de cada arquivo uma vez só por chamada de `isolateFailures`.
  */
-function importGraph(dir: string): { reaches: (testFile: string, delivered: string[]) => Promise<string | null> } {
+export function importGraph(dir: string): { reaches: (testFile: string, delivered: string[]) => Promise<string | null> } {
   const specs = new Map<string, string[]>();
   const readSpecs = async (abs: string): Promise<string[]> => {
     const known = specs.get(abs);

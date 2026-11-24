@@ -128,7 +128,7 @@ async function create(projectPath: string, taskId: string, git: GitRun): Promise
 }
 
 /** Liga por junção as dependências que o projeto tem e o git ignora. O que falhar fica de fora (o card instala por conta própria): nunca derruba a criação. Devolve os nomes ligados. */
-async function linkDeps(projectPath: string, wtPath: string, git: GitRun): Promise<string[]> {
+export async function linkDeps(projectPath: string, wtPath: string, git: GitRun): Promise<string[]> {
   const linked: string[] = [];
   for (const name of LINKED_DEPS) {
     const src = path.join(projectPath, name);
@@ -176,7 +176,7 @@ async function findLinks(root: string): Promise<{ links: string[]; complete: boo
 }
 
 /** Remove cada link (sem seguir): `rmdir` apaga a junção sem tocar no destino; `unlink` cobre o link simbólico de arquivo. Confere que sumiram. */
-async function unlinkAll(root: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+export async function unlinkAll(root: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   const { links, complete } = await findLinks(root);
   if (!complete) return { ok: false, reason: 'a pasta tem arquivos demais para conferir se há junções nela' };
   for (const link of links) {
