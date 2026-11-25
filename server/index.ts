@@ -701,6 +701,8 @@ const tasks = new TaskService({
   // Aviso da plataforma (pedido de cancelamento ao responsável): não conta como resposta sua nem tira o "continue" agendado.
   sendNotice: (projectId, sessionId, staffId, text) => chats.sendNotice(projectId, sessionId, staffId, text),
   secondOpinion: (input) => codex.review(input),
+  // O Codex está ligado nas configurações? O revisor que roda nele com o Codex desligado revisa no Claude (ver tasks.ts, `requestReview`).
+  codexOn: async () => (await readConfig()).codexReview,
   // Turno que parou no limite de uso, com o "continue" agendado, não é entrega.
   // Também com despertador marcado: o funcionário ainda está acompanhando algo, não entregou.
   awaitingLimit: async (sessionId) => (await chats.awaitingLimit(sessionId)) || !!(await wakeups.get(sessionId)),
@@ -2064,6 +2066,13 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/plan$`),
     ({ params: [id, taskId], body, fromBrowser, caller }) => tasks.decidePlan(id!, taskId!, caller, fromBrowser, body),
+  ],
+  // Limite de revisões automáticas (`Task.capWait`): quem pediu o card (o usuário pelo Claudio’s Club, o gestor com o token da conversa dele) aceita com trade-off, reabre com instrução nova ou cancela.
+  // Corpo: `{ decision: 'accept', justification }`, `{ decision: 'reopen', instruction }` ou `{ decision: 'cancel', reason }`. 403 para o responsável e os outros, 409 sem o limite esperando decisão.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/review-limit$`),
+    ({ params: [id, taskId], body, fromBrowser, caller }) => tasks.decideCap(id!, taskId!, caller, fromBrowser, body),
   ],
   // Desligada nas configurações: nem procura o `codex` (nenhum processo é aberto).
   [

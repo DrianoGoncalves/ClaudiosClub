@@ -17,6 +17,15 @@ export function tarefaMcpOn(profile: Pick<StaffProfile, 'engine' | 'mcpAccess'> 
 }
 
 /**
+ * A mesma frase para a decisão do limite de revisões (`tarefa_decidir_limite`: `tarefa`, `decisao` e `texto`): `decisao` é aceitar, reabrir ou cancelar, e `texto`, o que cada uma pede
+ * (justificativa, instrução, motivo). Sem a ferramenta, só o curl.
+ */
+export function limitWith(use: boolean, taskId: string, decisao: 'aceitar' | 'reabrir' | 'cancelar', texto: string, curl: string): string {
+  if (!use) return `com \`${curl}\``;
+  return `com a ferramenta \`${tarefaToolName('tarefa_decidir_limite')}\` (\`tarefa\`: \`${taskId}\`, \`decisao\`: \`${decisao}\`, \`texto\`: ${texto}); se ela faltar ou falhar, use o curl \`${curl}\``;
+}
+
+/**
  * "com a ferramenta `mcp__myco-tarefa__…` (tarefa, motivo)" seguido do curl como alternativa (`curlNote`: a frase que acompanha o curl, ex.: o token e as aspas), ou
  * só "com `curl`" quando a ferramenta não vale (Codex, acesso desligado, conversa sem o MCP). `use`: o MCP chega a quem vai ler (ver `tarefaMcpOn`).
  */

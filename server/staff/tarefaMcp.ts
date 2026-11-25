@@ -7,14 +7,15 @@ import { ROOT } from '../root';
 
 // MCP de tarefa do Claudio’s Club: um servidor stdio (JSON-RPC por linha) que a conversa do Claude sobe para cancelar uma tarefa sem passar pelo terminal. O curl
 // para `.../tasks/<id>/cancel` é negado como "destrutivo" pelo classificador do modo auto (e vira pedido de permissão nos outros modos), e o card que todos
-// concordam em cancelar ficava preso. Este MCP é só OUTRO CAMINHO para as MESMAS rotas HTTP (`cancel`, `cancel-request`, `cancel-request/refuse`), com o
+// concordam em cancelar ficava preso. Este MCP é só OUTRO CAMINHO para as MESMAS rotas HTTP (`cancel`, `cancel-request`, `cancel-request/refuse` e `review-limit`,
+// a decisão de quem pediu quando a tarefa bate o limite de revisões automáticas, que também pode cancelar), com o
 // `MYCO_TOKEN` da própria conversa: quem decide é o servidor (token, quem pediu, responsável atual, pedido pending, coluna), e o erro dele (403, 409…) volta
 // como está. O MCP não escolhe quem é: o token sai do ambiente que o Club deu à conversa, nunca do modelo nem da linha de comando.
 //
 // Sem o SDK oficial de propósito (ver ftpMcp.ts): o protocolo usado é pequeno: initialize, ping, tools/list e tools/call.
 
 export { TAREFA_MCP_NAME };
-export const TAREFA_TOOLS = ['tarefa_cancelar', 'tarefa_pedir_cancelamento', 'tarefa_recusar_cancelamento'] as const;
+export const TAREFA_TOOLS = ['tarefa_cancelar', 'tarefa_pedir_cancelamento', 'tarefa_recusar_cancelamento', 'tarefa_decidir_limite'] as const;
 export type TarefaTool = (typeof TAREFA_TOOLS)[number];
 
 const VERSION = '1.0.0';
@@ -39,7 +40,17 @@ const ROUTE: Record<TarefaTool, { path: string; what: string }> = {
   tarefa_cancelar: { path: 'cancel', what: 'do cancelamento' },
   tarefa_pedir_cancelamento: { path: 'cancel-request', what: 'do pedido de cancelamento' },
   tarefa_recusar_cancelamento: { path: 'cancel-request/refuse', what: 'da recusa' },
+  tarefa_decidir_limite: { path: 'review-limit', what: 'da decisão' },
 };
+
+/** As decisões do limite de revisões (`decisao`), o valor que a rota espera e o campo do texto que ela exige em cada uma. */
+const LIMIT_DECISIONS = {
+  aceitar: { decision: 'accept', field: 'justification', what: 'a justificativa de aceitar o que sobrou' },
+  reabrir: { decision: 'reopen', field: 'instruction', what: 'a instrução nova para o responsável' },
+  cancelar: { decision: 'cancel', field: 'reason', what: 'o motivo do cancelamento' },
+} as const;
+type LimitDecision = keyof typeof LIMIT_DECISIONS;
+const isLimitDecision = (v: unknown): v is LimitDecision => typeof v === 'string' && Object.hasOwn(LIMIT_DECISIONS, v);
 
 export interface TarefaMcpOptions {
   /** Endereço do Claudio’s Club (http://127.0.0.1:<porta>): vem da linha de comando montada pelo Club. Só loopback: o token nunca sai da máquina. */
@@ -69,13 +80,22 @@ function apiBase(api: string): string {
 }
 
 /** O que a resposta de sucesso diz da tarefa, numa linha (nunca a tarefa inteira). */
-function summaryOf(tool: TarefaTool, id: string, body: unknown): string {
+function summaryOf(tool: TarefaTool, id: string, body: unknown, decision?: LimitDecision): string {
   const raw = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
   const t = (raw.task && typeof raw.task === 'object' ? raw.task : raw) as { status?: unknown; cancelRequest?: { status?: unknown } };
   const status = typeof t.status === 'string' ? t.status : '?';
   const cr = typeof t.cancelRequest?.status === 'string' ? t.cancelRequest.status : null;
-  const head = { tarefa_cancelar: 'cancelada', tarefa_pedir_cancelamento: 'pedido de cancelamento enviado', tarefa_recusar_cancelamento: 'recusa gravada' }[tool];
+  const limit = { aceitar: 'limite de revisões: aceita com trade-off', reabrir: 'limite de revisões: reaberta com a sua instrução', cancelar: 'limite de revisões: cancelada' }[decision ?? 'cancelar'];
+  const head = { tarefa_cancelar: 'cancelada', tarefa_pedir_cancelamento: 'pedido de cancelamento enviado', tarefa_recusar_cancelamento: 'recusa gravada', tarefa_decidir_limite: limit }[tool];
   return `${head}: ${id} (status ${status}${cr ? `; pedido de cancelamento ${cr}` : ''})`;
+}
+
+/** Um texto livre da chamada (motivo, justificativa, instrução): não vazio, até `REASON_MAX` e sem caractere de controle. `field` é o nome do argumento, para a mensagem. */
+function textOf(value: unknown, field: string, what: string): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) throw new TarefaError(`informe ${what} (\`${field}\`${field === 'motivo' ? ', em uma frase' : ''})`);
+  if (text.length > REASON_MAX || CONTROL.test(text)) throw new TarefaError(`${what} passa de ${REASON_MAX} caracteres ou tem caractere de controle`);
+  return text;
 }
 
 export function createTarefaMcp(opts: TarefaMcpOptions) {
@@ -89,9 +109,15 @@ export function createTarefaMcp(opts: TarefaMcpOptions) {
   async function run(tool: TarefaTool, args: Record<string, unknown>): Promise<string> {
     const id = typeof args.tarefa === 'string' ? args.tarefa.trim() : '';
     if (!SAFE_ID.test(id) || id.length > 40) throw new TarefaError('informe o id da tarefa (`tarefa`, o id que o aviso mostra, como t-1a2b3c)');
-    const reason = typeof args.motivo === 'string' ? args.motivo.trim() : '';
-    if (!reason) throw new TarefaError(`informe o motivo ${ROUTE[tool].what} (\`motivo\`, em uma frase)`);
-    if (reason.length > REASON_MAX || CONTROL.test(reason)) throw new TarefaError(`o motivo ${ROUTE[tool].what} passa de ${REASON_MAX} caracteres ou tem caractere de controle`);
+    // O limite de revisões leva a decisão e o texto que ela pede (`LIMIT_DECISIONS`); as outras três levam só o motivo.
+    let decision: LimitDecision | undefined;
+    let payload: Record<string, string>;
+    if (tool === 'tarefa_decidir_limite') {
+      if (!isLimitDecision(args.decisao)) throw new TarefaError('informe a decisão (`decisao`: aceitar, reabrir ou cancelar)');
+      decision = args.decisao;
+      const d = LIMIT_DECISIONS[decision];
+      payload = { decision: d.decision, [d.field]: textOf(args.texto, 'texto', d.what) };
+    } else payload = { reason: textOf(args.motivo, 'motivo', `o motivo ${ROUTE[tool].what}`) };
     const token = tokenOf();
     if (!token) throw new TarefaError('esta conversa não tem MYCO_TOKEN no ambiente do MCP: use o curl da ficha, com $MYCO_TOKEN');
     const url = `${base}/api/projects/${opts.projectId}/tasks/${id}/${ROUTE[tool].path}`;
@@ -101,7 +127,7 @@ export function createTarefaMcp(opts: TarefaMcpOptions) {
         res = await doFetch(url, {
           method: 'POST',
           headers: { 'x-myco': '1', 'x-myco-token': token, 'content-type': 'application/json' },
-          body: JSON.stringify({ reason }),
+          body: JSON.stringify(payload),
           signal: AbortSignal.timeout(timeoutMs),
           redirect: 'error',
         });
@@ -121,7 +147,7 @@ export function createTarefaMcp(opts: TarefaMcpOptions) {
       } catch {
         // resposta que não é JSON: só o status vale
       }
-      if (res.ok) return summaryOf(tool, id, body);
+      if (res.ok) return summaryOf(tool, id, body, decision);
       if (res.status === 503 && attempt < BUSY_RETRIES) {
         await new Promise((r) => setTimeout(r, busyWait));
         continue;
@@ -162,7 +188,7 @@ export function createTarefaMcp(opts: TarefaMcpOptions) {
           protocolVersion: typeof asked === 'string' && PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: TAREFA_MCP_NAME, version: VERSION },
-          instructions: 'Cancela a tarefa que é sua (ou que você pediu e nunca começou), pede o cancelamento de uma que você pediu e já começou, ou recusa um pedido de cancelamento. O Claudio’s Club confere quem você é; o erro dele volta como está.',
+          instructions: 'Cancela a tarefa que é sua (ou que você pediu e nunca começou), pede o cancelamento de uma que você pediu e já começou, recusa um pedido de cancelamento, ou decide a tarefa que você pediu e bateu o limite de revisões automáticas. O Claudio’s Club confere quem você é; o erro dele volta como está.',
         });
       }
       case 'ping':
@@ -212,6 +238,21 @@ export const TOOLS = [
       'Recusa o pedido de cancelamento de uma tarefa que você faz (responsável atual, pela conversa dela), dizendo por quê; quem pediu é avisado e a tarefa segue. Só vale com um pedido esperando decisão (409 sem ele). É a mesma rota que o curl `POST .../tasks/<id>/cancel-request/refuse`.',
     inputSchema: ARGS,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: 'tarefa_decidir_limite',
+    description:
+      'Decide uma tarefa que VOCÊ PEDIU e que bateu o limite de revisões automáticas (o aviso "limite de 3 revisões" a trouxe). `decisao`: "aceitar" = aceita o que sobrou como trade-off (o card grava os 🔴 abertos, a sua justificativa em `texto` e o commit da entrega; depois segue o caminho da aprovação: testes, mescla e política de conclusão do projeto, sem atalho); "reabrir" = volta ao responsável com a instrução nova em `texto` e UMA rodada de revisão a mais; "cancelar" = cancela, com o motivo em `texto`. Só vale com o aviso do limite esperando decisão (409 sem ele) e só para quem pediu a tarefa (403 nos outros). É a mesma rota que o curl `POST .../tasks/<id>/review-limit`. Cancelar não desfaz o que já foi feito; na dúvida entre aceitar e reabrir, reabra.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tarefa: { type: 'string', description: 'O id da tarefa (como t-1a2b3c), o que o aviso do limite mostra.' },
+        decisao: { type: 'string', enum: Object.keys(LIMIT_DECISIONS), description: 'aceitar (com trade-off), reabrir (com instrução nova) ou cancelar.' },
+        texto: { type: 'string', description: 'Com aceitar: a justificativa. Com reabrir: a instrução para o responsável. Com cancelar: o motivo. Em poucas frases.' },
+      },
+      required: ['tarefa', 'decisao', 'texto'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
 ];
 

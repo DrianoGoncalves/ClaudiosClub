@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, CHECKPOINTS_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardCardWorktreeConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
+import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, CHECKPOINTS_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardCardWorktreeConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskCapAccepted, type TaskCapItem, type TaskCapWait, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
 import { commitMessage, commitPaths, commitTaskFiles, leftText, ownerWrote, summarize, type SharedHold, type SlotFound } from './autoCommit';
 import { autoLeft } from './commitAuto';
@@ -33,7 +33,7 @@ import { CapabilityError } from './engineCapability';
 import { StateBusyError } from './atomicWrite';
 import { backupTasks, BoardCorruptError, type BoardFile, boardFilePath, boardReadOk, hasBackups, isBoardCorrupt, knownCorruptVersion, recoverTasks } from './boardGuard';
 import { writeAtomic } from './staff/store';
-import { cancelWith, tarefaMcpOn, tarefaToolName } from './staff/tarefaText';
+import { cancelWith, limitWith, tarefaMcpOn, tarefaToolName } from './staff/tarefaText';
 import { abortStaleMerge, checkpoint, CodeError, codeTouchedSince, commitsToMerge, detectTest, formatLimit, integratedSha, locateCode, mergeCode, readCode, runTests, unresolvedFiles, type CodePlace } from './taskCode';
 import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
@@ -403,6 +403,11 @@ export interface TaskServiceDeps {
    * `reviewOnly`: conversa de revisão, que não edita arquivos do projeto (só a memória dele, pelo MCP); ver `requestReview`.
    */
   send: (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly?: boolean, place?: Worktree) => Promise<string>;
+  /**
+   * O Codex está ligado nas configurações ("Usar o Codex")? Desligado, o revisor que roda nele revisa no Claude (só leitura), no mesmo commit da entrega (ver `requestReview`). Sem esta
+   * dependência, o pedido segue ao motor da ficha, como sempre (e o erro "o Codex está desligado" para a revisão).
+   */
+  codexOn?: () => Promise<boolean>;
   /** O espaço livre no disco do projeto, para decidir se cabe uma worktree de card (os testes trocam); sem ele, o de verdade. */
   cardFree?: FreeBytes;
   /** Avisa um funcionário (o gestor que pediu a tarefa): na conversa `sessionId`, ou na mais recente dele. */
@@ -798,6 +803,16 @@ export class TaskService {
     let n = 0;
     for (const projectId of await this.deps.projectIds()) {
       for (const t of (await this.list(projectId)) ?? []) {
+        // A revisão que abriu no Claude no lugar do Codex (`review.ranOn`) e ainda espera o veredito: a conversa é do Claude (o transcript não abre no Codex, ligado ou não), e o override vive só na
+        // memória; sem ele o re-pedido do veredito cairia no motor da ficha. Vale com o Codex de volta ligado.
+        if (t.status === 'review' && t.review?.ranOn && t.review.sessionId && !t.review.verdict) {
+          const reviewer = await this.deps.readProfile(projectId, t.review.staffId).catch(() => null);
+          const override = reviewer && claudeForCodexReviewer(reviewer);
+          if (override) {
+            this.deps.setOverride?.(t.review.sessionId, override);
+            n++;
+          }
+        }
         if (!t.fallback || !t.sessionId || !RESTORABLE.includes(t.status)) continue;
         // A troca não terminou (o servidor caiu entre gravá-la e abrir a conversa nova): a troca sai da tarefa, e a conversa
         // antiga volta ao motor principal. Se bater o limite de novo, a tarefa pode trocar.
@@ -2806,6 +2821,7 @@ export class TaskService {
       await this.safely(() => this.reconcilePlanCards(projectId, tasks));
       await this.safely(() => this.retryPlanWait(projectId, tasks, now));
       await this.safely(() => this.chasePlanDecisions(projectId, tasks, now));
+      await this.safely(() => this.chaseCapWaits(projectId, tasks, now));
       await this.safely(() => this.chaseContests(projectId, tasks, now));
       await this.safely(() => this.retryEngineStops(projectId, tasks, now));
       await this.safely(() => this.warnPermissions(projectId, tasks, now));
@@ -3922,7 +3938,8 @@ export class TaskService {
       const mark: TaskAutoMerge = prior
         ? { ...prior, byOwner: true, stopped: undefined, retry: undefined, wait: undefined }
         : { verdict: { sessionId: t.review?.sessionId ?? '', deliveryAt: t.delivery?.at ?? null }, sha: deliveredAt(t), by: 'o dono', since: now.toISOString(), byOwner: true };
-      return noted({ ...t, autoMerge: mark }, 'aprovada pelo dono; a junção do código vem a seguir');
+      // O limite de revisões que esperava a decisão (`Task.capWait`) acaba aqui: o clique do dono decide.
+      return noted({ ...t, autoMerge: mark, capWait: undefined }, 'aprovada pelo dono; a junção do código vem a seguir');
     });
     if (!asked || asked.status !== 'review') return asked;
     await this.mergeOne(projectId, dir, cur.id, now);
@@ -4002,6 +4019,8 @@ export class TaskService {
     if (task.status === 'cancelled') throw new TaskConflictError('a tarefa foi cancelada: reabra antes de pedir revisão');
     if (reviewerId === task.staffId) throw new TaskError('a revisão precisa ser de outro funcionário');
     const reviewer = await this.staffOrThrow(projectId, reviewerId);
+    // Revisor que roda no Codex, com o Codex desligado nas configurações: a revisão abre com ele (a mesma pessoa) no Claude, só leitura (`reviewOnly` abaixo), nesta mesma entrega.
+    const onClaude = await this.codexOffOverride(reviewer);
     const place = await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null);
     // O projeto é de todos: o que está sem commit mistura as tarefas abertas, então o diff é só dos arquivos desta (`changedFiles`, ver `noteTaskEdit`).
     // Sem a lista (edição só por shell não é detectada), segue o diff inteiro, dito no pedido.
@@ -4075,7 +4094,7 @@ export class TaskService {
     // Só aprova ou reprova: a conversa abre sem edição de arquivo (ver `reviewOnly`) e não entra na fila de trabalho dele (ver `staffBusy`).
     // Quem revisava até agora, para a nota de quando o pedido é a delegação de uma tarefa parada no limite (abaixo).
     const prevName = opts.assign && !opts.delivery && task.reviewerId ? await this.nameOf(projectId, task.reviewerId) : null;
-    const sessionId = await this.deps.send(projectId, reviewer.id, text, force, undefined, true);
+    const sessionId = await this.deps.send(projectId, reviewer.id, text, force, onClaude ?? undefined, true);
     this.bySession.set(sessionId, { projectId, taskId, role: 'review' });
     const at = new Date().toISOString();
     try {
@@ -4086,10 +4105,13 @@ export class TaskService {
         // Delegar (pelo quadro, `assign`) uma tarefa parada no limite de revisões, a outro revisor ou de novo ao mesmo: as rodadas zeram e esta revisão é a 1ª do revisor (ver `withReviewHandoff`).
         // Conferido na vez da gravação, antes de o pedido trocar a revisão da tarefa. Fora do limite, as rodadas ficam como estão.
         const base = prevName !== null && reviewCapped(t) ? withReviewHandoff(t, prevName, reviewer.name, 1) : t;
-        return withSession(
-          moved({ ...base, review: { staffId: reviewer.id, sessionId, at }, reviewRetry: undefined, ...(opts.assign && { reviewerId: reviewer.id }) }, 'review', 'auto', `revisão pedida a ${reviewer.name}`),
-          { id: sessionId, role: 'review', staffId: reviewer.id, engine: reviewer.engine === 'codex' ? 'codex' : 'claude', at },
-        );
+        // O motor usado fica no card (a sessão e `review.ranOn`, com o commit da entrega) e no histórico: a revisão no Claude é de quem é do Codex, e não pode passar por revisão do Codex.
+        const sha = deliveredAt(t);
+        const ranOn = onClaude ? { ranOn: { engine: 'claude' as const, why: 'codex-off' as const, sha } } : {};
+        const note = onClaude ? `revisão pedida a ${reviewer.name} no Claude (o Codex está desligado nas configurações)${sha ? `, entrega ${sha.slice(0, 7)}` : ''}` : `revisão pedida a ${reviewer.name}`;
+        const asked = moved({ ...base, review: { staffId: reviewer.id, sessionId, at, ...ranOn }, reviewRetry: undefined, ...(opts.assign && { reviewerId: reviewer.id }) }, 'review', 'auto', note);
+        // A tarefa já está em "revisão" no pedido automático (`moved` não anota quem não muda de coluna): a revisão no Claude fica dita no histórico do mesmo jeito.
+        return withSession(onClaude && base.status === 'review' ? noted(asked, note) : asked, { id: sessionId, role: 'review', staffId: reviewer.id, engine: onClaude ? 'claude' : reviewer.engine === 'codex' ? 'codex' : 'claude', at });
       });
     } catch (err) {
       // A conversa do revisor já abriu e a tarefa não a guarda: ela não fica revisando por conta de ninguém.
@@ -4097,6 +4119,16 @@ export class TaskService {
       await this.silenceSession(sessionId);
       throw err;
     }
+  }
+
+  /**
+   * O motor em que a revisão abre, quando não é o da ficha do revisor: ficha no Codex com o Codex desligado nas configurações (`deps.codexOn`) revisa no Claude. O modelo é o secundário Claude da
+   * ficha, se ela tem um, senão o padrão do Claude (`model` vazio); a autonomia, o esforço e o que o Claude de uma ficha do Codex não recebe (MCPs, navegador, servidores) são os de `asEngine` (staff/service.ts),
+   * e a conversa abre só leitura (`reviewOnly`). Não há como a ficha ou a política exigir o Codex hoje (não existe esse recurso): então nada barra a troca. Null: segue o motor da ficha.
+   */
+  private async codexOffOverride(reviewer: StaffProfile): Promise<EngineOverride | null> {
+    if (reviewer.engine !== 'codex' || !this.deps.codexOn || (await this.deps.codexOn().catch(() => true))) return null;
+    return claudeForCodexReviewer(reviewer);
   }
 
   /** Pede o deploy ao funcionário de infra, com o checklist (backup, estado antes e depois, runbook). */
@@ -5498,11 +5530,13 @@ export class TaskService {
    * Com a conclusão por IA ESCOLHIDA pelo dono (`autoMergeOn`) e o código numa worktree por mesclar, a aprovação grava `Task.autoMerge` (mesma escrita da nota) e pede a mescla automática (`mergeSoon`),
    * em vez de esperar o clique: ver `mergeSoon`. Sem a escolha (projeto legado ou virtual), segue "falta mesclar".
    */
-  private async approve(projectId: string, taskId: string, reviewer: string, verdict: Verdict): Promise<void> {
+  private async approve(projectId: string, taskId: string, reviewer: string, verdict: Verdict, cap?: { since: string; accepted: TaskCapAccepted }): Promise<boolean> {
     const { dir, task, profile } = await this.context(projectId, taskId);
     // Veredito que chega depois de a tarefa sair de "revisão" (cancelada, por exemplo) ou de a tarefa ser entregue de novo não decide nada, nem o que já foi decidido (ver `decided`).
-    const current = (t: Task) => t.status === 'review' && isVerdictOf(t, verdict) && !decided(t);
-    if (!current(task)) return;
+    // `cap`: a entrega aceita como trade-off por quem pediu, no limite de revisões (`decideCap`): não há veredito de aprovação (a última revisão reprovou, e `decided` já vale); vale enquanto o limite
+    // desta entrega (`capWait.since`) espera a decisão, e a mesma gravação que decide o desfaz e registra o que foi aceito. Daí em diante é a aprovação de sempre.
+    const current = (t: Task) => t.status === 'review' && (cap ? t.capWait?.since === cap.since : isVerdictOf(t, verdict) && !decided(t));
+    if (!current(task)) return false;
     const place = task.staffId ? await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null) : null;
     const head = `[MyCo] Tarefa “${titleOf(task)}” (id ${task.id}): `;
     const owner = (await this.flowOf(projectId)).completion === 'owner';
@@ -5510,26 +5544,29 @@ export class TaskService {
     const toMerge = place?.where === 'worktree' && !task.merged && !(await this.cardEmpty(dir, task, place));
     // Conclusão por IA escolhida pelo dono e o código numa worktree por mesclar: a aprovação pede a mescla automática (ver `mergeSoon`) na mesma gravação da nota, sem esperar o clique.
     const auto = toMerge && !owner && (await this.autoMergeOn(projectId));
+    const accept = (t: Task): Task => (cap ? { ...t, capWait: undefined, capAccepted: cap.accepted } : t);
+    const word = cap ? 'aceita com trade-off' : 'aprovada';
     if (toMerge || owner) {
       let wrote = false;
       const note = toMerge
-        ? `aprovada por ${reviewer}; ${auto ? 'a mescla automática vem a seguir' : `falta mesclar${owner ? ' (e a sua aprovação)' : ''}`}`
-        : `aprovada por ${reviewer}; falta sua aprovação`;
+        ? `${word} por ${reviewer}; ${auto ? 'a mescla automática vem a seguir' : `falta mesclar${owner ? ' (e a sua aprovação)' : ''}`}`
+        : `${word} por ${reviewer}; falta sua aprovação`;
       const out = await this.change(projectId, taskId, (t) => {
         if (!current(t)) return t;
         wrote = true;
-        const gated = owner ? withOwnerGate(t, 'approved', reviewer) : t;
+        const gated = owner ? withOwnerGate(accept(t), 'approved', cap ? `${reviewer} (trade-off)` : reviewer) : accept(t);
         const asked: Task = auto ? { ...gated, autoMerge: { verdict: { sessionId: verdict.sessionId, deliveryAt: verdict.deliveryAt }, sha: deliveredAt(t), by: reviewer, since: new Date().toISOString() } } : gated;
         return noted(asked, note);
       });
-      if (!wrote) return;
+      if (!wrote) return false;
       if (auto) {
         this.mergeSoon(projectId);
-        return;
+        return true;
       }
-      if (selfReview(task)) await this.tellRequester(projectId, task, toMerge ? `${head}aprovada; falta mesclar a worktree.` : `${head}aprovada na sua revisão; falta a aprovação do dono (política de fluxo do projeto).`);
+      // Quem decidiu o limite já sabe (a resposta do pedido dele diz): o aviso de "aprovada na sua revisão" é só do revisor que também pediu.
+      if (selfReview(task) && !cap) await this.tellRequester(projectId, task, toMerge ? `${head}aprovada; falta mesclar a worktree.` : `${head}aprovada na sua revisão; falta a aprovação do dono (política de fluxo do projeto).`);
       if (owner && out) this.warnDependents(projectId, taskId, stuckReason(out));
-      return;
+      return true;
     }
     // `change` devolve o card como está gravado: o que outra decisão (o turno e a varredura chegando juntos) já levou a "pronto" volta `done` sem esta gravação ter movido nada, e o
     // aviso e o despertar dos dependentes saem uma vez só, de quem gravou (`wrote`, como no caminho acima).
@@ -5537,12 +5574,13 @@ export class TaskService {
     const done = await this.change(projectId, taskId, (t) => {
       if (!current(t)) return t;
       wrote = true;
-      return moved(t, 'done', 'auto', `aprovada por ${reviewer}`);
+      return moved(accept(t), 'done', 'auto', `${word} por ${reviewer}`);
     });
-    if (!wrote || done?.status !== 'done') return;
+    if (!wrote || done?.status !== 'done') return wrote;
     await this.wakeDependents(projectId, taskId);
-    await this.settleRequester(projectId, done, 'foi para pronto', selfReview(task) ? `${head}aprovada na sua revisão, foi para pronto.` : null);
+    await this.settleRequester(projectId, done, 'foi para pronto', selfReview(task) && !cap ? `${head}aprovada na sua revisão, foi para pronto.` : null);
     if (done.codeAt?.card && !done.merged) await this.cleanupCard(projectId, done, false);
+    return true;
   }
 
   /**
@@ -5624,18 +5662,20 @@ export class TaskService {
     if (!reviewer) return this.waitsForOwnerWithoutReviewer(projectId, task);
     const deliveryAt = task.delivery?.at ?? null;
     if ((task.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS) {
+      // A decisão vai a quem pediu a tarefa (`capDecider`); o dono decide só quando o pedido foi dele, não há quem pediu ou o aviso não chega (ver `Task.capWait`).
+      const to = await this.capDecider(projectId, task);
+      const at = new Date().toISOString();
       // Só anota o limite se a tarefa ainda está em "revisão" e nesta entrega: cancelada (ou já aprovada, ou com entrega nova) enquanto
-      // isso, a nota seria falsa e ninguém precisa ser avisado.
+      // isso, a nota seria falsa e ninguém precisa ser avisado. O pedido de decisão sai na mesma escrita, uma vez por entrega.
       let written = false;
       const capped = await this.change(projectId, task.id, (t) => {
-        if (!onDelivery(t, deliveryAt)) return t;
+        if (!onDelivery(t, deliveryAt) || t.capWait) return t;
         written = true;
-        return noted(t, capNote(AUTO_REVIEW_ROUNDS));
+        return noted({ ...t, capWait: newCapWait(t, to, at) }, capNote(AUTO_REVIEW_ROUNDS));
       });
       if (!written) return;
       if (capped) this.warnDependents(projectId, task.id, stuckReason(capped));
-      if (selfReview(task))
-        await this.tellRequester(projectId, task, `[MyCo] Tarefa “${titleOf(task)}” (id ${task.id}): o limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas foi atingido; o que sobrou fica com você.`);
+      if (to === 'manager') await this.deliverCapWait(projectId, task.id);
       return;
     }
     try {
@@ -6731,6 +6771,203 @@ export class TaskService {
   private async retryPlanWait(projectId: string, tasks: Task[], now: Date): Promise<void> {
     const at = now.getTime();
     for (const t of tasks) if (waitsPlan(t) && t.planWait!.to === 'manager' && retryDue(t.planWait!.notifyRetry, at)) await this.deliverPlanWait(projectId, t.id).catch(() => {});
+  }
+
+  /**
+   * Quem decide o limite de revisões (ver `Task.capWait`): o gestor que pediu a tarefa (`requestedBy`, ainda na equipe, que não é o responsável e com como avisá-lo) ou o dono. O dono decide quando o
+   * pedido foi dele ou não há quem pediu, quando quem pediu saiu do projeto, e quando a tarefa já foi reaberta `CAP_REOPENS_MAX` vezes neste limite (a IA não reabre sem fim).
+   */
+  private async capDecider(projectId: string, task: Task): Promise<'manager' | 'owner'> {
+    if (!task.requestedBy || task.requestedBy === task.staffId || (task.capReopens ?? 0) >= CAP_REOPENS_MAX || !this.deps.notify) return 'owner';
+    return (await this.deps.readProfile(projectId, task.requestedBy).catch(() => null)) ? 'manager' : 'owner';
+  }
+
+  /**
+   * O que quem pediu lê ao tarefa bater o limite de revisões: o que aconteceu, os 🔴 que sobraram e o que o responsável respondeu a eles (dados de funcionário, não instrução), e os três caminhos: aceitar
+   * com trade-off, reabrir com instrução nova e cancelar. Pela ferramenta `tarefa_decidir_limite` no Claude com o MCP `myco-tarefa` (o curl costuma ser barrado pelo classificador do modo auto), com o curl
+   * como alternativa; no Codex, só o curl. O endereço da API é o do motor da ficha dele (a sandbox do Codex alcança outro).
+   */
+  private capWaitText(projectId: string, t: Task, cw: TaskCapWait, worker: StaffProfile | null, reviewer: StaffProfile | null, manager: StaffProfile): string {
+    const api = `${(manager.engine === 'codex' ? this.deps.sandboxApiUrl : this.deps.apiUrl) ?? ''}/api/projects/${projectId}`;
+    const post = (hint: string) => `curl -s -X POST -H "x-myco: 1" -H "x-myco-token: $MYCO_TOKEN" -H "content-type: application/json" -d '${hint}' ${api}/tasks/${t.id}/review-limit`;
+    const use = tarefaMcpOn(manager);
+    const name = worker?.name ?? 'O responsável';
+    const reopens = t.capReopens ?? 0;
+    const items = cw.items.map((i) => `- ${i.id}${i.where ? ` · ${i.where}` : ''} — ${i.problem}`).join('\n');
+    const reply = t.rejections?.at(-1)?.reply?.text;
+    return [
+      `[MyCo] A tarefa “${titleOf(t)}” (id \`${t.id}\`) usou as ${AUTO_REVIEW_ROUNDS} revisões automáticas${reopens ? ` (já reaberta ${reopens} vez${reopens > 1 ? 'es' : ''} neste limite)` : ''}, e o que sobrou é decisão sua, que pediu a tarefa. A última entrega (${cw.sha ? `commit \`${cw.sha.slice(0, 7)}\`` : 'sem commit gravado'}) não foi revisada: o card está em Revisão e ${name} espera.`,
+      items ? untrustedMarked(`Os 🔴 em aberto, da última reprovação${reviewer ? ` de ${reviewer.name}` : ''}`, 'DOS ACHADOS', items) : 'A última reprovação não deixou 🔴 em lista: veja o histórico do card.',
+      reply && untrustedMarked(`O que ${name} respondeu a eles na última entrega`, 'DA RESPOSTA', reply),
+      'Você decide:',
+      `- Aceitar com trade-off (o card grava os 🔴 acima, a sua justificativa e o commit da entrega; depois segue o caminho de uma aprovação: testes, mescla e a política de conclusão do projeto, sem atalho): ${limitWith(use, t.id, 'aceitar', '<por que aceitar o que sobrou>', post('{"decision": "accept", "justification": "<por que aceitar o que sobrou>"}'))}.`,
+      `- Reabrir com instrução nova (volta a ${name}, com UMA rodada de revisão a mais; no máximo ${CAP_REOPENS_MAX} reaberturas, depois a decisão é do usuário): ${limitWith(use, t.id, 'reabrir', '<o que fazer>', post(`{"decision": "reopen", "instruction": "<o que ${name} deve fazer>"}`))}.`,
+      `- Cancelar (não desfaz o que já foi feito: continua na branch e na worktree): ${limitWith(use, t.id, 'cancelar', '<o motivo>', post('{"decision": "cancel", "reason": "<o motivo>"}'))}.`,
+      `Sem decisão em ${ESCALATE_AFTER_MS / 60_000} min, o pedido vai para a caixa do usuário.`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  /**
+   * Leva o pedido de decisão do limite (`Task.capWait`, `to: 'manager'`, com `notifyRetry`) ao gestor que pediu, na conversa em que pediu (`notify`: a dele, ou a mais recente se aquela não existe mais). Como o
+   * aviso do plano (`deliverPlanWait`): chegou, grava `deliveredAt` (daí contam os `ESCALATE_AFTER_MS` sem decisão, ver `chaseCapWaits`); falhou, nova tentativa com backoff, e esgotado o retry
+   * (`ESCALATE_AFTER_MS` desde a primeira falha) ou sem como avisá-lo, vai para a caixa do usuário. Um por vez por card.
+   */
+  private async deliverCapWait(projectId: string, taskId: string): Promise<void> {
+    const key = `capwait:${projectId}:${taskId}`;
+    if (this.inFlight.has(key)) return;
+    this.inFlight.add(key);
+    try {
+      const t = await this.fresh(projectId, taskId);
+      const cw = t?.capWait;
+      if (!t || !cw || t.status !== 'review' || cw.to !== 'manager' || !cw.notifyRetry) return;
+      const [manager, worker, reviewer] = await Promise.all([
+        t.requestedBy ? this.deps.readProfile(projectId, t.requestedBy) : null,
+        t.staffId ? this.deps.readProfile(projectId, t.staffId) : null,
+        t.reviewerId ? this.deps.readProfile(projectId, t.reviewerId) : null,
+      ]);
+      const notify = this.deps.notify;
+      if (!manager || !notify) {
+        await this.escalateCapWait(projectId, taskId, cw.since, manager ? 'sem como avisar o gestor agora' : 'o gestor não está mais no projeto');
+        return;
+      }
+      try {
+        await notify(projectId, manager.id, this.capWaitText(projectId, t, cw, worker, reviewer, manager), t.requestedSession ?? null);
+        const at = new Date().toISOString();
+        await this.change(projectId, taskId, (x) => (x.capWait?.since === cw.since ? { ...x, capWait: { ...x.capWait, deliveredAt: at, notifyRetry: undefined } } : x));
+      } catch (err) {
+        const now = new Date();
+        if (now.getTime() - Date.parse(cw.notifyRetry.firstAt) >= ESCALATE_AFTER_MS) await this.escalateCapWait(projectId, taskId, cw.since, `o aviso ao gestor não chegou: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200)).catch(() => {});
+        else await this.change(projectId, taskId, (x) => (x.capWait?.since === cw.since && x.capWait.notifyRetry ? { ...x, capWait: { ...x.capWait, notifyRetry: failedRetry(x.capWait.notifyRetry, err, now) } } : x)).catch(() => {});
+      }
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  /** O pedido do limite passa ao usuário (aviso que não chegou, ou sem decisão no prazo): `to: 'owner'`, item na caixa (`ownAlerts`) e uma nota com o motivo. Só vale para esta espera (`since`). */
+  private async escalateCapWait(projectId: string, taskId: string, since: string, why: string): Promise<void> {
+    const at = new Date().toISOString();
+    await this.change(projectId, taskId, (t) => {
+      const n = t.capWait;
+      if (!n || n.since !== since || n.to !== 'manager' || t.status !== 'review') return t;
+      return noted({ ...t, capWait: { ...n, to: 'owner', escalatedAt: at, notifyRetry: undefined } }, `limite de revisões: a decisão de quem pediu foi para você (${why})`);
+    });
+  }
+
+  /**
+   * O tick: o pedido do limite ao gestor. Entregue e sem decisão há `ESCALATE_AFTER_MS` (contados da entrega do aviso, não do limite), ou não entregue com o retry esgotado (`ESCALATE_AFTER_MS` desde a primeira falha):
+   * vai ao usuário. Não entregue e dentro do prazo: tenta de novo na hora marcada (o backoff manda). Um que falha não segura os outros.
+   */
+  private async chaseCapWaits(projectId: string, tasks: Task[], now: Date): Promise<void> {
+    const at = now.getTime();
+    for (const t of tasks) {
+      const cw = t.capWait;
+      if (!cw || t.status !== 'review' || cw.to !== 'manager') continue;
+      if (cw.deliveredAt) {
+        if (at - Date.parse(cw.deliveredAt) >= ESCALATE_AFTER_MS) await this.escalateCapWait(projectId, t.id, cw.since, `ninguém decidiu em ${ESCALATE_AFTER_MS / 60_000} min`).catch(() => {});
+      } else if (cw.notifyRetry && cw.notifyRetry.attempts > 0 && at - Date.parse(cw.notifyRetry.firstAt) >= ESCALATE_AFTER_MS) {
+        await this.escalateCapWait(projectId, t.id, cw.since, `o aviso ao gestor não chegou em ${ESCALATE_AFTER_MS / 60_000} min`).catch(() => {});
+      } else if (retryDue(cw.notifyRetry, at)) await this.deliverCapWait(projectId, t.id).catch(() => {});
+    }
+  }
+
+  /**
+   * A decisão de quem pediu sobre o limite de revisões automáticas (`Task.capWait`, ver `autoReview`): `accept` (aceitar o que sobrou como trade-off: o card grava os 🔴 em aberto, a justificativa e o commit
+   * da entrega, e SEGUE O CAMINHO DE `approve`, com os testes, a mescla e a política de conclusão do projeto), `reopen` (volta ao responsável com a instrução nova, com UMA rodada de revisão a mais, contada em
+   * `Task.capReopens`) ou `cancel`. Só o usuário (`fromBrowser`) ou o gestor que pediu a tarefa, com o token da conversa dele, e este só enquanto o pedido é dele (`to: 'manager'`: passado o prazo ou
+   * perdido o aviso, o pedido é do usuário e o gestor leva 403); o responsável, o revisor e os outros levam 403. Sem o limite esperando decisão (já decidida, outra entrega, cancelada): 409. Tarefa que não existe: null.
+   */
+  async decideCap(projectId: string, taskId: string, caller: Caller | null, fromBrowser: boolean, body: unknown): Promise<Task | null> {
+    const me = fromBrowser ? null : (caller?.staffId ?? null);
+    if (!fromBrowser && (!me || caller?.projectId !== projectId)) throw new TaskForbiddenError('só o usuário (pelo Claudio’s Club) ou quem pediu a tarefa, com o token da conversa dele (x-myco-token), decide o limite de revisões');
+    const input = parseOr(CapDecisionBody, body ?? {});
+    const first = await this.fresh(projectId, taskId);
+    if (!first) return null;
+    if (!fromBrowser && first.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa (ou o usuário) decide o limite de revisões dela');
+    const cw = first.capWait;
+    if (!cw || first.status !== 'review') throw new TaskConflictError('a tarefa não está esperando decisão de limite de revisões (em Revisão, com o limite atingido): leia de novo');
+    if (!fromBrowser && cw.to !== 'manager') throw new TaskForbiddenError('o pedido passou ao usuário (sem decisão no prazo, ou o aviso não chegou): só ele decide agora');
+    const who = fromBrowser ? 'o usuário' : ((await this.deps.readProfile(projectId, me!).catch(() => null))?.name ?? me!);
+    return this.settleCap(projectId, first, input, who, fromBrowser ? 'user' : me!);
+  }
+
+  /** Aplica a decisão do limite que espera (`first`): quem chama já conferiu quem pode decidir; cada caminho confere o estado de novo, na gravação (409 se o limite já foi decidido). `by`: 'user' ou o id de quem decidiu. */
+  private async settleCap(projectId: string, first: Task, input: CapDecision, who: string, by: string): Promise<Task | null> {
+    const cw = first.capWait!;
+    const stale = () => new TaskConflictError('o limite de revisões já foi decidido ou o card mudou: leia de novo');
+    if (input.decision === 'accept') {
+      const accepted: TaskCapAccepted = { at: new Date().toISOString(), by: who, deliveryAt: cw.deliveryAt, sha: cw.sha, justification: input.justification, items: cw.items };
+      // O mesmo caminho da aprovação (`approve`): worktree com a conclusão por IA → mescla automática (testes obrigatórios); conclusão do dono → espera dele; sem worktree → pronto.
+      const applied = await this.approve(projectId, first.id, who, { sessionId: first.review?.sessionId ?? '', deliveryAt: cw.deliveryAt }, { since: cw.since, accepted });
+      if (!applied) throw stale();
+      return (await this.fresh(projectId, first.id)) ?? null;
+    }
+    if (input.decision === 'cancel') {
+      const out = await this.cancel(projectId, first.id, {
+        by,
+        reason: `limite de revisões: ${input.reason}`,
+        deadline: true,
+        guard: (t) => {
+          if (t.status !== 'review' || t.capWait?.since !== cw.since) throw stale();
+        },
+      });
+      return out;
+    }
+    return this.reopenCap(projectId, first, input.instruction, who);
+  }
+
+  /**
+   * Reabrir no limite: a instrução vai à conversa de trabalho, como o ajuste de uma reprovação (`reject`: guardada se o responsável está ocupado ou o projeto pausado, e a tarefa segue em revisão até o envio),
+   * as rodadas voltam a `AUTO_REVIEW_ROUNDS - 1` (a próxima entrega tem UMA revisão automática; no limite de novo a decisão volta a quem pediu) e `Task.capReopens` conta a reabertura. Na vez do
+   * responsável e dentro do prazo (503 sem gravar nada); a mensagem sai depois de gravar (`giveWorker`).
+   */
+  private async reopenCap(projectId: string, first: Task, instruction: string, who: string): Promise<Task | null> {
+    const staffId = first.staffId;
+    if (!staffId || !first.sessionId) throw new TaskConflictError('a tarefa não tem conversa de trabalho para receber a instrução: aceite o que sobrou ou cancele');
+    const cw = first.capWait!;
+    const since = cw.since;
+    const stale = () => new TaskConflictError('o limite de revisões já foi decidido ou o card mudou: leia de novo');
+    const n = (first.capReopens ?? 0) + 1;
+    const items = cw.items.map((i) => `- ${i.id}${i.where ? ` · ${i.where}` : ''} — ${i.problem}`).join('\n');
+    const msg = [
+      `[Tarefa "${first.title}"]`,
+      `A tarefa usou as ${AUTO_REVIEW_ROUNDS} revisões automáticas e ${who} (quem pediu) a reabriu com esta instrução: ${instruction}`,
+      items && `Os 🔴 que seguem em aberto (os da última reprovação):\n${items}`,
+      `Ajuste e termine o turno como sempre. A entrega tem UMA revisão automática a mais (reabertura ${n} de no máximo ${CAP_REOPENS_MAX}); se ela reprovar de novo, a decisão volta a quem pediu.`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    const note = `limite de revisões: ${who} reabriu com instrução nova (${untrustedLine(instruction, 200)}); uma rodada de revisão a mais (reabertura ${n}/${CAP_REOPENS_MAX})`;
+    const current = (t: Task) => t.status === 'review' && t.capWait?.since === since;
+    const reopened = (t: Task): Task => ({ ...t, capWait: undefined, reviewRounds: AUTO_REVIEW_ROUNDS - 1, capReopens: n });
+    const out = await this.lockedWithDeadline(
+      projectId,
+      staffId,
+      async (gate) => {
+        // Na vez dele, de novo: decidida por outro caminho, cancelada ou com entrega nova enquanto esperava.
+        const now = await this.fresh(projectId, first.id);
+        if (!now || !current(now) || !now.sessionId) throw stale();
+        // O ponto sem volta: daqui o ajuste é guardado ou enviado, e o prazo que passar já não desfaz.
+        gate.commit();
+        const target = now.sessionId;
+        // O projeto pausado, ou o responsável em outra tarefa ou conversa: o ajuste fica guardado e a tarefa segue em revisão até ele ir (como a reprovação, ver `reject`).
+        const reason = await this.hold(target, { text: msg, auto: true });
+        if (reason) {
+          const kept = await this.change(projectId, first.id, (t) => (current(t) ? noted(reopened(t), note) : t));
+          if (kept?.capReopens !== n) throw stale();
+          return kept;
+        }
+        const after = await this.change(projectId, first.id, (t) => (current(t) ? moved(reopened(t), 'doing', 'auto', note) : t));
+        if (after?.capReopens !== n) throw stale();
+        return after;
+      },
+      { op: `reabrir ${first.id}`, refused: 'a reabertura NÃO foi gravada', deadlineMs: this.lockDeadline() },
+    );
+    // Em "fazendo": a instrução vai à conversa de trabalho (guardada, se não foi: ver `giveWorker`). Em revisão (guardada pelo `hold`), é a fila que a envia.
+    if (out?.status === 'doing' && out.sessionId) await this.giveWorker(projectId, out, out.sessionId, msg, 'a instrução da reabertura');
+    return (await this.fresh(projectId, first.id)) ?? out;
   }
 
   /**
@@ -8115,7 +8352,16 @@ export function stuckState(t: Task, now = Date.now()): StuckState | null {
   const r = liveReview(t);
   if (t.reviewerId && r && t.reviewerId === r.staffId && r.reasked && !r.verdict && r.reaskAt && ((r.doneAt && r.doneAt > r.reaskAt) || now - Date.parse(r.reaskAt) >= REVIEW_WAIT_MS))
     return { reason: 'a revisão automática ficou sem veredito', selfHeals: false, humanAction: 'review', since: r.reaskAt };
-  // O limite de revisões (ver `reviewCapped`): o dono decide por ela, como no limite de agora.
+  // O limite de revisões com a decisão esperando (`Task.capWait`): quem pediu decide (aceitar com trade-off, reabrir ou cancelar); passado o prazo, ou sem quem pediu, é do usuário e tem item na caixa (ver `ownAlerts`).
+  const cw = t.capWait;
+  if (cw)
+    return {
+      reason: `limite de revisões automáticas atingido: espera ${cw.to === 'manager' ? 'quem pediu' : 'você'} decidir (aceitar com trade-off, reabrir com instrução nova ou cancelar)`,
+      selfHeals: false,
+      humanAction: 'decide',
+      since: cw.since,
+    };
+  // O limite de revisões (ver `reviewCapped`) de uma tarefa sem o pedido de decisão (parou nele antes dele existir): o dono decide por ela, como no limite de agora.
   if (reviewCapped(t))
     return { reason: 'limite de revisões automáticas atingido', selfHeals: false, humanAction: 'decide', since };
   if (!t.staffId) return { reason: 'sem responsável', selfHeals: false, humanAction: 'decide', since };
@@ -8142,8 +8388,9 @@ export interface OwnAlert {
 
 /**
  * As tarefas do quadro que só você destrava e têm aviso próprio na caixa: dúvida escalada (kind 'question') e revisão ou ajuste parados
- * (kind 'stuck'), e a espera do limite da ficha (kind 'stuck', sem ação sua). Aguardar, limite de revisões e sem responsável aparecem só
- * para quem as espera (kind 'blocked'): o dono as parou, ou já as vê no quadro. Tarefa encerrada não entra.
+ * (kind 'stuck'), a espera do limite da ficha (kind 'stuck', sem ação sua) e o limite de revisões automáticas quando a decisão é do usuário (`Task.capWait.to: 'owner'`; com o gestor decidindo,
+ * o aviso vai à conversa dele). Aguardar, o limite antigo (sem pedido de decisão) e sem responsável aparecem só para quem as espera (kind 'blocked'): o dono as parou, ou já as vê no quadro.
+ * Tarefa encerrada não entra.
  */
 export function ownAlerts(tasks: Task[], now = Date.now()): OwnAlert[] {
   const out: OwnAlert[] = [];
@@ -8157,6 +8404,8 @@ export function ownAlerts(tasks: Task[], now = Date.now()): OwnAlert[] {
     // Plano pendente: o gestor que pediu o recebe na conversa dele; é do usuário quando foi ele que pediu ou o aviso ao gestor se perdeu (`TaskPlanWait.to`). Com o cartão ExitPlanMode pendente
     // (`planWait.card`) o item da caixa é o próprio cartão (`permissionInboxItem`, kind 'plan'): um só pedido, sem o item de parada junto.
     else if (state.humanAction === 'decide' && waitsPlan(task) && task.planWait!.to === 'owner' && !task.planWait!.card) out.push({ task, state: { ...state, humanAction: 'decide' } });
+    // Limite de revisões com a decisão do usuário (`capWait.to`): o pedido foi dele, não há quem pediu, ou o gestor não respondeu no prazo. Com o gestor decidindo, o item não existe: ele recebe o aviso na conversa dele.
+    else if (state.humanAction === 'decide' && task.status === 'review' && task.capWait?.to === 'owner') out.push({ task, state: { ...state, humanAction: 'decide' } });
     // Espera a aprovação do dono (política de fluxo): só ele destrava, então tem item próprio.
     else if (state.humanAction === 'decide' && (ownerGateOf(task) || stoppedMerge(task))) out.push({ task, state: { ...state, humanAction: 'decide' } });
     // A dúvida "a caminho do gestor" também tem humanAction null: só a espera do limite entra (é a mesma razão que `stuckState` deu).
@@ -8185,18 +8434,60 @@ function withReask(t: Task): Task {
   return { ...t, review: { ...r, reaskAt: new Date(Date.now() + REASK_AFTER_MS).toISOString() } };
 }
 
-/** A linha do histórico quando o limite de revisões automáticas acaba (ver `autoReview`); `n` é o limite de quando foi escrita. */
-const capNote = (n: number) => `limite de ${n} revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste`;
-/** Reconhece a nota do limite de qualquer época (o N muda: 2 no limite antigo, 3 hoje); ver `stuckReason`. */
+/** O Claude no lugar do Codex para o revisor de ficha do Codex (ver `codexOffOverride`): o secundário Claude da ficha, se ela tem um, senão o padrão do Claude (`model` vazio, que não vai à linha de comando). Null se a ficha não é do Codex. */
+function claudeForCodexReviewer(reviewer: StaffProfile): EngineOverride | null {
+  if (reviewer.engine !== 'codex') return null;
+  const sec = reviewer.fallback?.engine === 'claude' ? reviewer.fallback : null;
+  return { engine: 'claude', model: sec?.model ?? '', ...(sec?.effort && { effort: sec.effort }) };
+}
+
+/** A linha do histórico quando o limite de revisões automáticas acaba (ver `autoReview`); `n` é o limite de quando foi escrita. A decisão vai a quem pediu (`Task.capWait`). */
+const capNote = (n: number) => `limite de ${n} revisões automáticas; o que sobrou vai a quem pediu decidir: aceitar com trade-off, reabrir com instrução nova ou cancelar`;
+/** Reconhece a nota do limite de qualquer época (o N muda: 2 no limite antigo, 3 hoje; o fim da frase também mudou); ver `stuckReason`. */
 const CAP_NOTE = /^limite de \d+ revisões automáticas;/;
+
+/** Quantas vezes quem pediu pode reabrir a tarefa no limite de revisões (cada uma dá uma rodada a mais, ver `decideCap`): passado isso, a decisão vai direto ao dono, para a IA não reabrir sem fim. */
+export const CAP_REOPENS_MAX = AUTO_REVIEW_ROUNDS;
+/** O texto livre da decisão do limite (justificativa, instrução, motivo). */
+const CAP_TEXT_MAX = 2000;
+/**
+ * O corpo de `POST .../tasks/:id/review-limit`: `{ decision: 'accept', justification }` (aceitar com trade-off), `{ decision: 'reopen', instruction }` (reabrir com instrução nova) ou
+ * `{ decision: 'cancel', reason }`. Cada decisão exige o seu texto e não aceita o dos outros; campo desconhecido é recusado (400).
+ */
+export const CapDecisionBody = z.discriminatedUnion(
+  'decision',
+  [
+    z.object({ decision: z.literal('accept'), justification: z.string().trim().min(1, 'justification: diga por que aceitar o que sobrou (fica gravada no card)').max(CAP_TEXT_MAX, `justification: no máximo ${CAP_TEXT_MAX} caracteres`) }).strict(),
+    z.object({ decision: z.literal('reopen'), instruction: z.string().trim().min(1, 'instruction: diga o que o responsável deve fazer (ele recebe a instrução)').max(CAP_TEXT_MAX, `instruction: no máximo ${CAP_TEXT_MAX} caracteres`) }).strict(),
+    z.object({ decision: z.literal('cancel'), reason: z.string().trim().min(1, 'reason: diga por que cancelar').max(CAP_TEXT_MAX, `reason: no máximo ${CAP_TEXT_MAX} caracteres`) }).strict(),
+  ],
+  { message: "decision: 'accept' (aceitar com trade-off), 'reopen' (reabrir com instrução nova) ou 'cancel'" },
+);
+type CapDecision = z.infer<typeof CapDecisionBody>;
+
+/** Os 🔴 que a última reprovação deixou em aberto (o que o limite deixa por resolver): os itens do bloco do revisor, ou o texto dele num item só (`GERAL`) quando veio sem bloco válido. */
+function openItems(t: Task): TaskCapItem[] {
+  const last = t.rejections?.at(-1);
+  if (!last) return [];
+  if (last.block === 'ok' && last.blockers.length) return last.blockers.slice(0, 20).map((b) => ({ id: b.id.slice(0, 12), where: oneLine(b.where, 200), problem: oneLine(b.problem, 600) }));
+  return last.raw ? [{ id: 'GERAL', where: '', problem: oneLine(last.raw, 600) }] : [];
+}
+
+/** O limite atingido nesta entrega (`Task.capWait`): quem decide, o commit dela e os 🔴 em aberto. O aviso ao gestor nasce com o retry marcado para já (`deliverCapWait`). */
+function newCapWait(t: Task, to: 'manager' | 'owner', at: string): TaskCapWait {
+  return { since: at, deliveryAt: t.delivery?.at ?? null, sha: deliveredAt(t), to, items: openItems(t), ...(to === 'manager' && { notifyRetry: { attempts: 0, nextAt: at, firstAt: at } }) };
+}
+
+/** Esta entrega foi aceita como trade-off no limite de revisões (`Task.capAccepted`)? Aí ela não está mais parada no limite: segue o caminho da aprovação (mescla, ou a espera do dono). */
+const capAcceptedHere = (t: Task): boolean => !!t.capAccepted && t.capAccepted.deliveryAt === (t.delivery?.at ?? null);
 
 /**
  * A tarefa em "revisão" parou no limite de revisões automáticas (a conta de `stuckState`)? reviewRounds sobe logo depois de pedir a revisão: com a última em curso já é
  * AUTO_REVIEW_ROUNDS. Por isso o limite só conta com a última revisão respondida (`doneAt`) e sem aprovação (aprovada, ela só espera a mescla). A nota do limite como última linha do
- * histórico (de qualquer N) também vale: é a tarefa que parou no limite antigo (2) e a entrega seguinte ficou sem revisar.
+ * histórico (de qualquer N) também vale: é a tarefa que parou no limite antigo (2) e a entrega seguinte ficou sem revisar. A entrega aceita como trade-off (`capAcceptedHere`) já não está parada.
  */
 const reviewCapped = (t: Task): boolean =>
-  t.status === 'review' && !!t.reviewerId && !!t.review?.doneAt && t.review.verdict !== 'approved' && ((t.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS || CAP_NOTE.test(t.history.at(-1)?.note ?? ''));
+  t.status === 'review' && !!t.reviewerId && !!t.review?.doneAt && t.review.verdict !== 'approved' && !capAcceptedHere(t) && ((t.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS || CAP_NOTE.test(t.history.at(-1)?.note ?? ''));
 
 /**
  * Delegar a revisão de uma tarefa parada no limite (ver `reviewCapped`), a outro revisor ou de novo ao mesmo, é decisão sua: as rodadas zeram (`rounds`: com 1, a revisão que o
@@ -8205,7 +8496,8 @@ const reviewCapped = (t: Task): boolean =>
 function withReviewHandoff(t: Task, from: string, to: string, rounds: number): Task {
   const was = t.reviewRounds ?? 0;
   const who = from === to ? `revisão delegada de novo a ${to}` : `revisor trocado de ${from} para ${to}`;
-  return noted({ ...t, reviewRounds: rounds }, `${who}; rodadas de revisão zeradas (${was}/${AUTO_REVIEW_ROUNDS})`);
+  // O limite que esperava quem pediu (`Task.capWait`) acaba aqui: o revisor novo (ou o mesmo, de novo) tem as suas rodadas.
+  return noted({ ...t, reviewRounds: rounds, capWait: undefined }, `${who}; rodadas de revisão zeradas (${was}/${AUTO_REVIEW_ROUNDS})`);
 }
 
 /** O motivo (e a nota do histórico) da tarefa que foi para Aguardar porque você fechou a conversa dela no meio do turno (ver `parkClosed`). */
@@ -8765,7 +9057,8 @@ function reviewClosable(t: Task, sessionId: string, all: Task[]): boolean {
 const supersedeReview = (t: Task): Task => {
   // A espera pela aprovação do dono era da entrega que acabou (ver `Task.ownerGate`): a entrega nova é revisada de novo.
   // A aprovação (e a mescla automática que ela pediu, ver `Task.autoMerge`) era da entrega que acabou: entrega nova invalida as duas.
-  const open = t.ownerGate || t.autoMerge ? { ...t, ownerGate: undefined, autoMerge: undefined } : t;
+  // O limite de revisões (`Task.capWait`) e a entrega aceita nele (`Task.capAccepted`) também eram da entrega que acabou.
+  const open = t.ownerGate || t.autoMerge || t.capWait || t.capAccepted ? { ...t, ownerGate: undefined, autoMerge: undefined, capWait: undefined, capAccepted: undefined } : t;
   return open.review && !open.review.superseded ? { ...open, review: { ...open.review, superseded: true } } : open;
 };
 
@@ -9541,7 +9834,7 @@ function moved(t: Task, status: TaskStatus, by: 'you' | 'auto', note?: string): 
   const waitReason = status === 'waiting' && t.waitReason ? { waitReason: maskSecretQuery(t.waitReason) } : {};
   // Saiu de Aguardar: o motivo era de lá, e a parada presumida (`waitCut`) também. Saiu de revisão: o retry da revisão automática era da entrega que acabou.
   const leavesWait = t.status === 'waiting' ? { waitReason: null, engineStop: undefined, waitCut: undefined } : {};
-  const leavesReview = t.status === 'review' && (t.reviewRetry || t.ownerGate || t.autoMerge) ? { reviewRetry: undefined, ownerGate: undefined, autoMerge: undefined } : {};
+  const leavesReview = t.status === 'review' && (t.reviewRetry || t.ownerGate || t.autoMerge || t.capWait) ? { reviewRetry: undefined, ownerGate: undefined, autoMerge: undefined, capWait: undefined } : {};
   // A ciência do corte era para a retomada na fila (em "a fazer"): em outra coluna já não vale.
   const leavesTodo = status !== 'todo' && t.cutAck ? { cutAck: undefined } : {};
   // A espera das subtarefas e a do segundo plano eram do "fazendo", e o "voltou de revisão por mensagem" (`reopened`) também: em outra coluna (entrega, Aguardar, cancelada) já não valem.

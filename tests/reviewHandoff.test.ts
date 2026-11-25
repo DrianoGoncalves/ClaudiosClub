@@ -17,6 +17,8 @@ beforeAll(async () => {
 afterAll(() => removeTemp(root));
 
 const CAP = `limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas;`;
+/** Sem `requestedBy` (card do dono), a decisão do limite é do usuário (ver `Task.capWait`). */
+const CAPPED_REASON = 'limite de revisões automáticas atingido: espera você decidir (aceitar com trade-off, reabrir com instrução nova ou cancelar)';
 
 async function board(dirName: string) {
   const dir = path.join(root, dirName);
@@ -74,7 +76,7 @@ async function capped(dirName: string) {
   const end = await b.get(t.id);
   expect(end).toMatchObject({ status: 'review', reviewerId: 'rev-1', reviewRounds: AUTO_REVIEW_ROUNDS, review: { staffId: 'rev-1', verdict: 'rejected' } });
   expect(end.history.at(-1)?.note).toContain(CAP);
-  expect(stuckReason(end)).toBe('limite de revisões automáticas atingido');
+  expect(stuckReason(end)).toBe(CAPPED_REASON);
   expect(b.to('rev-1')).toHaveLength(AUTO_REVIEW_ROUNDS);
   return { b, id: t.id, work };
 }
@@ -105,7 +107,7 @@ describe('revisão delegada a tarefa parada no limite de revisões', () => {
     expect(b.to('rev-2')).toHaveLength(AUTO_REVIEW_ROUNDS);
     expect(end).toMatchObject({ status: 'review', reviewerId: 'rev-2', reviewRounds: AUTO_REVIEW_ROUNDS, review: { staffId: 'rev-2', verdict: 'rejected' } });
     expect(end.history.at(-1)?.note).toContain(CAP);
-    expect(stuckReason(end)).toBe('limite de revisões automáticas atingido');
+    expect(stuckReason(end)).toBe(CAPPED_REASON);
     expect(b.to('rev-2')).toHaveLength(AUTO_REVIEW_ROUNDS); // a 4ª entrega não pediu revisão
   });
 
@@ -165,7 +167,7 @@ describe('revisão delegada a tarefa parada no limite de revisões', () => {
     const sent = b.h.sent.length;
     await b.svc.update('p', id, { reviewerId: 'rev-1' });
     expect(await b.get(id)).toMatchObject({ reviewRounds: AUTO_REVIEW_ROUNDS, review: { verdict: 'rejected' } });
-    expect(stuckReason(await b.get(id))).toBe('limite de revisões automáticas atingido');
+    expect(stuckReason(await b.get(id))).toBe(CAPPED_REASON);
     expect(b.h.sent.length).toBe(sent);
   });
 

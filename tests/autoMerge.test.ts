@@ -547,3 +547,83 @@ describe('mescla automática na aprovação', () => {
     git(p.dir, 'merge', '--abort');
   });
 });
+
+/** A entrega no limite de revisões (o que `autoReview` grava, ver `Task.capWait`): 3 revisões reprovadas e o pedido de decisão aberto, com o commit da entrega. */
+async function atCap(p: Awaited<ReturnType<typeof proj>>, a: { id: string }) {
+  const card = await p.get(a.id);
+  await p.patch(a.id, {
+    reviewRounds: 3,
+    review: { ...card.review!, doneAt: new Date().toISOString(), verdict: 'rejected' },
+    capWait: { since: new Date().toISOString(), deliveryAt: card.delivery?.at ?? null, sha: card.checkpoint?.sha ?? null, to: 'owner', items: [{ id: 'R1', where: 'a.txt:1', problem: 'estilo' }] },
+  });
+  return (await p.get(a.id)).capWait!;
+}
+
+describe('aceitar o limite de revisões com trade-off (t-e0fae2): o mesmo caminho da aprovação, sem atalho', () => {
+  it('conclusão por IA e card de worktree: o trade-off fica gravado (🔴, justificativa e commit) e a mescla automática roda COM os testes até o commit da entrega', async () => {
+    const p = await proj('cap-aceita', { policy: 'auto' });
+    const a = await p.deliver('ana-1', 'Tarefa A', { 'a.txt': 'do A\n' });
+    const cap = await atCap(p, a);
+    const calls = probe.calls;
+
+    const out = await p.svc.decideCap('p', a.id, null, true, { decision: 'accept', justification: 'o estilo fica para a próxima' });
+    expect(out).toMatchObject({ status: 'review', autoMerge: { sha: a.sha, by: 'o usuário' } }); // pediu a mescla automática, ainda não mesclou
+    expect(out!.capWait).toBeUndefined();
+    await p.settle();
+
+    const done = await p.get(a.id);
+    expect(done).toMatchObject({
+      status: 'done',
+      merged: { branch: 'myco/ana-1', base: 'main' },
+      tests: { ok: true },
+      capAccepted: { by: 'o usuário', justification: 'o estilo fica para a próxima', sha: a.sha, deliveryAt: cap.deliveryAt, items: [{ id: 'R1', where: 'a.txt:1', problem: 'estilo' }] },
+    });
+    expect(notes(done)).toContain('aceita com trade-off por o usuário; a mescla automática vem a seguir');
+    expect(await fs.readFile(path.join(p.dir, 'a.txt'), 'utf8')).toBe('do A\n');
+    expect(probe.calls).toBe(calls + 1);
+    expect(p.merges()).toBe(1);
+    expect(p.clean()).toBe('');
+  });
+
+  it('os testes seguem obrigatórios: vermelho barra a mescla e devolve ao responsável (nada entra no principal), mesmo com o trade-off aceito', async () => {
+    const p = await proj('cap-vermelho', { policy: 'auto' });
+    const a = await p.deliver('ana-1', 'Tarefa A', { 'ok.txt': 'nao' });
+    await atCap(p, a);
+    const before = p.head();
+    await p.svc.decideCap('p', a.id, null, true, { decision: 'accept', justification: 'aceito' });
+    await p.settle();
+    const card = await p.get(a.id);
+    expect(card).toMatchObject({ status: 'doing', tests: { ok: false } });
+    expect(card.merged).toBeUndefined();
+    expect(notes(card).at(-1)).toMatch(/^mescla automática falhou: os testes ficaram vermelhos com a mescla; devolvida ao responsável/);
+    expect(p.head()).toBe(before);
+    expect(await fs.readFile(path.join(p.dir, 'ok.txt'), 'utf8')).toBe('sim');
+  });
+
+  it('projeto sem testes: aceitar não dispensa os testes (a mescla para e o dono decide)', async () => {
+    const p = await proj('cap-sem-testes', { policy: 'auto', tests: false });
+    const a = await p.deliver('ana-1', 'Tarefa A', { 'a.txt': 'do A\n' });
+    await atCap(p, a);
+    const before = p.head();
+    await p.svc.decideCap('p', a.id, null, true, { decision: 'accept', justification: 'aceito' });
+    await p.settle();
+    expect(await p.get(a.id)).toMatchObject({ status: 'review', capAccepted: { by: 'o usuário' }, autoMerge: { stopped: { detail: expect.stringMatching(/nunca os pula/) } } });
+    expect(p.head()).toBe(before);
+  });
+
+  it('conclusão reservada ao dono (preset manual): aceitar não mescla nem conclui, espera a aprovação dele', async () => {
+    const p = await proj('cap-dono', { policy: 'none' });
+    await p.svc.setFlowPolicy('p', { mode: 'manual' }, true);
+    const a = await p.deliver('ana-1', 'Tarefa A', { 'a.txt': 'do A\n' });
+    await atCap(p, a);
+    const before = p.head();
+    const calls = probe.calls;
+    const out = await p.svc.decideCap('p', a.id, null, true, { decision: 'accept', justification: 'aceito' });
+    await p.settle();
+    expect(out).toMatchObject({ status: 'review', capAccepted: { by: 'o usuário' }, ownerGate: { why: 'approved', by: 'o usuário (trade-off)' } });
+    expect(out!.autoMerge).toBeUndefined();
+    expect(probe.calls).toBe(calls);
+    expect(p.head()).toBe(before);
+    expect(ownAlerts(await readTasks(p.dir)).map((x) => [x.task.id, x.state.humanAction])).toEqual([[a.id, 'decide']]);
+  });
+});

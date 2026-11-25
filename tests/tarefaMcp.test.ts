@@ -1,11 +1,11 @@
-import { promises as fs, readFileSync } from 'node:fs';
+import { promises as fs, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { TAREFA_MCP_NAME, type StaffProfile, type Task } from '../shared/model';
+import { AUTO_REVIEW_ROUNDS, TAREFA_MCP_NAME, type StaffProfile, type Task } from '../shared/model';
 import { resolveCaller, SessionTokens, type Engine } from '../server/callers';
 import { CODEX_RESERVED_MCP_NAMES } from '../server/chat/codexArgs';
 import { buildClaudeArgs, renderFicha, type FichaContext } from '../server/staff/ficha';
@@ -103,11 +103,12 @@ async function serve(b: Board) {
       if (req.method !== 'POST' || req.headers['x-myco'] !== '1') return send(400, { error: 'tarefas só pelo Claudio’s Club' });
       const who = resolveCaller(false, req.headers['x-myco-token'], b.tokens);
       if (!who.ok) return send(who.status, { error: who.error });
-      const m = /^\/api\/projects\/([A-Za-z0-9-]+)\/tasks\/([A-Za-z0-9-]+)\/(cancel|cancel-request|cancel-request\/refuse)$/.exec(req.url ?? '');
+      const m = /^\/api\/projects\/([A-Za-z0-9-]+)\/tasks\/([A-Za-z0-9-]+)\/(cancel|cancel-request|cancel-request\/refuse|review-limit)$/.exec(req.url ?? '');
       if (!m) return send(404, { error: 'não encontrado' });
       const [, p, id, route] = m as unknown as [string, string, string, string];
       let out: Task | null;
-      if (route === 'cancel') out = await b.svc.cancelFrom(p, id, who.caller, cancelRequest(body, false).reason);
+      if (route === 'review-limit') out = await b.svc.decideCap(p, id, who.caller, false, body);
+      else if (route === 'cancel') out = await b.svc.cancelFrom(p, id, who.caller, cancelRequest(body, false).reason);
       else if (route === 'cancel-request') out = await b.svc.requestCancel(p, id, who.caller, reasonRequest(body, 'do pedido de cancelamento'));
       else out = await b.svc.refuseCancel(p, id, who.caller, reasonRequest(body, 'da recusa'));
       if (out === null) return send(404, { error: 'não encontrado' });
@@ -217,7 +218,7 @@ describe('o MCP chama as mesmas rotas, com o token da conversa', () => {
     for (const [quem, token] of strangers) {
       const call = mcpOf(srv.api, token);
       for (const tool of TAREFA_TOOLS) {
-        const r = await call(tool, { tarefa: t.id, motivo: 'tento' });
+        const r = await call(tool, tool === 'tarefa_decidir_limite' ? { tarefa: t.id, decisao: 'aceitar', texto: 'tento' } : { tarefa: t.id, motivo: 'tento' });
         expect(r.isError, `${quem} ${tool}`).toBe(true);
         expect(r.text, `${quem} ${tool}`).toMatch(/^403: /);
       }
@@ -261,6 +262,103 @@ describe('o MCP chama as mesmas rotas, com o token da conversa', () => {
     expect(srv.calls).toHaveLength(calls);
     expect((await b.get(t.id)).status).toBe('doing');
     await srv.close();
+  });
+});
+
+/** A tarefa no limite de revisões esperando a decisão (o que `autoReview` grava, ver `Task.capWait`): em revisão, 3 rodadas usadas e o pedido a quem pediu (Gio). */
+function capIt(b: Board, id: string, to: 'manager' | 'owner' = 'manager') {
+  const file = path.join(b.dir, '.myco', 'tasks.json');
+  const all = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, any>>;
+  const t = all.find((x) => x.id === id)!;
+  t.status = 'review';
+  t.reviewRounds = 3;
+  t.capWait = { since: new Date().toISOString(), deliveryAt: null, sha: null, to, items: [{ id: 'R1', where: 'a.ts:1', problem: 'quebrou' }] };
+  writeFileSync(file, JSON.stringify(all, null, 2));
+}
+
+describe('a decisão do limite de revisões: tarefa_decidir_limite chama a mesma rota, com o token da conversa', () => {
+  it('quem pediu aceita com trade-off: a rota recebe a justificativa, o card grava os 🔴, a justificativa e vai a pronto (sem worktree)', async () => {
+    const b = board('limite-aceita');
+    const srv = await serve(b);
+    const t = await b.started('Exportar CSV');
+    capIt(b, t.id);
+    const gio = mcpOf(srv.api, b.tokenOf('gio-1', { session: 'c-gio-1' }));
+    const r = await gio('tarefa_decidir_limite', { tarefa: t.id, decisao: 'aceitar', texto: 'o que sobrou é estilo' });
+    expect(r).toMatchObject({ isError: false, text: `limite de revisões: aceita com trade-off: ${t.id} (status done)` });
+    const call = srv.calls.at(-1)!;
+    expect(call.url).toBe(`/api/projects/p/tasks/${t.id}/review-limit`);
+    expect(call.headers['x-myco-token']).toBe(b.tokenOf('gio-1', { session: 'c-gio-1' }));
+    expect(call.body).toEqual({ decision: 'accept', justification: 'o que sobrou é estilo' });
+    expect(await b.get(t.id)).toMatchObject({
+      status: 'done',
+      capAccepted: { by: 'Gio', justification: 'o que sobrou é estilo', sha: null, items: [{ id: 'R1', where: 'a.ts:1', problem: 'quebrou' }] },
+    });
+    expect((await b.get(t.id)).capWait).toBeUndefined();
+    await srv.close();
+  });
+
+  it('reabrir leva a instrução ao responsável e dá UMA rodada a mais (contada); cancelar cancela com o motivo', async () => {
+    const b = board('limite-reabre');
+    const srv = await serve(b);
+    const gio = mcpOf(srv.api, b.tokenOf('gio-1', { session: 'c-gio-1' }));
+    const a = await b.started('Exportar CSV');
+    capIt(b, a.id);
+    const r = await gio('tarefa_decidir_limite', { tarefa: a.id, decisao: 'reabrir', texto: 'cubra o caso vazio' });
+    expect(r).toMatchObject({ isError: false, text: `limite de revisões: reaberta com a sua instrução: ${a.id} (status doing)` });
+    expect(srv.calls.at(-1)!.body).toEqual({ decision: 'reopen', instruction: 'cubra o caso vazio' });
+    expect(await b.get(a.id)).toMatchObject({ status: 'doing', reviewRounds: AUTO_REVIEW_ROUNDS - 1, capReopens: 1 });
+    expect((await b.get(a.id)).history.at(-1)?.note).toContain('reabriu com instrução nova (cubra o caso vazio); uma rodada de revisão a mais (reabertura 1/3)');
+
+    const c = await b.make('Outra');
+    capIt(b, c.id);
+    const out = await gio('tarefa_decidir_limite', { tarefa: c.id, decisao: 'cancelar', texto: 'não vale mais' });
+    expect(out).toMatchObject({ isError: false, text: `limite de revisões: cancelada: ${c.id} (status cancelled)` });
+    expect(await b.get(c.id)).toMatchObject({ status: 'cancelled' });
+    await srv.close();
+  });
+
+  it('o responsável, o revisor e outro funcionário levam 403 e nada muda; sem o limite esperando decisão, 409; id inexistente, 404', async () => {
+    const b = board('limite-403');
+    const srv = await serve(b);
+    const t = await b.started('Exportar CSV');
+    const before = b.raw();
+    // Sem o limite (a tarefa está em Fazendo): quem pediu leva 409, e os de fora 403 antes (quem pode vem antes do estado).
+    expect((await mcpOf(srv.api, b.tokenOf('gio-1', { session: 'c-gio-1' }))('tarefa_decidir_limite', { tarefa: t.id, decisao: 'aceitar', texto: 'x' })).text).toMatch(/^409: a tarefa não está esperando decisão de limite de revisões/);
+    capIt(b, t.id);
+    const capped = b.raw();
+    for (const [quem, token] of [
+      ['responsável (Ana)', b.workerToken(t)],
+      ['revisor (Rui)', b.tokenOf('rev-1')],
+      ['outro funcionário (Bia)', b.tokenOf('bia-1')],
+      ['de fora (Dev)', b.tokenOf('dev-1')],
+    ] as const) {
+      const r = await mcpOf(srv.api, token)('tarefa_decidir_limite', { tarefa: t.id, decisao: 'aceitar', texto: 'tento' });
+      expect(r.isError, quem).toBe(true);
+      expect(r.text, quem).toMatch(/^403: /);
+    }
+    expect(b.raw()).toBe(capped);
+    expect(before).not.toBe(capped);
+    expect((await mcpOf(srv.api, b.tokenOf('gio-1', { session: 'c-gio-1' }))('tarefa_decidir_limite', { tarefa: 't-000000', decisao: 'aceitar', texto: 'x' })).text).toMatch(/^404: /);
+    // O pedido já passou ao usuário (`to: 'owner'`): o gestor leva 403 e só o usuário decide.
+    capIt(b, t.id, 'owner');
+    expect((await mcpOf(srv.api, b.tokenOf('gio-1', { session: 'c-gio-1' }))('tarefa_decidir_limite', { tarefa: t.id, decisao: 'aceitar', texto: 'x' })).text).toMatch(/^403: o pedido passou ao usuário/);
+    await srv.close();
+  });
+
+  it('decisão fora do formato ou texto vazio, longo ou com controle: recusados antes de chamar a rota', async () => {
+    const never: typeof fetch = () => Promise.reject(new Error('não devia chamar'));
+    const mcp = createTarefaMcp({ api: 'http://127.0.0.1:4848', projectId: 'p', token: () => 'a'.repeat(64), fetchImpl: never });
+    const call = (args: Record<string, unknown>) => mcp.callTool('tarefa_decidir_limite', args).then((r) => ({ text: r.content[0]!.text, isError: r.isError === true }));
+    for (const decisao of ['approve', 'constructor', '__proto__', '', undefined, 5]) {
+      const r = await call({ tarefa: 't-1a2b3c', decisao, texto: 'x' });
+      expect(r.isError, String(decisao)).toBe(true);
+      expect(r.text, String(decisao)).toContain('`decisao`');
+    }
+    for (const texto of ['', '   ', undefined, 7, 'a\u0000b', 'x'.repeat(2001)]) {
+      const r = await call({ tarefa: 't-1a2b3c', decisao: 'aceitar', texto });
+      expect(r.isError, String(texto)).toBe(true);
+    }
+    expect((await call({ tarefa: '../x', decisao: 'aceitar', texto: 'x' })).text).toContain('id da tarefa');
   });
 });
 
@@ -330,14 +428,15 @@ describe('a entrada: só uma rota, só loopback, nada fora do formato', () => {
 describe('JSON-RPC: initialize, tools/list e tools/call', () => {
   const server = createTarefaMcp({ api: 'http://127.0.0.1:4848', projectId: 'p', token: () => undefined });
 
-  it('initialize, ping e a lista com as 3 ferramentas (e só elas), todas com tarefa e motivo obrigatórios', async () => {
+  it('initialize, ping e a lista com as 4 ferramentas (e só elas): as de cancelamento com tarefa e motivo, a do limite com tarefa, decisão e texto', async () => {
     const init = (await server.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })) as { result: { serverInfo: { name: string }; protocolVersion: string } };
     expect(init.result.serverInfo.name).toBe(TAREFA_MCP_NAME);
     expect(init.result.protocolVersion).toBe('2025-06-18');
     expect(await server.handle({ jsonrpc: '2.0', id: 2, method: 'ping' })).toEqual({ jsonrpc: '2.0', id: 2, result: {} });
-    const list = (await server.handle({ jsonrpc: '2.0', id: 3, method: 'tools/list' })) as { result: { tools: Array<{ name: string; inputSchema: { required: string[] } }> } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(['tarefa_cancelar', 'tarefa_pedir_cancelamento', 'tarefa_recusar_cancelamento']);
-    for (const t of list.result.tools) expect(t.inputSchema.required).toEqual(['tarefa', 'motivo']);
+    const list = (await server.handle({ jsonrpc: '2.0', id: 3, method: 'tools/list' })) as { result: { tools: Array<{ name: string; inputSchema: { required: string[]; properties: Record<string, { enum?: string[] }> } }> } };
+    expect(list.result.tools.map((t) => t.name)).toEqual(['tarefa_cancelar', 'tarefa_pedir_cancelamento', 'tarefa_recusar_cancelamento', 'tarefa_decidir_limite']);
+    for (const t of list.result.tools) expect(t.inputSchema.required).toEqual(t.name === 'tarefa_decidir_limite' ? ['tarefa', 'decisao', 'texto'] : ['tarefa', 'motivo']);
+    expect(list.result.tools[3]!.inputSchema.properties.decisao!.enum).toEqual(['aceitar', 'reabrir', 'cancelar']);
     expect(await server.handle({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBeNull();
   });
 

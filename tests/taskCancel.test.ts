@@ -951,7 +951,9 @@ describe('limite de revisões automáticas', () => {
     const end = await b.get(t.id);
     expect(end).toMatchObject({ status: 'review', reviewRounds: 3 });
     expect(end.history.at(-1)?.note).toContain('limite de 3 revisões automáticas');
-    expect(stuckReason(end)).toBe('limite de revisões automáticas atingido');
+    // Sem `requestedBy` (card do dono), a decisão é do usuário (ver `Task.capWait`).
+    expect(end.capWait).toMatchObject({ to: 'owner' });
+    expect(stuckReason(end)).toBe('limite de revisões automáticas atingido: espera você decidir (aceitar com trade-off, reabrir com instrução nova ou cancelar)');
   });
 });
 
@@ -1205,6 +1207,7 @@ describe('limite de revisões automáticas: tarefa parada no limite antigo (2) s
     b.edit((all) => {
       const task = all.find((x) => x.id === t.id)!;
       task.reviewRounds = 2;
+      delete task.capWait; // a tarefa legada parou no limite antes de o pedido de decisão (`Task.capWait`) existir
       task.history = task.history.map((h: { note?: string }, i: number, list: unknown[]) => (i === list.length - 1 ? { ...h, note: OLD_NOTE } : h));
     });
     return { b, t, dep };
@@ -1333,13 +1336,15 @@ describe('revisão automática: o que muda no meio do caminho não recebe revis�
     }
   });
 
-  it('no limite, sem corrida: a nota é gravada e quem pediu (e revisa) é avisado', async () => {
+  it('no limite, sem corrida: a nota é gravada e quem pediu (e revisa) recebe o pedido de decisão, com os três caminhos', async () => {
     const { b, t } = await delivered('limite-sem-corrida', 'gio-1');
     b.edit((all) => (all[0]!.reviewRounds = AUTO_REVIEW_ROUNDS));
     const noticed = b.notified.length;
     await privately(b).autoReview('p', await b.get(t.id));
-    expect((await b.get(t.id)).history.at(-1)?.note).toContain(`limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas`);
-    expect(b.notified.slice(noticed).map((n) => n.text)).toEqual([expect.stringContaining('o limite de 3 revisões automáticas foi atingido')]);
+    const after = await b.get(t.id);
+    expect(after.history.at(-1)?.note).toContain(`limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas`);
+    expect(after.capWait).toMatchObject({ to: 'manager', deliveredAt: expect.any(String) });
+    expect(b.notified.slice(noticed).map((n) => n.text)).toEqual([expect.stringContaining(`usou as ${AUTO_REVIEW_ROUNDS} revisões automáticas`)]);
   });
 
   it('a revisão abriu mas a contagem da rodada falhou: o gestor não recebe "entregou" nem a nota de "não começou" (a revisão segue e avisa no desfecho)', async () => {
