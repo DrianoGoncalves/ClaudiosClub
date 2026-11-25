@@ -1,13 +1,14 @@
 import path from 'node:path';
-import type { LiveSession, Project, StaffProfile } from '../shared/model';
+import type { LiveSession, StaffProfile } from '../shared/model';
 import { encodeProjectDir, pathKey } from './adapters/claude/paths';
+import type { ProjectLite } from './adapters/types';
 
 /**
  * Dono (funcionário/projeto) e nome de cada sessão. `hidden` = a sessão não aparece na caixa nem nos
  * avisos: está arquivada (ela ou o projeto) ou é de um projeto que o Claude Code conhece e está fora do
  * quadro (`offBoard`: os ids dele). Sessão de projeto desconhecido continua aparecendo.
  */
-export function sessionPlaces(projects: Project[], staffList: StaffProfile[], archived: ReadonlySet<string>, offBoard: ReadonlySet<string> = new Set()) {
+export function sessionPlaces(projects: ProjectLite[], staffList: StaffProfile[], archived: ReadonlySet<string>, offBoard: ReadonlySet<string> = new Set()) {
   const parents = mycoWorktreeParents(projects);
   const projectName = new Map(projects.map((p) => [p.id, p.name]));
   const byPath = new Map(projects.map((p) => [pathKey(p.path), p.id]));
@@ -35,7 +36,7 @@ export function sessionPlaces(projects: Project[], staffList: StaffProfile[], ar
 }
 
 /** Worktrees criadas pelo Claudio’s Club (…/.claude/worktrees/myco-<ficha>) → id do projeto principal. */
-export function mycoWorktreeParents(projects: Project[]): Map<string, string> {
+export function mycoWorktreeParents(projects: ProjectLite[]): Map<string, string> {
   const byPath = new Map(projects.map((p) => [pathKey(p.path), p.id]));
   const out = new Map<string, string>();
   for (const p of projects) {

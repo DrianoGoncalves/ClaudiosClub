@@ -139,6 +139,26 @@ describe('projectPath e boardProjectIds (sem o resumo)', () => {
     expect(listed?.exists).toBe(false);
   });
 
+  it('listProjectsLite: os mesmos id, pasta, nome (com apelido), exists e worktreeOf do listProjects, sem o resumo', async () => {
+    const wt = path.join(projA, '.claude', 'worktrees', 'w1');
+    const gone = path.join(root, 'work', 'gone3');
+    await fs.mkdir(wt, { recursive: true });
+    await fs.mkdir(gone, { recursive: true });
+    await writeConfig(projA, projB, wt, gone);
+    await fs.rm(gone, { recursive: true, force: true });
+    await transcript(projA, 's1');
+    const ad = adapter({ projectNames: async () => ({ [idA]: 'Apelido A' }) });
+    const pick = ({ id, path: p, name, exists, worktreeOf }: { id: string; path: string; name: string; exists: boolean; worktreeOf: string | null }) => ({ id, path: p, name, exists, worktreeOf });
+    const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
+    const lite = await ad.listProjectsLite();
+    expect(lite.map(pick).sort(byId)).toEqual((await ad.listProjects()).map(pick).sort(byId));
+    expect(byPath(lite, projA)).toEqual({ id: idA, path: path.resolve(projA), name: 'Apelido A', exists: true, worktreeOf: null });
+    expect(byPath(lite, gone)?.exists).toBe(false);
+    expect(byPath(lite, wt)?.worktreeOf).toBe(path.resolve(projA));
+    // Sem o resumo: nada de contagem de conversas nem última atividade.
+    expect(byPath(lite, projA)).not.toHaveProperty('sessionCount');
+  });
+
   it('boardProjectIds: os mesmos do filtro exists && !worktreeOf sobre o listProjects', async () => {
     const wt = path.join(projA, '.claude', 'worktrees', 'w1');
     const gone = path.join(root, 'work', 'gone2');
@@ -148,5 +168,32 @@ describe('projectPath e boardProjectIds (sem o resumo)', () => {
     const expected = (await ad.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id);
     expect((await ad.boardProjectIds()).sort()).toEqual(expected.sort());
     expect((await ad.boardProjectIds()).sort()).toEqual([idA, encodeProjectDir(path.resolve(projB))].sort());
+  });
+});
+
+// SPEC "Desempenho" 2: rota chamada em polling não refaz o resumo (stat de todo transcript). Em 25/11/2026 a caixa (a cada 5 s) chamava o `listProjects`
+// e, com o disco ocupado, até o `/api/live` (2 ms de trabalho) levava 4,5 s.
+describe('polling sem o resumo dos projetos (server/index.ts)', () => {
+  const src = () => fs.readFile(path.join(__dirname, '..', 'server', 'index.ts'), 'utf8');
+  /** O corpo de `async function nome(` até a próxima função do topo do arquivo. */
+  const body = (text: string, name: string) => {
+    const at = text.indexOf(`async function ${name}(`);
+    expect(at, name).toBeGreaterThan(-1);
+    const next = text.slice(at + 1).search(/\n(async )?function \w+\(/);
+    return text.slice(at, next === -1 ? undefined : at + 1 + next);
+  };
+
+  it.each(['getInbox', 'getCommitWaiting', 'getTurns', 'scheduledStaff', 'sessionPlacesNow'])('%s usa a lista leve', async (name) => {
+    const fn = body(await src(), name);
+    expect(fn).not.toContain('adapter.listProjects(');
+  });
+
+  it('/api/git usa a lista leve', async () => {
+    const text = await src();
+    const at = text.indexOf('/^\\/api\\/git$/');
+    expect(at).toBeGreaterThan(-1);
+    const route = text.slice(at, text.indexOf('\n  ],', at));
+    expect(route).toContain('projectsLite()');
+    expect(route).not.toContain('adapter.listProjects(');
   });
 });

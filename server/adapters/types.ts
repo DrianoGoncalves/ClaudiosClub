@@ -18,10 +18,18 @@ export interface SessionQuery {
   includeOld?: boolean;
 }
 
+/** Um projeto do quadro só com o que a caixa, os avisos e os agendamentos usam: sem a contagem de conversas e a última atividade (ver `listProjectsLite`). */
+export type ProjectLite = Pick<Project, 'id' | 'path' | 'name' | 'exists' | 'worktreeOf'>;
+
 export interface ToolAdapter {
   readonly id: string;
-  /** Os projetos do quadro. */
+  /** Os projetos do quadro, com o resumo (contagem de conversas, última atividade): `stat` de todo transcript. Fora de caminho de polling (SPEC "Desempenho" 2). */
   listProjects(): Promise<Project[]>;
+  /**
+   * Os mesmos projetos, na mesma ordem da descoberta, sem o resumo: só a descoberta e um `access` por pasta. É o que rota chamada em polling usa (caixa, aviso de
+   * commit, turnos, git, agendamentos). Opcional: sem ele, quem chama usa o `listProjects`.
+   */
+  listProjectsLite?(): Promise<ProjectLite[]>;
   /** A pasta de um projeto do quadro que existe (null: fora do quadro ou apagado), sem o resumo do `listProjects`: o caminho quente das tarefas. */
   projectPath(id: string): Promise<string | null>;
   /** Ids dos projetos do quadro que existem e não são worktree, sem o resumo do `listProjects`. */

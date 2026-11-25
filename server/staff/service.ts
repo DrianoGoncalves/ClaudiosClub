@@ -33,7 +33,7 @@ async function allServers(projectPath: string, vault?: VaultOptions): Promise<Se
 async function ftpNames(projectPath: string, vault?: VaultOptions): Promise<string[]> {
   return (await readFtpConnections(projectPath, vault)).map((c) => c.name);
 }
-import type { ToolAdapter } from '../adapters/types';
+import type { ProjectLite, ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
 import { MYCO_HOME, readConfig, setArchived, workspaceOf } from '../config';
 import { defaultLocations } from '../adapters/claude/paths';
@@ -300,7 +300,7 @@ export class StaffService {
     private readonly opts: StaffServiceOptions,
   ) {}
 
-  async listAll(projects: Project[]): Promise<StaffProfile[]> {
+  async listAll(projects: ProjectLite[]): Promise<StaffProfile[]> {
     const lists = await Promise.all(projects.filter((p) => p.exists).map((p) => listProjectStaff(p.path, p.id)));
     return lists.flat();
   }

@@ -14,7 +14,7 @@ import { CodexCapability } from './engineCapability';
 import { CodexModels } from './codexModels';
 import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
-import type { ToolAdapter } from './adapters/types';
+import type { ProjectLite, ToolAdapter } from './adapters/types';
 import { getAuthStatus, openLoginTerminal } from './auth';
 import { serveStartFiles } from './startPage';
 import {
@@ -320,6 +320,12 @@ const adapter: ToolAdapter = new ClaudeAdapter({
   // Conversas do Club: o assunto vem do rastreador (ver titles/tracker.ts), que acha a virada no meio do transcript.
   clubSessions: clubClaudeIds,
 });
+/**
+ * Os projetos do quadro sem o resumo (sem o `stat` de todo transcript): o que rota chamada em polling usa (caixa, aviso de commit, turnos, git e agendamentos,
+ * a cada 5 a 30 s). Com o `listProjects`, o resumo (cache de 5 s) era refeito quase a cada leitura da caixa: ~1.350 `stat` que, com o disco ocupado, enchiam
+ * o pool de I/O e seguravam até as rotas baratas (SPEC "Desempenho" 2).
+ */
+const projectsLite = (): Promise<ProjectLite[]> => adapter.listProjectsLite?.() ?? adapter.listProjects();
 /** `?old=1` na rota: lista também as conversas antigas (arquivadas pela retenção). */
 const includeOld = (url: URL) => url.searchParams.get('old') === '1';
 /**
@@ -947,7 +953,7 @@ const routines = new RoutineScheduler({
 
 /** As fichas cujas rotinas o agendador vê (as arquivadas ficam de fora): as de todos os projetos, ou só as de `projectId`. */
 async function scheduledStaff(projectId?: string): Promise<StaffProfile[]> {
-  const [projects, config] = await Promise.all([adapter.listProjects(), readConfig()]);
+  const [projects, config] = await Promise.all([projectsLite(), readConfig()]);
   const archived = new Set([...config.archived.projects, ...config.archived.sessions]);
   const all = await staff.listAll(projects.filter((p) => p.exists && !archived.has(p.id) && (!projectId || p.id === projectId)));
   return all.filter((s) => !archived.has(`staff:${s.id}`));
@@ -2594,7 +2600,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     'GET',
     /^\/api\/git$/,
     async () => {
-      const projects = (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf);
+      const projects = (await projectsLite()).filter((p) => p.exists && !p.worktreeOf);
       const states = await Promise.all(projects.map(async (p) => [p.id, await gitState(p.path)] as const));
       return Object.fromEntries(states.filter(([, s]) => s !== null));
     },
@@ -3268,7 +3274,7 @@ const resolver = new InboxResolver();
  * arquivados); o aviso que o dono já ignorou não conta. Erro ao ler um projeto: ele fica de fora da contagem, os outros seguem.
  */
 async function getCommitWaiting(): Promise<CommitWaitingSummary> {
-  const projects = await adapter.listProjects();
+  const projects = await projectsLite();
   const { hidden } = await sessionPlacesNow(projects);
   const rows: CommitWaitingSummary['projects'] = [];
   for (const p of projects.filter((x) => x.exists && !x.worktreeOf)) {
@@ -3291,7 +3297,7 @@ async function getCommitWaiting(): Promise<CommitWaitingSummary> {
  */
 async function getInbox(): Promise<InboxItem[]> {
   const readAt = resolver.begin();
-  const [projects, live] = await Promise.all([adapter.listProjects(), adapter.listLiveSessions()]);
+  const [projects, live] = await Promise.all([projectsLite(), adapter.listLiveSessions()]);
   const { where, hidden } = await sessionPlacesNow(projects);
 
   const out: InboxItem[] = [];
@@ -3377,7 +3383,7 @@ async function getInbox(): Promise<InboxItem[]> {
       id: `routine:${a.id}`,
       kind: 'routine',
       projectId: a.projectId,
-      projectName: (await adapter.listProjects()).find((p) => p.id === a.projectId)?.name ?? '',
+      projectName: projects.find((p) => p.id === a.projectId)?.name ?? '',
       sessionId: '',
       staffId: a.staffId,
       name: a.staffName,
@@ -3468,7 +3474,7 @@ async function getInbox(): Promise<InboxItem[]> {
 async function getTurns(since: string | null): Promise<TurnNotice[]> {
   const done = turns.since(since);
   if (!done.length) return [];
-  const [projects, live] = await Promise.all([adapter.listProjects(), adapter.listLiveSessions()]);
+  const [projects, live] = await Promise.all([projectsLite(), adapter.listLiveSessions()]);
   const { where, hidden } = await sessionPlacesNow(projects);
   const liveById = new Map(live.map((l) => [l.sessionId, l]));
   return done.flatMap((d) => {
@@ -3478,7 +3484,7 @@ async function getTurns(since: string | null): Promise<TurnNotice[]> {
 }
 
 /** Dono e nome de cada sessão, e se ela fica de fora (arquivada, ou de projeto que não está no quadro). */
-async function sessionPlacesNow(projects: Project[]) {
+async function sessionPlacesNow(projects: ProjectLite[]) {
   const [config, staffList, off] = await Promise.all([readConfig(), staff.listAll(projects), adapter.offBoardRefs()]);
   return sessionPlaces(projects, staffList, new Set([...config.archived.sessions, ...config.archived.projects]), new Set(off.map((r) => r.id)));
 }

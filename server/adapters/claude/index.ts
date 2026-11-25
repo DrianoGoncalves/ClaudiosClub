@@ -10,7 +10,7 @@ import type {
   UserScope,
 } from '../../../shared/model';
 import { TtlCache } from '../../ttlCache';
-import type { SessionQuery, ToolAdapter } from '../types';
+import type { ProjectLite, SessionQuery, ToolAdapter } from '../types';
 import { markDuplicates, readAgentsDir } from './agents';
 import { CostIndex, systemCostsPath } from './costs';
 import { exists } from './fsutil';
@@ -91,6 +91,16 @@ export class ClaudeAdapter implements ToolAdapter {
   async projectPath(id: string): Promise<string | null> {
     const ref = await this.ref(id);
     return ref && (await exists(ref.path)) ? ref.path : null;
+  }
+
+  /**
+   * Os projetos do quadro sem o resumo (ver `ToolAdapter.listProjectsLite`): a descoberta (cache de `discoveryTtlMs`), um `access` por pasta e o apelido. Os campos que
+   * ficam são os mesmos do `listProjects` (`exists` pelo mesmo `access`, `name` com o apelido); muda só a ordem, que é a da descoberta e não a da última atividade.
+   */
+  async listProjectsLite(): Promise<ProjectLite[]> {
+    const [refs, names] = await Promise.all([this.refs(), this.displayNames()]);
+    const alive = await Promise.all(refs.map((r) => exists(r.path)));
+    return refs.map((r, i) => ({ id: r.id, path: r.path, name: names[r.id] || path.basename(r.path), exists: alive[i]!, worktreeOf: worktreeParent(r.path) }));
   }
 
   /** Os do quadro que existem e não são worktree (o filtro de `p.exists && !p.worktreeOf` sobre o `listProjects`), sem o resumo (ver `projectPath`). */

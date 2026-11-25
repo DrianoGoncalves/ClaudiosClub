@@ -98,6 +98,7 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 
 - Achar a pasta de um projeto e a lista de projetos do quadro no caminho das tarefas usa `adapter.projectPath` / `adapter.boardProjectIds` (só a descoberta e um `access`).
 - `adapter.listProjects()` (que faz `stat` de todo transcript do `~/.claude/projects`, mais de mil arquivos) não entra em caminho chamado por tarefa, por cartão ou por polling.
+- Rota de polling que precisa da lista de projetos (caixa, aviso de commit, turnos, `/api/git`, agendamentos) usa `projectsLite()` (`adapter.listProjectsLite`: id, pasta, nome, existe, worktree; só a descoberta e um `access` por pasta). O `listProjects` completo fica no `/api/board`, no `/api/projects` e no que o dono pede. Em 25/11/2026 a caixa (a cada 5 s) refazia o resumo quase a cada leitura (~1.350 `stat`), e com o disco ocupado até o `/api/live` (2 ms de trabalho) levava 4,5 s. Trava: `tests/projectsCache.test.ts`.
 - O `/api/board` lê o começo e o fim de cada transcript **uma vez por versão do arquivo** (`transcriptFacts` em `server/adapters/claude/sessions.ts`, com a mesma janela de 3 s da regra 1). O que muda sem mexer no transcript (ao vivo, `custom-title.json`, subagents) é lido a cada montagem e não entra no guardado.
 
 *Por quê:* o `stat` em rajada ocupava o pool de I/O do Node, e a leitura e a gravação do quadro ficavam esperando atrás dele. Em 23/11/2026 o `/api/board` era a rota mais lenta (até 5,7 min com o HDD 100% ocupado): cada montagem relia 2 × 64 KB de ~600 transcripts.
