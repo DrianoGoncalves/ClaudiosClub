@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { acquire, currentHolder, isHeavyCommand, LOCK_FILE, release } from '../scripts/hooks/heavy-lock.mjs';
+import { acquire, currentHolder, isFullSuiteCommand, isHeavyCommand, LOCK_FILE, release } from '../scripts/hooks/heavy-lock.mjs';
 import { isAlive } from '../server/chat/registry';
 import { removeTemp } from './support/tmp';
 
@@ -91,8 +91,11 @@ describe('o que é validação pesada', () => {
     'jest',
   ])('pesado: %s', (cmd) => {
     expect(isHeavyCommand(cmd)).toBe(true);
+    expect(isFullSuiteCommand(cmd)).toBe(true);
   });
 
+  // Rodada de alguns arquivos (ou filtro): não é a suíte inteira, mas espera a vez na fila assim mesmo. Em 25/11/2026 três funcionários rodavam "só este
+  // arquivo" ao mesmo tempo, fora da fila, e a máquina (8 GB, HDD) paginava sem parar.
   it.each([
     'npx vitest run tests/foo.test.ts',
     'npx vitest run tests/a.test.ts tests/b.test.ts --testTimeout=60000',
@@ -101,14 +104,23 @@ describe('o que é validação pesada', () => {
     'npm test -- tests/foo.test.ts',
     'npm run test -- --reporter verbose tests/a.test.ts',
     'vitest related src/a.ts',
-    'vitest list',
-    'npx vitest --version',
-    'npx vitest run --help',
-    'tsc --version',
-    'tsc a.ts',
+    'npx vitest related src/a.ts --run',
     'jest src/foo.test.js',
     'vendor/bin/phpunit tests/FooTest.php',
     'composer test tests/FooTest.php',
+    'powershell -NoProfile -Command "npx vitest run tests/a.test.ts"',
+  ])('parcial (na fila, mas não é a suíte): %s', (cmd) => {
+    expect(isHeavyCommand(cmd)).toBe(true);
+    expect(isFullSuiteCommand(cmd)).toBe(false);
+  });
+
+  it.each([
+    'vitest list',
+    'npx vitest --version',
+    'npx vitest run --help',
+    'jest --init',
+    'tsc --version',
+    'tsc a.ts',
     'npm run build',
     'npm install',
     'npm run dev',
@@ -120,6 +132,7 @@ describe('o que é validação pesada', () => {
     '',
   ])('leve: %s', (cmd) => {
     expect(isHeavyCommand(cmd)).toBe(false);
+    expect(isFullSuiteCommand(cmd)).toBe(false);
   });
 
   it('o que não é texto não é pesado', () => {
@@ -238,7 +251,7 @@ const call = (session: string, id: string, command: unknown, extra: Record<strin
 });
 
 describe('hook do terminal (heavy-guard.mjs)', () => {
-  it('duas suítes completas pedidas juntas rodam em sequência; teste de um arquivo passa direto', async () => {
+  it('duas suítes completas pedidas juntas rodam em sequência; o que não roda teste passa direto', async () => {
     const dir = lockDir();
     const first = runGuard(dir, 'pre', call('conv-a', 'toolu_a', 'npx vitest run'));
     expect((await first.done).stdout).toBe(''); // livre: pega e não diz nada
@@ -251,8 +264,8 @@ describe('hook do terminal (heavy-guard.mjs)', () => {
     expect(secondDone, 'a segunda suíte tinha de esperar a primeira').toBe(false);
     expect((await currentHolder(dir))?.key).toBe('toolu_a');
 
-    // Teste de um arquivo (e comando que não é teste) passa direto, com a fila ocupada.
-    for (const [id, command] of [['toolu_c', 'npx vitest run tests/foo.test.ts'], ['toolu_d', 'git status']] as const) {
+    // O que não roda teste (listar, versão, git) passa direto, com a fila ocupada. Teste de um arquivo também espera a vez (ver os casos "parcial").
+    for (const [id, command] of [['toolu_c', 'npx vitest list'], ['toolu_d', 'git status']] as const) {
       const light = await runGuard(dir, 'pre', call('conv-c', id, command)).done;
       expect(light.stdout).toBe('');
       expect(light.ms).toBeLessThan(1400);
@@ -314,8 +327,11 @@ describe('hook do terminal (heavy-guard.mjs)', () => {
     expect(out.hookSpecificOutput).toMatchObject({ hookEventName: 'PreToolUse', permissionDecision: 'deny' });
     expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/^\[MyCo\] .*primeiro plano/);
     expect(await currentHolder(dir)).toBeNull();
-    // Teste de um arquivo em segundo plano não é da fila.
-    expect((await runGuard(dir, 'pre', call('conv-a', 'toolu_2', 'npx vitest run tests/a.test.ts', { run_in_background: true })).done).stdout).toBe('');
+    // Teste de um arquivo em segundo plano também é da fila (toda rodada de testes espera a vez): negado pelo mesmo motivo.
+    const one = JSON.parse((await runGuard(dir, 'pre', call('conv-a', 'toolu_2', 'npx vitest run tests/a.test.ts', { run_in_background: true })).done).stdout);
+    expect(one.hookSpecificOutput).toMatchObject({ hookEventName: 'PreToolUse', permissionDecision: 'deny' });
+    // O que não roda teste segue livre em segundo plano.
+    expect((await runGuard(dir, 'pre', call('conv-a', 'toolu_3', 'git status', { run_in_background: true })).done).stdout).toBe('');
   });
 
   it('entrada que não é do terminal, ilegível ou sem comando: não responde e não trava nada', async () => {

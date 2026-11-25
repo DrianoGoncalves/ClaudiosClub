@@ -212,16 +212,23 @@ function positionals(args) {
 const INFO = new Set(['-v', '--version', '-h', '--help']);
 const hasInfo = (args) => args.some((a) => INFO.has(a));
 
-/** vitest e jest: a suíte inteira (sem arquivo nem filtro). `vitest run|watch|dev` entram; `related`, `list`, `bench`, `init` não. */
-function runnerHeavy(args, sub) {
-  if (hasInfo(args)) return false;
+/**
+ * vitest e jest: toda rodada de testes espera a vez, com arquivo ou filtro também (e o `vitest related`). Cada rodada sobe processos de ~350 MB; em 25/11/2026 três
+ * funcionários rodavam "só este arquivo" ao mesmo tempo, fora da fila, e a máquina (8 GB, HDD) paginava sem parar. Só o que não roda teste fica de fora: `list`,
+ * `init`, versão e ajuda.
+ */
+function runnerHeavy(args, sub, suite) {
+  if (hasInfo(args) || args.includes('--init')) return false;
   const pos = positionals(args);
   if (pos[0] !== undefined && sub.light.has(pos[0].toLowerCase())) return false;
+  if (!suite) return true;
+  // A suíte inteira (`isFullSuiteCommand`): sem arquivo nem filtro; `related` e `bench` nunca são a suíte.
+  if (pos[0] !== undefined && sub.partial.has(pos[0].toLowerCase())) return false;
   const rest = pos[0] !== undefined && sub.run.has(pos[0].toLowerCase()) ? pos.slice(1) : pos;
   return rest.length === 0;
 }
-const VITEST = { run: new Set(['run', 'watch', 'dev']), light: new Set(['related', 'list', 'bench', 'init']) };
-const JEST = { run: new Set(), light: new Set(['--init']) };
+const VITEST = { light: new Set(['list', 'init']), partial: new Set(['related', 'bench']), run: new Set(['run', 'watch', 'dev']) };
+const JEST = { light: new Set(), partial: new Set(), run: new Set() };
 
 /** tsc do projeto inteiro: sem arquivo de código nos argumentos (com arquivo ele ignora o tsconfig e é pequeno). */
 function tscHeavy(args) {
@@ -234,8 +241,11 @@ function tscHeavy(args) {
 /** Script do package.json que é suíte ou tsc: `npm test`, `npm run test:unit`, `yarn typecheck`. */
 const HEAVY_SCRIPT = /^(test|tests|typecheck|type-check|tsc)(:.*)?$/i;
 
-/** O programa e os argumentos já sem prefixos (env, time, cd não entra: é outro comando). Devolve se é pesado. */
-function heavyCommand(words, depth) {
+/**
+ * O programa e os argumentos já sem prefixos (env, time, cd não entra: é outro comando). Devolve se é pesado: com `suite`, se é a suíte inteira (ou o tsc do
+ * projeto); sem, se espera a vez na fila (qualquer rodada de testes, ou o tsc do projeto).
+ */
+function heavyCommand(words, depth, suite = false) {
   let i = 0;
   while (i < words.length) {
     const w = words[i];
@@ -251,45 +261,51 @@ function heavyCommand(words, depth) {
     // `bash -c "npm test"`, `cmd /c npm test`, `powershell -Command "npm test"`: confere o texto que ele roda.
     const at = args.findIndex((a) => SHELLS[name].includes(a.toLowerCase()));
     const payload = at === -1 ? '' : args.slice(at + 1).join(' ');
-    return depth < 3 && payload !== '' && isHeavyCommand(payload, depth + 1);
+    return depth < 3 && payload !== '' && (suite ? isFullSuiteCommand : isHeavyCommand)(payload, depth + 1);
   }
-  if (name === 'vitest') return runnerHeavy(args, VITEST);
-  if (name === 'jest') return runnerHeavy(args, JEST);
+  if (name === 'vitest') return runnerHeavy(args, VITEST, suite);
+  if (name === 'jest') return runnerHeavy(args, JEST, suite);
   if (name === 'tsc') return tscHeavy(args);
-  if (name === 'phpunit') return !hasInfo(args) && positionals(args).length === 0;
+  if (name === 'phpunit') return !hasInfo(args) && (!suite || positionals(args).length === 0);
   if (name === 'node') {
     // `node node_modules/vitest/vitest.mjs run`, `node node_modules/typescript/bin/tsc -p .`
     const script = args.find((a) => !a.startsWith('-'));
     const next = script === undefined ? [] : ['vitest', 'jest', 'tsc'].includes(nameOf(script)) ? [script, ...args.slice(args.indexOf(script) + 1)] : [];
-    return next.length > 0 && heavyCommand(next, depth + 1);
+    return next.length > 0 && heavyCommand(next, depth + 1, suite);
   }
   if (['npx', 'bunx', 'pnpx'].includes(name) || (['npm', 'pnpm', 'yarn', 'bun'].includes(name) && ['exec', 'x', 'dlx'].includes((args[0] ?? '').toLowerCase()))) {
     const rest = name === 'npx' || name === 'bunx' || name === 'pnpx' ? args : args.slice(1);
     // Pula as flags do executor (-y, --yes, --no-install, -p pacote, -- ...) até o programa.
     let j = 0;
     while (j < rest.length && (rest[j].startsWith('-') || REDIRECTION.test(rest[j]))) j += ['-p', '--package', '-c'].includes(rest[j]) ? 2 : 1;
-    return j < rest.length && heavyCommand(rest.slice(j), depth + 1);
+    return j < rest.length && heavyCommand(rest.slice(j), depth + 1, suite);
   }
   if (['npm', 'pnpm', 'yarn', 'bun'].includes(name)) {
     const verb = (args[0] ?? '').toLowerCase();
-    if (['test', 't', 'tst'].includes(verb)) return runnerArgsHeavy(args.slice(1));
+    if (['test', 't', 'tst'].includes(verb)) return runnerArgsHeavy(args.slice(1), suite);
     if (['run', 'run-script', 'rum', 'urn'].includes(verb) || (name !== 'npm' && HEAVY_SCRIPT.test(verb))) {
       const script = ['run', 'run-script', 'rum', 'urn'].includes(verb) ? args[1] : args[0];
-      return script !== undefined && HEAVY_SCRIPT.test(script) && runnerArgsHeavy(args.slice(['run', 'run-script', 'rum', 'urn'].includes(verb) ? 2 : 1));
+      return script !== undefined && HEAVY_SCRIPT.test(script) && runnerArgsHeavy(args.slice(['run', 'run-script', 'rum', 'urn'].includes(verb) ? 2 : 1), suite);
     }
     return false;
   }
-  if (name === 'composer') return (args[0] ?? '').toLowerCase() === 'test' && positionals(args.slice(1)).length === 0;
+  if (name === 'composer') return (args[0] ?? '').toLowerCase() === 'test' && (!suite || positionals(args.slice(1)).length === 0);
   return false;
 }
 
-/** Argumentos do `npm test`: arquivo ou filtro depois do `--` (ou solto) deixa de ser a suíte inteira. */
-function runnerArgsHeavy(args) {
-  return !hasInfo(args) && positionals(args).length === 0;
+/** Argumentos do `npm test`: na fila, com arquivo ou filtro também (ver `runnerHeavy`); como suíte inteira, só sem arquivo nem filtro. Versão e ajuda nunca. */
+function runnerArgsHeavy(args, suite) {
+  return !hasInfo(args) && (!suite || positionals(args).length === 0);
 }
 
-/** O comando (texto de uma chamada de terminal) roda a suíte inteira de testes ou o tsc do projeto? */
+/** O comando (texto de uma chamada de terminal) espera a vez na fila de validação pesada? Qualquer rodada de testes, ou o tsc do projeto. */
 export function isHeavyCommand(command, depth = 0) {
   if (typeof command !== 'string' || command.trim() === '') return false;
   return commands(command).some((words) => heavyCommand(words, depth));
+}
+
+/** O comando roda a suíte inteira de testes (sem arquivo nem filtro) ou o tsc do projeto? A nova rodada só dos arquivos que falharam nunca pode ser isso (testFailures.ts). */
+export function isFullSuiteCommand(command, depth = 0) {
+  if (typeof command !== 'string' || command.trim() === '') return false;
+  return commands(command).some((words) => heavyCommand(words, depth, true));
 }

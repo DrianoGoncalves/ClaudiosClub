@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
@@ -487,6 +488,12 @@ const turnLedger = new TurnRetryLedger(path.join(MYCO_HOME, 'turn-retry.json'));
 const chats: ChatManager = new ChatManager({
   // O aviso de segredo achar o arquivo que um comando leu (vários no mesmo comando): precisa da raiz do projeto para nada fora dela ser aberto.
   projectDirOf: (projectId) => projectPathOf(projectId),
+  // Falta memória (livre abaixo do `minFreeRamGb` da config, o mesmo mínimo da fila): a conversa parada há mais tempo fecha sem esperar os 15 min (ver
+  // chat/memoryPressure.ts). Desligado com o portão de recursos desligado ou o mínimo em 0.
+  memory: async () => {
+    const c = await readConfig();
+    return c.resourceGate && c.minFreeRamGb > 0 ? { freeBytes: os.freemem(), minBytes: c.minFreeRamGb * 1024 ** 3 } : null;
+  },
   // Plano B de quem roda no Codex: a conta recusou o modelo da ficha, o turno é refeito com o mais parecido do catálogo.
   codexModels: async () => (await codexModels.list()).models,
   // Antes de cada execução do Codex: o recurso `network_proxy` presente e o 127.0.0.2 de pé (senão roda sem rede e avisa) e a versão mínima.

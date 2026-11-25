@@ -142,5 +142,12 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 
 - Na entrega e na mescla, com vitest e a lista dos arquivos mudados, rodam só os testes ligados a eles: `vitest related … --passWithNoTests --maxWorkers=2` (`scopedTestCommand` em `server/taskCode.ts`). A suíte inteira roda no CI do PR e no botão "rodar testes" do cartão. `MYCO_FULL_TESTS=1` força a suíte inteira.
 - Fora do CI, a suíte do Club roda com no máximo 2 processos de teste (`maxWorkers` no `vitest.config.ts`; `MYCO_TEST_WORKERS` troca o número).
+- **Toda rodada de testes espera a vez na fila de validação pesada**, com arquivo ou filtro também (`isHeavyCommand` em `scripts/hooks/heavy-lock.mjs`). "É a suíte inteira?" é outra pergunta (`isFullSuiteCommand`), usada pela nova rodada só dos arquivos que falharam. Só o que não roda teste (`vitest list`, versão, ajuda) passa direto.
 
-*Por quê:* a suíte inteira (372 arquivos, ~6.800 testes) levava de 10 a 30 min por entrega nesta máquina, duas vezes por tarefa (entrega e mescla). Com 3 processos de ~350 MB ao lado dos funcionários, o Windows paginava no HDD. No CI ela roda em ~3 min.
+*Por quê:* a suíte inteira (372 arquivos, ~6.800 testes) levava de 10 a 30 min por entrega nesta máquina, duas vezes por tarefa (entrega e mescla). Com 3 processos de ~350 MB ao lado dos funcionários, o Windows paginava no HDD. No CI ela roda em ~3 min. Em 25/11/2026, três funcionários rodavam "só este arquivo" ao mesmo tempo, fora da fila (~1 GB cada), mais uma suíte do Club.
+
+### 10. Conversa parada sai quando falta memória
+
+- Com a RAM livre abaixo do `minFreeRamGb` da config (o mesmo mínimo da fila), a rodada do `reap` (a cada minuto) fecha a conversa parada há mais tempo, uma por rodada, sem esperar os 15 min (`server/chat/memoryPressure.ts`). Parada é sem turno, sem pergunta ou permissão pendente e sem tarefa em segundo plano, e há mais de 2 min. A sessão fica no disco: a próxima mensagem reabre.
+
+*Por quê:* cada conversa aberta segura o Claude Code (~580 MB) até 15 min depois do último turno. Em 25/11/2026, 7 conversas abertas (4 paradas) numa máquina de 8 GB: 16,6 GB em uso, disco 0% ocioso e até 4 mil páginas por segundo no HDD.
