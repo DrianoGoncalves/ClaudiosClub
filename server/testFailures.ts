@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { TestFailedFile, TestIsolatedFile, TestIsolation, TestRun } from '../shared/model';
-import { isHeavyCommand } from '../scripts/hooks/heavy-lock.mjs';
+import { isFullSuiteCommand } from '../scripts/hooks/heavy-lock.mjs';
 
 // As falhas da suíte para o pedido de revisão: quais arquivos de teste falharam (e quantas falhas cada um), se passam ao rodar de novo só eles, e quais
 // falham também isolados e tocam a entrega. Sem isso o revisor via "28 falhas" sem lista e não separava falha desta entrega de falha antiga.
@@ -110,8 +110,8 @@ export async function isolateFailures(dir: string, run: TestRun, delivered: stri
   }
   if (!runnable.length) return { skipped: 'os arquivos que falharam não existem mais no projeto', files: unknown() };
   const command = `npm test -- ${runnable.map((f) => f.file).join(' ')}`;
-  // Nunca a suíte inteira: com ao menos um arquivo no comando ele não é pesado; se for (o reconhecedor mudou), não roda.
-  if (isHeavyCommand(command)) return { skipped: 'a nova rodada seria a suíte inteira', files: unknown() };
+  // Nunca a suíte inteira: com ao menos um arquivo no comando ela não é; se for (o reconhecedor mudou), não roda. Na fila ela entra assim mesmo (toda rodada de testes espera a vez).
+  if (isFullSuiteCommand(command)) return { skipped: 'a nova rodada seria a suíte inteira', files: unknown() };
 
   let again: TestRun;
   try {

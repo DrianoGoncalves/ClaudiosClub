@@ -57,6 +57,7 @@ import { resumeText, type ResumeEntry } from './resume';
 import { externalBackground, externalCutWithAgents, subagentsDirOf } from './cutAction';
 import { legacyLabel, worseVerdict, type ClassifiedSecret, type SecretHint, type SecretKind, type SecretReason, type SecretSource, type SecretVerdict } from './secrets';
 import { capReason, capText, type TurnCaps } from './turnCap';
+import { pickIdleForMemory, type MemoryReading } from './memoryPressure';
 import type { ConsultStamp, TurnCapHit } from '../../shared/model';
 
 export interface ChatSpawn {
@@ -121,6 +122,8 @@ export interface ChatManagerOptions {
   markModelObsolete?: (projectId: string, staffId: string, model: string, engine: 'claude' | 'codex') => Promise<void>;
   /** Conversa parada há mais que isso fecha o processo (a sessão continua no disco). */
   idleMs?: number;
+  /** A memória livre e o mínimo da config (ver chat/memoryPressure.ts); abaixo do mínimo, a rodada do `reap` fecha a conversa parada há mais tempo. Sem ele, não fecha por memória. */
+  memory?: () => Promise<MemoryReading>;
   spawnImpl?: ChatProcessOptions['spawnImpl'];
   /** Quanto cada conversa do Claude espera o processo sair sozinho ao fechar, antes de encerrar a árvore dele (testes encurtam). */
   stopGraceMs?: number;
@@ -2263,6 +2266,34 @@ export class ChatManager {
         this.errorAt.delete(id);
         this.opts.tokens?.revoke(id);
       } else if (!chat.working && Date.now() - chat.lastActivity > idle) chat.stop();
+    }
+    void this.reapForMemory();
+  }
+
+  private reapingMemory = false;
+
+  /**
+   * Falta memória (livre abaixo do mínimo da config): fecha a conversa parada há mais tempo, uma por rodada (a cada minuto), sem esperar os 15 min. Uma por vez
+   * porque a memória do processo leva alguns segundos para voltar; fechar todas de uma vez derrubaria conversas que nem precisavam sair. Nunca lança.
+   */
+  private async reapForMemory(): Promise<void> {
+    if (this.reapingMemory || !this.opts.memory) return;
+    this.reapingMemory = true;
+    try {
+      const m = await this.opts.memory();
+      if (!m || m.freeBytes >= m.minBytes) return;
+      const now = Date.now();
+      const victim = pickIdleForMemory(this.chats.values(), now);
+      if (!victim) return;
+      const gb = (b: number) => (b / 1024 ** 3).toFixed(1);
+      (this.opts.log ?? ((l: string) => console.log(`[chat] ${l}`)))(
+        `memória: ${gb(m.freeBytes)} GB livres (mínimo ${gb(m.minBytes)}): fecho ${victim.sessionId}, parada há ${Math.round((now - victim.lastActivity) / 60_000)} min (reabre sozinha na próxima mensagem)`,
+      );
+      victim.stop();
+    } catch {
+      /* a leitura da memória ou da config falhou: fica para a próxima rodada */
+    } finally {
+      this.reapingMemory = false;
     }
   }
 }

@@ -42,5 +42,7 @@ export function pidAlive(pid: number): boolean;
 export function currentHolder(dir: string, o?: { now?: number; alive?: (pid: number) => boolean }): Promise<HeavyHolder | null>;
 export function acquire(o: AcquireOptions): Promise<AcquireResult>;
 export function release(dir: string, key: string): Promise<void>;
-/** O comando (texto de uma chamada de terminal) roda a suíte inteira de testes ou o tsc do projeto? */
+/** O comando (texto de uma chamada de terminal) espera a vez na fila de validação pesada? Qualquer rodada de testes, ou o tsc do projeto. */
 export function isHeavyCommand(command: unknown, depth?: number): boolean;
+/** O comando roda a suíte inteira de testes (sem arquivo nem filtro) ou o tsc do projeto? */
+export function isFullSuiteCommand(command: unknown, depth?: number): boolean;
