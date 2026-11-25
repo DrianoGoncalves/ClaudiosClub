@@ -26,6 +26,7 @@ import type {
   UsageLimit,
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
+import type { Worktree } from '../staff/worktree';
 import { updateGitPolicyAutonomy } from '../staff/gitMcp';
 import { codexHistoryOf } from '../adapters/codex/rollout';
 import { isProjectDir } from '../adapters/claude/paths';
@@ -56,7 +57,7 @@ import type { SessionTokens } from '../callers';
 import { resumeText, type ResumeEntry } from './resume';
 import { externalBackground, externalCutWithAgents, subagentsDirOf } from './cutAction';
 import { legacyLabel, worseVerdict, type ClassifiedSecret, type SecretHint, type SecretKind, type SecretReason, type SecretSource, type SecretVerdict } from './secrets';
-import { capReason, capText, type TurnCaps } from './turnCap';
+import { capReason, capText, presumedStop, type TurnCaps } from './turnCap';
 import { gb, idleTaskChats, makeRoom, pickIdleForMemory, stillShort, TASK_CHAT_IDLE_MS, type MemoryReading } from './memoryPressure';
 import type { ConsultStamp, TurnCapHit } from '../../shared/model';
 
@@ -109,7 +110,8 @@ export interface ChatManagerOptions {
   listLive: () => Promise<LiveSession[]>;
   /** Monta a linha de comando (ficha, autonomia, MCPs) de quem vai conversar. */
   /** `forkFrom`: sessão nova que começa como cópia desta (duplicar a conversa). */
-  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly?: boolean, consult?: ConsultStamp) => Promise<ChatSpawn | null>;
+  /** `place`: a worktree do card, para a conversa NOVA de trabalho abrir nela (ver `TaskService.startNow`); ignorado ao reabrir uma conversa (a pasta gravada vale). */
+  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly?: boolean, consult?: ConsultStamp, place?: Worktree) => Promise<ChatSpawn | null>;
   /** Uma conversa de consulta (server/consult/) terminou um turno, ou saiu: o serviço de consulta lê a resposta e a entrega. */
   onConsultIdle?: (consultId: string, sessionId: string, reason: 'turn' | 'background' | 'exit') => void;
   /**
@@ -159,6 +161,10 @@ export interface ChatManagerOptions {
   onPlanApproved?: (sessionId: string, plan: string) => void;
   /** Você recusou o plano de uma conversa (a tarefa dela sai da fila e vai para Aguardar). */
   onPlanRejected?: (sessionId: string) => void;
+  /** Um plano (ExitPlanMode) ficou pendente numa conversa: o card da tarefa o leva a quem pediu, se foi um gestor (ver `TaskService.onPlan`). */
+  onPlan?: (sessionId: string, requestId: string, plan: string) => void;
+  /** O plano foi negado sem ser recusado de vez (o funcionário ajusta e apresenta de novo): a espera de decisão do card acaba. */
+  onPlanDenied?: (sessionId: string, requestId: string) => void;
   /** Uma pergunta só de escolhas (AskUserQuestion) espera resposta numa conversa (a dúvida da tarefa dela vai ao gestor). */
   onAsk?: (sessionId: string, requestId: string, questions: NonNullable<TaskQuestion['questions']>) => void;
   /** Uma pergunta (AskUserQuestion) foi respondida, recusada ou pulada: `by` diz quem fechou, `summary` é o resumo para a tarefa. */
@@ -321,6 +327,23 @@ export async function findTranscript(transcriptsDir: string, projectId: string, 
   return direct;
 }
 
+/** Os argumentos de `deliver` depois do projeto e da conversa (os de `deliverNow`, na mesma ordem). */
+type DeliverRest = [
+  staffId: string | null,
+  text: string,
+  priority: SendPriority | undefined,
+  images: string[],
+  files: ChatAttachment[],
+  delegated: boolean,
+  auto: boolean,
+  origin?: string,
+  engineOverride?: EngineOverride,
+  guard?: () => boolean,
+  reviewOnly?: boolean,
+  consult?: ConsultStamp,
+  place?: Worktree,
+];
+
 /** Conversas abertas pelo Claudio’s Club, uma por sessão (= funcionário). */
 export class ChatManager {
   private readonly chats = new Map<string, ChatProcess>();
@@ -414,6 +437,8 @@ export class ChatManager {
   private readonly retryGen = new Map<string, number>();
   /** O aviso da retomada de cada conversa aberta (para trocar o texto no mesmo aviso). */
   private readonly retryNotices = new Map<string, string>();
+  /** Mensagens a caminho de cada conversa que já existe (ver `deliver`): o processo ainda abrindo não conta como parado (ver `turnAlive`). */
+  private readonly sending = new Map<string, number>();
   /**
    * O último turno de cada conversa de funcionário que terminou em erro do motor sem retomada (login recusado, ou erro que não passa sozinho): a tarefa de trabalho lê daqui, no fim do
    * turno, para ir a Aguardar em vez de revisão (ver `engineStopOf`). Em memória: sai no turno bem-sucedido seguinte e em qualquer mensagem não automática.
@@ -659,8 +684,9 @@ export class ChatManager {
     engineOverride?: EngineOverride,
     reviewOnly = false,
     consult?: ConsultStamp,
+    place?: Worktree,
   ): Promise<string> {
-    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride, undefined, reviewOnly, consult);
+    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride, undefined, reviewOnly, consult, place);
   }
 
   /**
@@ -786,7 +812,23 @@ export class ChatManager {
     if (this.shuttingDown) throw new ChatClosingError();
   }
 
-  private async deliver(
+  /**
+   * Manda a mensagem (ver `deliverNow`) e, enquanto ela está a caminho, conta a conversa como viva (`turnAlive`): abrir o processo leva segundos, e nesse meio tempo a conversa ainda
+   * não aparece como aberta nem trabalhando. Sem isso, a conferência de "parou no meio" (`restartCut`) lê um transcript com a ação sem resultado e segura uma conversa que está voltando.
+   */
+  private async deliver(projectId: string, sessionId: string | null, ...rest: DeliverRest): Promise<string> {
+    if (!sessionId) return this.deliverNow(projectId, sessionId, ...rest);
+    this.sending.set(sessionId, (this.sending.get(sessionId) ?? 0) + 1);
+    try {
+      return await this.deliverNow(projectId, sessionId, ...rest);
+    } finally {
+      const left = (this.sending.get(sessionId) ?? 1) - 1;
+      if (left > 0) this.sending.set(sessionId, left);
+      else this.sending.delete(sessionId);
+    }
+  }
+
+  private async deliverNow(
     projectId: string,
     sessionId: string | null,
     staffId: string | null,
@@ -802,6 +844,7 @@ export class ChatManager {
     guard?: () => boolean,
     reviewOnly = false,
     consult?: ConsultStamp,
+    place?: Worktree,
   ): Promise<string> {
     this.assertOpen();
     // Antes de qualquer mudança de estado (a retomada abaixo, o que `ensure` abre): a conversa aberta de outro projeto não é desta chamada.
@@ -810,7 +853,7 @@ export class ChatManager {
     // síncrona. A pendência e o orçamento só saem quando a mensagem entra (abaixo): se a conversa não abrir, a retomada marcada segue valendo.
     if (!auto && sessionId) this.voidRetry(sessionId);
     if (guard && !guard()) throw new ChatError('a retomada foi cancelada');
-    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride, reviewOnly, consult);
+    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride, reviewOnly, consult, place);
     // Vai receber uma mensagem agora: não é mais "parada" para os fechamentos por prazo e por memória (o que vem abaixo ainda espera antes de escrever).
     chat.lastActivity = Date.now();
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
@@ -1086,6 +1129,7 @@ export class ChatManager {
     }
     if (allow && plan !== undefined) this.opts.onPlanApproved?.(sessionId, plan);
     if (rejectPlan) this.opts.onPlanRejected?.(sessionId);
+    else if (!allow && plan !== undefined) this.opts.onPlanDenied?.(sessionId, requestId);
     if (asked) this.opts.onAskAnswered?.(sessionId, requestId, opts.by ?? 'user', askSummary(asked, allow, opts.answers));
     return true;
   }
@@ -1408,9 +1452,18 @@ export class ChatManager {
    * e mexe fora do projeto? Então segura (ver `holdCut`) e devolve o motivo; senão, null (a tarefa retoma como sempre).
    */
   async restartCut(projectId: string, sessionId: string): Promise<TurnCapHit | null> {
+    // Conversa com turno vivo (ou com mensagem abrindo o processo) não parou no meio de nada: o transcript dela sempre mostra a ferramenta em andamento sem resultado.
+    if (this.turnAlive(sessionId)) return null;
     const { history } = await this.snapshot(projectId, sessionId);
     const action = await this.cutOf(projectId, sessionId, history, false);
-    return action ? this.holdCut(sessionId, action) : null;
+    // O turno pode ter voltado enquanto o transcript era lido: conferido de novo, de forma síncrona, antes de segurar a conversa (`holdCut` cancela a retomada e o "continue").
+    return action && !this.turnAlive(sessionId) ? this.holdCut(sessionId, action) : null;
+  }
+
+  /** A conversa tem turno vivo: aberta e no meio de um turno (ou com algo em segundo plano), ou com uma mensagem a caminho que ainda abre o processo (ver `deliver`). */
+  private turnAlive(sessionId: string): boolean {
+    const chat = this.chats.get(sessionId);
+    return !!(chat?.running && chat.working) || (this.sending.get(sessionId) ?? 0) > 0;
   }
 
   /**
@@ -1665,24 +1718,24 @@ export class ChatManager {
   /** Aberturas em voo, por sessão: duas chamadas ao mesmo tempo para a mesma conversa fechada (sua mensagem e um despertador) dividem o mesmo processo. */
   private readonly opening = new Map<string, Promise<ChatProcess>>();
 
-  private ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp): Promise<ChatProcess> {
+  private ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp, place?: Worktree): Promise<ChatProcess> {
     // A conversa aberta de outro projeto não é desta chamada: conferido antes de dividir uma abertura em voo.
     try {
       this.assertSameProject(projectId, sessionId);
     } catch (err) {
       return Promise.reject(err);
     }
-    if (!sessionId) return this.ensureNow(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult);
+    if (!sessionId) return this.ensureNow(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult, place);
     const inFlight = this.opening.get(sessionId);
     if (inFlight) return inFlight;
-    const run = this.ensureNow(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult).finally(() => {
+    const run = this.ensureNow(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult, place).finally(() => {
       if (this.opening.get(sessionId) === run) this.opening.delete(sessionId);
     });
     this.opening.set(sessionId, run);
     return run;
   }
 
-  private async ensureNow(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp): Promise<ChatProcess> {
+  private async ensureNow(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp, place?: Worktree): Promise<ChatProcess> {
     this.assertSameProject(projectId, sessionId);
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
     // Fechando (pela memória ou pelo prazo): o processo ainda não saiu, mas nada pode ser escrito nele. Espera sair e reabre.
@@ -1710,7 +1763,7 @@ export class ChatManager {
     }
     // Conversa já aberta no secundário segue nele (continue, respawn, reabrir); o pedido de uma conversa nova vale só para ela.
     const override = sessionId ? this.overrides.get(sessionId) : engineOverride;
-    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override, reviewOnly, consult);
+    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override, reviewOnly, consult, place);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
     // O resto (sua mensagem, tarefa, retomadas), num processo do Claude a mais (o Codex abre um por mensagem e parado não segura memória): com a RAM abaixo do
     // mínimo, fecha até 2 conversas paradas do Claude e abre do mesmo jeito.
@@ -1766,6 +1819,8 @@ export class ChatManager {
       turnCaps: this.opts.turnCaps,
       onTurnCap: (hit) => this.turnCapped(spawn.sessionId, hit),
       onAsk: (requestId, questions) => this.opts.onAsk?.(spawn.sessionId, requestId, questions),
+      // O Codex não tem ExitPlanMode (a sandbox decide): o gancho só dispara no Claude, e `onPlan` confere o motor da conversa de novo.
+      onPlan: (requestId, plan) => this.opts.onPlan?.(spawn.sessionId, requestId, plan),
       // Quem ela é para a API: o mesmo token em toda execução da conversa (o Codex abre uma por mensagem), regerado se o servidor reiniciou.
       // Consulta de outro projeto não recebe token: sem ele a conversa não alcança nenhuma rota (chat/send, tarefa, contratação, nova consulta). Um salto só.
       mycoToken: spawn.consult ? undefined : this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
@@ -2033,6 +2088,8 @@ export class ChatManager {
     const retries = this.opts.retries;
     if (end.kind === 'ok') {
       this.engineStops.delete(sessionId);
+      // O turno terminou normal: a parada "no meio de…" guardada antes dele era presumida e não se confirmou (a conversa estava viva). O fim de turno da tarefa (que vem logo depois) não a lê mais.
+      if (presumedStop(this.inbox.turnCapOf(sessionId))) this.inbox.setTurnCap(sessionId, null);
       if (!retries) return;
       // Sucesso real: o turno original acabou. Uma retomada que ainda estivesse marcada mandaria um "continue" a mais.
       this.retryLedger.clear(sessionId);

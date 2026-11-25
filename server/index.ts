@@ -47,7 +47,7 @@ import { projectClaudeDir } from './adapters/claude/projects';
 import { ChatClosingError, ChatError, ChatManager, CloseRefusedError, findTranscript } from './chat/manager';
 import { ResumeFile, bootResume, resumeText } from './chat/resume';
 import { platformTaskText } from './chat/items';
-import { AnnotationsField, AnswersField } from './chat/questions';
+import { AnnotationsField, AnswersField, TaskAnswerBody } from './chat/questions';
 import { touchedFiles } from './chatChanges';
 import { uncommittedByConversation } from './uncommitted';
 import { searchConversations } from './chatSearch';
@@ -59,12 +59,12 @@ import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
 import { StaffSendLimitError, StaffSendRate, sendTargetKey } from './chat/sendRate';
 import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService, StaffTeamExistsError } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
-import { CLUB_MCP_FILE, knownMcpNames, McpError, mcpJsonWarnings } from './staff/mcp';
+import { CLUB_MCP_FILE, knownMcpNames, MCP_MIGRATION_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
 import { migrateMcpsAtBoot as runMcpMigration } from './staff/mcpMigration';
 import { MCP_TOOLS_FILE } from './staff/mcpTools';
 import { CodexPasswordPolicy } from './codexPasswordPolicy';
-import { withInboxWait } from './inboxWait';
+import { managerPlanItemIds, withInboxWait } from './inboxWait';
 import { commitInboxAlerts, commitWaitingCount, resolveBy, withCommitLeft } from './commitLeft';
 import { blockedInboxItem, codexSandboxInboxItem, commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, versionPauseEndId, versionPauseItems, withoutSecretHint } from './inboxItems';
 import { InboxResolver, resolvedLast, settleWithin } from './inboxResolved';
@@ -149,6 +149,7 @@ import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, dropStaffSessions, hasStaffFiles, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
+import type { Worktree } from './staff/worktree';
 import { StateBusyError } from './atomicWrite';
 import { BoardCorruptError, boardIncidents, boardIncidentSummary, dismissBoardIncident } from './boardGuard';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
@@ -532,7 +533,7 @@ const chats: ChatManager = new ChatManager({
   // Limite do Codex estourado: a hora de voltar vem da leitura fresca dos limites do Codex (só com `codexReview` ligado).
   codexLimits: async () => codexUsage.read((await readConfig()).codexReview, { fresh: true, waitMs: 8_000 }),
   listLive: () => adapter.listLiveSessions(),
-  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult),
+  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult, place) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult, place),
   // A conversa de consulta de outro projeto terminou o turno: o serviço lê a resposta e a entrega (`consults` é declarado mais abaixo: só é lido na chamada).
   onConsultIdle: (consultId, sessionId, reason) => void consults.onIdle(consultId, sessionId, reason).catch((err) => console.warn('[consulta] fim de turno:', err)),
   rememberChoice: (projectId, staffId, sessionId, choice) => staff.rememberChoice(projectId, staffId, sessionId, choice),
@@ -541,6 +542,8 @@ const chats: ChatManager = new ChatManager({
   copiesFile: path.join(MYCO_HOME, 'run', 'copies.json'),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch((err) => console.error('[tarefas] plano aprovado:', sid, err)),
   onPlanRejected: (sid) => void tasks.onPlanRejected(sid).catch(() => {}),
+  onPlan: (sid, rid, plan) => void tasks.onPlan(sid, rid, plan).catch((err) => console.error('[tarefas] plano ao gestor:', sid, err)),
+  onPlanDenied: (sid, rid) => void tasks.onPlanDenied(sid, rid).catch(() => {}),
   onAsk: (sid, rid, qs) => void tasks.onAsk(sid, rid, qs).catch(() => {}),
   onAskAnswered: (sid, rid, by, summary) => void tasks.onAskAnswered(sid, rid, by, summary).catch(() => {}),
   onSent: (sid) => {
@@ -612,7 +615,7 @@ const readLimitOf = async (engine: 'claude' | 'codex'): Promise<LimitHit | null 
 };
 
 /** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
-const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly = false) => {
+const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly = false, place?: Worktree) => {
   // Lenta (2 s ou mais), escreve no log quanto levou a trava de consumo e quanto levou abrir a conversa (ver stageTimer.ts).
   const timer = new StageTimer(`abrir conversa de ${staffId}`);
   try {
@@ -621,7 +624,7 @@ const sendNewConversation = async (projectId: string, staffId: string, text: str
     timer.stage('consumo');
     if (!force) await staff.checkUsage(projectId, { staffId, ...(override && { engine: override.engine }) });
     timer.stage('abrir');
-    return await chats.send(projectId, null, staffId, platformTaskText(text), undefined, [], [], false, undefined, override, reviewOnly);
+    return await chats.send(projectId, null, staffId, platformTaskText(text), undefined, [], [], false, undefined, override, reviewOnly, undefined, place);
   } finally {
     timer.finish();
   }
@@ -661,6 +664,9 @@ const tasks = new TaskService({
   // A pergunta por opções ainda aberta na conversa de trabalho, e a resposta do gestor (vai à conversa do funcionário).
   hasAsk: (sid, rid) => chats.hasPending(sid, rid),
   answerAsk: (sid, rid, answers, by) => chats.answer(sid, rid, true, { answers, by: by ?? 'manager' }),
+  // O cartão de plano (ExitPlanMode) ainda pendente na conversa de trabalho, e a decisão de quem pediu o card (aprovar executa como a autonomia dada; recusar leva o motivo, sem recusar de vez).
+  hasPlanCard: (sid, rid) => chats.hasPending(sid, rid),
+  answerPlan: (sid, rid, d) => chats.answer(sid, rid, d.allow, { ...(d.message && { message: d.message }), ...(d.executeAs && { executeAs: d.executeAs }), by: 'manager' }),
   dismissQuestion: (sid) => void chats.dismissQuestion(sid),
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
@@ -1045,14 +1051,6 @@ const ChatSettingsBody = z
   })
   .refine((b) => b.model || b.effort || b.autonomy, 'nada para mudar');
 const StaffRef = z.object({ staffId: z.string().max(40).nullable().default(null), force: z.boolean().default(false) });
-// Resposta do gestor à dúvida da tarefa (ver TaskService.answerQuestion): `answers` por pergunta; `text` na dúvida escrita; `escalate` passa a você.
-const TaskAnswerBody = z.object({
-  questionId: z.string().min(1).max(100),
-  answers: z.record(z.string().max(500), z.union([z.string().max(500), z.array(z.string().max(500)).max(20)])).optional(),
-  text: z.string().max(2_000).optional(),
-  escalate: z.boolean().optional(),
-});
-
 function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   const r = schema.safeParse(body);
   if (!r.success) throw new BadRequest(r.error.issues[0]?.message ?? 'pedido inválido');
@@ -1143,6 +1141,7 @@ const ATTACHMENT_UPLOAD = new RegExp(`^/api/projects/${ID}/attachments$`);
 const mcpLibrary = createMcpLibrary({
   claudeConfigFile: defaultLocations().configFile,
   clubFile: CLUB_MCP_FILE,
+  recordFile: MCP_MIGRATION_FILE,
   backupDir: path.join(MYCO_HOME, 'backups'),
   resolveProject: projectPathOf,
 });
@@ -1810,6 +1809,13 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/board-writer$`),
     ({ params: [id], body, fromBrowser }) => tasks.setBoardWriter(id!, body, fromBrowser),
+  ],
+  // Worktree por card (ver server/cardWorktree.ts): `{ cardWorktree }`, LIGADA por padrão. Como a vaga de escrita: ler é livre, gravar só pela tela (403 ao funcionário).
+  ['GET', new RegExp(`^/api/projects/${ID}/board-card-worktree$`), ({ params: [id] }) => tasks.boardCardWorktree(id!)],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/board-card-worktree$`),
+    ({ params: [id], body, fromBrowser }) => tasks.setBoardCardWorktree(id!, body, fromBrowser),
   ],
   // Pausar o projeto (ver server/projectPause.ts): pausado, nada de execução começa sozinho (fila, ajuste da reprovação, rotinas, despertador, "continue", retomada, troca de motor; a revisão da entrega já feita roda); o que já roda termina
   // o turno, e as suas ações manuais seguem. Ler é livre (`{ paused: { at } | null }`). Pausar e retomar só pelo navegador pareado: o serviço responde 403 a quem não é a tela (o gate já
@@ -3290,10 +3296,17 @@ async function getInbox(): Promise<InboxItem[]> {
 
   const out: InboxItem[] = [];
   const liveById = new Map(live.map((l) => [l.sessionId, l]));
+  // As tarefas do quadro (lidas antes dos pedidos pendentes: o plano que o gestor decide não é item seu).
+  // Com a permissão que a conversa espera de você (`withPermission`): a tarefa parada nela segura os dependentes na caixa, como as outras paradas.
+  // Com o estado do aviso de commit parcial (`commitLeft`, ver server/commitLeft.ts).
+  const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
+  const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: await withCommitLeft((await readTasks(p.path)).map((t) => tasks.withPermission(t)), p.id, p.path) })));
+  // Cartão de plano (ExitPlanMode) de card pedido por gestor: o plano é decisão dele (ver `TaskService.onPlan`), então não vira item da sua caixa; o cartão segue na conversa e você ainda pode decidir por ele.
+  const toManager = new Set(boards.flatMap((b) => [...managerPlanItemIds(b.tasks)]));
   for (const { sessionId, pending, error } of chats.attention()) {
     const w = where(sessionId, liveById.get(sessionId));
     if (hidden(w)) continue;
-    for (const p of pending) out.push(permissionInboxItem(p, w));
+    for (const p of pending) if (!toManager.has(`perm:${p.id}`)) out.push(permissionInboxItem(p, w));
     if (error) out.push({ id: `error:${sessionId}`, kind: 'error', ...w, summary: error, at: null });
   }
   // Terminou o turno perguntando algo no texto (sem pedido de permissão): espera até você responder.
@@ -3303,10 +3316,6 @@ async function getInbox(): Promise<InboxItem[]> {
   }
   // Tarefa que espera outra empacada (ver stuckDependencies em server/tasks.ts) e cartão esquecido em "a fazer" (ver notStartedTasks): calculados
   // na leitura, nada gravado; somem ao destravar, começar, cancelar, editar ou apagar. Só projetos do quadro e não arquivados (como os outros avisos).
-  const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
-  // Com a permissão que a conversa espera de você (`withPermission`): a tarefa parada nela segura os dependentes na caixa, como as outras paradas.
-  // Com o estado do aviso de commit parcial (`commitLeft`, ver server/commitLeft.ts).
-  const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: await withCommitLeft((await readTasks(p.path)).map((t) => tasks.withPermission(t)), p.id, p.path) })));
   // Turno que parou no teto (ferramentas ou minutos): some quando você manda mensagem nova na conversa; com a tarefa da conversa já encerrada, segue na lista como resolvido.
   for (const c of chats.turnCaps()) {
     const w = where(c.sessionId, liveById.get(c.sessionId));
@@ -3597,7 +3606,7 @@ async function migrateMcpsAtBoot(): Promise<void> {
     clubFile: CLUB_MCP_FILE,
     claudeConfigFile: defaultLocations().configFile,
     backupDir: path.join(MYCO_HOME, 'backups'),
-    recordFile: path.join(MYCO_HOME, 'mcps-migracao.json'),
+    recordFile: MCP_MIGRATION_FILE,
     toolsFile: MCP_TOOLS_FILE,
     projects,
     known: (p) => knownMcpNames(p.path, defaultLocations().configFile),
