@@ -975,6 +975,43 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     expect(m.dismissPending('nao-existe', 'x')).toBe(0);
   });
 
+  it('plano pendente (ExitPlanMode): onPlan leva o plano inteiro (só dele); negar sem recusar de vez chama onPlanDenied, e aprovar ou recusar de vez não', async () => {
+    const plans: unknown[] = [];
+    const denied: string[] = [];
+    const approved: string[] = [];
+    const rejected: string[] = [];
+    const { m, procs } = manager({
+      onPlan: (sid, rid, plan) => void plans.push([sid, rid, plan]),
+      onPlanDenied: (sid, rid) => void denied.push(`${sid}:${rid}`),
+      onPlanApproved: (sid) => approved.push(sid),
+      onPlanRejected: (sid) => rejected.push(sid),
+    });
+    await m.send('p', 'sx', 'ana', 'planeje');
+    const f = procs[0]!;
+    const exit = (id: string, plan: string) => f.emit({ type: 'control_request', request_id: id, request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: { plan } } });
+    exit('r1', '# Plano\n\n1. Criar x.txt');
+    f.emit({ type: 'control_request', request_id: 'b1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' } } });
+    await tick();
+    // Só o plano vai ao gancho (a permissão comum não), com o texto inteiro.
+    expect(plans).toEqual([['sx', 'r1', '# Plano\n\n1. Criar x.txt']]);
+    // Negado sem recusar de vez: o funcionário ajusta e apresenta de novo; a espera de decisão da tarefa acaba.
+    expect(m.answer('sx', 'r1', false, { message: 'ajuste' })).toBe(true);
+    expect(denied).toEqual(['sx:r1']);
+    expect(rejected).toEqual([]);
+    // Recusado de vez e aprovado: os ganchos de sempre, sem o de negado. Uma permissão comum negada também não.
+    exit('r2', '# Plano 2');
+    await tick();
+    expect(m.answer('sx', 'r2', false, { reject: true })).toBe(true);
+    expect(m.answer('sx', 'b1', false)).toBe(true);
+    exit('r3', '# Plano 3');
+    await tick();
+    expect(m.answer('sx', 'r3', true, { executeAs: 'acceptEdits' })).toBe(true);
+    expect(denied).toEqual(['sx:r1']);
+    expect(rejected).toEqual(['sx']);
+    expect(approved).toEqual(['sx']);
+    expect(plans.map((p) => (p as string[])[1])).toEqual(['r1', 'r2', 'r3']);
+  });
+
   it('pergunta com opções: o gestor é avisado; a resposta (sua ou dele) vai como resumo; pular e recusar também; sem pendente, nada', async () => {
     const asked: unknown[] = [];
     const closed: unknown[] = [];

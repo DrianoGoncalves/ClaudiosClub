@@ -10,7 +10,9 @@ import type { SyncWorktree } from '../server/worktreeBase';
 import { removeTemp } from './support/tmp';
 
 // Onde o código do card é escrito, gravado ao começar (`Task.codeAt`), e a base da worktree nesse começo. Git e worktree de verdade; só as conversas são falsas.
-vi.setConfig({ testTimeout: 30_000 });
+// O prazo do teste (90 s) é maior que o da espera da revisão em `approve` (30 s): se ela estourar, vale a mensagem dela, não o "Test timed out".
+const REVIEW_WAIT_MS = 30_000;
+vi.setConfig({ testTimeout: 90_000 });
 
 let root: string;
 beforeAll(async () => {
@@ -54,16 +56,35 @@ async function flow(name: string, opts: { worktree: boolean; sync?: SyncWorktree
   });
   const make = async (title = 'Filtro de datas') => (await svc.create('p', { title, staffId: 'ana-1', reviewerId: 'rev-1' }))!;
   const card = async () => (await svc.list('p'))![0]!;
-  /** O card mexeu em código em where (sem isso a entrega seria sem código, ver holdNoCode); entrega, o Rui revisa (s-2) e aprova. */
-  const approve = async (where: string) => {
-    await fs.writeFile(path.join(where, 'feito-pelo-card.txt'), 'mudança do card\n');
-    await svc.onTurnDone('s-1');
-    // O pedido de revisão sai fora da vez do funcionário: espera a conversa do Rui (s-2) estar gravada no card antes de ele responder.
-    for (let i = 0; i < 400 && (await card()).review?.sessionId !== 's-2'; i++) await new Promise((r) => setTimeout(r, 25));
-    texts.set('s-2', 'APROVADO\n\nok');
-    await svc.onTurnDone('s-2');
+  /** O card mexeu em código em where (sem isso a entrega seria sem código, ver holdNoCode); entrega (conversa `work`), o Rui revisa (conversa `review`) e aprova. Por padrão, a primeira partida (s-1) e a revisão dela (s-2). */
+  const approve = async (where: string, work = 's-1', review = 's-2') => {
+    const edited = path.join(where, 'feito-pelo-card.txt');
+    await fs.writeFile(edited, 'mudança do card\n');
+    // O Club prova "sem edição" por mtime >= início do card (`codeTouchedSince`), e no NTFS o mtime de uma gravação fica até alguns ms ATRÁS do `Date.now()`: a edição feita logo depois da partida
+    // (o teste, não uma conversa de verdade) caía antes do início, o card era marcado "sem código" e a revisão nunca abria. Fixa o mtime no relógio do Node.
+    const now = new Date();
+    await fs.utimes(edited, now, now);
+    await svc.onTurnDone(work);
+    // O pedido de revisão sai fora da vez do funcionário e pode atrasar com a máquina carregada (git lento, fila de validação ocupada): espera o ESTADO (a conversa do Rui gravada no card), não um tempo
+    // fixo curto. O prazo é só a guarda: se estourar, a mensagem diz em que ponto o card parou (status e última nota), para separar lentidão de revisão que não abriu.
+    await vi.waitFor(
+      async () => {
+        const c = await card();
+        if (c.review?.sessionId !== review) throw new Error(`a conversa de revisão (${review}) não foi gravada no card em ${REVIEW_WAIT_MS / 1000} s: status ${c.status}, review.sessionId ${c.review?.sessionId ?? 'ausente'}, última nota “${c.history.at(-1)?.note ?? ''}”`);
+      },
+      { timeout: REVIEW_WAIT_MS, interval: 25 },
+    );
+    texts.set(review, 'APROVADO\n\nok');
+    await svc.onTurnDone(review);
   };
-  return { dir, git, svc, people, sent, make, card, approve };
+  /** O card parou (limite, reinício do Claudio’s Club): sem conversa e de volta em "a fazer", como a fila o deixa para recomeçar. */
+  const stop = async () => {
+    const file = path.join(dir, '.myco', 'tasks.json');
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as Array<Record<string, unknown>>;
+    for (const x of raw) Object.assign(x, { sessionId: null, status: 'todo' });
+    await fs.writeFile(file, JSON.stringify(raw));
+  };
+  return { dir, git, svc, people, sent, make, card, approve, stop };
 }
 
 describe('onde o código do card é escrito', () => {
@@ -82,6 +103,26 @@ describe('onde o código do card é escrito', () => {
     expect(done.history.at(-1)).toMatchObject({ status: 'done', by: 'auto', note: 'aprovada por Rui' });
     expect(done.history.some((h) => /falta mesclar/.test(h.note ?? ''))).toBe(false);
     // Mesclar a worktree dele não é o caminho deste card: a leitura do código aponta o principal, e a mescla não é oferecida.
+    expect(await f.svc.code('p', t.id)).toMatchObject({ where: 'project', path: f.dir, canMerge: false });
+  });
+
+  it('card que recomeça depois de parar mantém o `codeAt` da primeira partida, mesmo se a ficha ganhou worktree no meio: aprovado vai a Finalizado, sem "falta mesclar"', async () => {
+    const f = await flow('recomeco', { worktree: false });
+    const t = await f.make();
+    await f.svc.start('p', t.id); // primeira partida: a conversa abre no principal
+    const first = (await f.card()).codeAt;
+    expect(first).toEqual({ where: 'project', branch: 'main' });
+
+    await f.stop(); // limite ou reinício: sem conversa, de volta na fila
+    f.people['ana-1']!.worktree = true; // a ficha ganha worktree no meio (criada, por exemplo, para outro card)
+    await ensureWorktree(f.dir, 'ana-1');
+    await f.svc.start('p', t.id); // recomeça (s-2): ficaria `worktree` se regravasse
+    expect(await f.card()).toMatchObject({ status: 'doing', sessionId: 's-2', codeAt: first });
+
+    await f.approve(f.dir, 's-2', 's-3'); // o trabalho do card está no principal
+    const done = await f.card();
+    expect(done).toMatchObject({ status: 'done', codeAt: first, review: { verdict: 'approved' } });
+    expect(done.history.some((h) => /falta mesclar/.test(h.note ?? ''))).toBe(false);
     expect(await f.svc.code('p', t.id)).toMatchObject({ where: 'project', path: f.dir, canMerge: false });
   });
 

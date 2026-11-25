@@ -55,6 +55,7 @@ import { mcpAccessOfInput, mergeMcpAccess } from './mcpAccess';
 import { greeting, prepareCodexRun, prepareConsultRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { attachThreadId, recordSession, type NewRegisteredSession } from '../sessionsRegistry';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
+// (`Worktree` também é o formato da worktree de card: `{ path, branch }`.)
 import { convertMcps, duplicateMcpNames, isMcpRef } from '../mcpAccessRefs';
 import { knownMcpNames, listMcpServers } from './mcp';
 import { readSeal, sealViolation, writeSeal } from './seal';
@@ -1284,6 +1285,8 @@ export class StaffService {
     reviewOnly = false,
     /** Conversa de consulta de outro projeto (server/consult/): perfil só leitura próprio, sem token, sem MCP (ver `consultSpawn`). Gravada na conversa: reabrir mantém. */
     consultOpen?: ConsultStamp,
+    /** A worktree do card (ver `cardWorktree.ts`): a conversa NOVA de trabalho abre nela em vez de na pasta do projeto ou na worktree da ficha. Reabrir segue a pasta gravada na entrada da sessão. */
+    place?: Worktree,
   ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn; consult?: ConsultStamp } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
@@ -1323,8 +1326,10 @@ export class StaffService {
     // diferentes dos que o Claudio’s Club gravou) não abre, nem como Claude. Ver seal.ts.
     await this.guardSeal(project, profile);
     if (codex) await this.assertCodexUsable();
-    const ctx = await this.context(project, runProfile, true);
-    const cwd = sessionCwd(runProfile, ctx, forkFrom ?? sessionId);
+    // Card com worktree própria (`place`): a conversa nova abre nela, e a worktree da ficha nem é criada para esta conversa.
+    const inCard = !!place && !sessionId && !forkFrom && !readOnly;
+    const ctx = await this.context(project, runProfile, !inCard);
+    const cwd = inCard ? place!.path : sessionCwd(runProfile, ctx, forkFrom ?? sessionId);
     // Segunda barreira (a primeira é ao salvar a ficha): uma ficha antiga, ou editada à mão, com servidores no Codex não abre: recusa em vez de rodar.
     assertProfileRules(runProfile, await ftpNames(project.path, this.opts.vault));
     if (codex && forkFrom) throw new StaffError('duplicar a conversa ainda não existe para funcionário que roda no Codex');

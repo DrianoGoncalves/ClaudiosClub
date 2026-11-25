@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AccountUsage, Project, StaffProfile } from '../shared/model';
+import { TAREFA_MCP_NAME, type AccountUsage, type Project, type StaffProfile } from '../shared/model';
 import { usageStopHit, UsageStopError } from '../server/usageStop';
 import { ensureWorktree, worktreeFor } from '../server/staff/worktree';
 import { listServers } from '../server/staff/servers';
@@ -509,6 +509,63 @@ describe('estilo de comunicação', () => {
     );
   });
 
+  it('Caveman cobre o volume, não só a gramática: o que entra, o que fica de fora, tabela, tamanho e o que não some', () => {
+    const texto = PERSONALITY_PROMPTS.caveman;
+    // Forma (já existia): sem artigos, fragmentos.
+    expect(texto).toMatch(/sem artigos/);
+    // Volume: o que entra...
+    expect(texto).toMatch(/só o que muda a decisão de quem lê \(resultado, problema, próximo passo\)/);
+    // ...o que fica de fora...
+    expect(texto).toMatch(/sem repetir o pedido, narrar passos, justificar o óbvio/);
+    expect(texto).toMatch(/contexto que o leitor já tem/);
+    expect(texto).toMatch(/sem abertura .*nem fecho/);
+    // ...tabela e lista, e resposta longa só sob pedido.
+    expect(texto).toMatch(/célula com poucas palavras, nunca frase inteira/);
+    expect(texto).toMatch(/Resposta longa só se pedirem detalhe/);
+    // Entrega e parecer não viram caveman na forma, mas o corte de volume vale.
+    expect(texto).toMatch(/Entrega e parecer ficam neutros na forma, mas com o mesmo corte de volume/);
+    // O que nunca se perde.
+    expect(texto).toMatch(/negações, condições, números, caminhos de arquivo e termos técnicos exatos/);
+    expect(texto).toMatch(/aviso de segurança, erro ou bloqueio não some/);
+    // O mesmo texto vai na ficha e no lembrete por mensagem.
+    expect(personalitySection('caveman')).toContain(texto);
+    expect(personalityReminder('caveman')).toContain(texto);
+    // O exemplo é enxuto: fragmentos, caminho exato, próximo passo, sem artigo nem cortesia.
+    const exemplo = /Exemplo: "(.+)"$/.exec(texto)![1]!;
+    expect(exemplo.length).toBeLessThan(140);
+    expect(exemplo).toContain('`server/pedidos.ts:42`');
+    expect(exemplo).toMatch(/Falta: /);
+    expect(exemplo).not.toMatch(/\b(o|a|os|as|um|uma|obrigado|claro)\b/i);
+  });
+
+  it('Dev Cansado reclama do que gera retrabalho e não concorda por concordar; o exemplo mostra isso', () => {
+    const texto = PERSONALITY_PROMPTS.cansado;
+    expect(personalityName('cansado')).toBe('Dev Cansado');
+    expect(texto).toMatch(/seco, sem emoção, sem entusiasmo nem cortesia/);
+    expect(texto).toMatch(/Reclama, curto e com o motivo, quando algo vai gerar retrabalho ou manutenção/);
+    expect(texto).toMatch(/Não puxa saco nem concorda por concordar/);
+    expect(texto).toMatch(/se o pedido tem problema, diz qual, sem amaciar/);
+    expect(texto).toMatch(/sem elogio/);
+    expect(texto).toMatch(/entregue o resultado e os avisos obrigatórios/);
+    // Exemplo novo: faz o que pediram, aponta o retrabalho com o motivo, e não tem elogio nem entusiasmo.
+    const exemplo = /Exemplo: "(.+)"$/.exec(texto)![1]!;
+    expect(exemplo).toMatch(/retrabalho/);
+    expect(exemplo).toContain('`pedidos.ts`');
+    expect(exemplo).toMatch(/Testes ok\.$/);
+    expect(exemplo).not.toMatch(/!|ótimo|boa ideia|obrigado|claro/i);
+    expect(exemplo).not.toContain('Esse if duplicado');
+    expect(personalitySection('cansado')).toContain(texto);
+    expect(personalityReminder('cansado')).toContain(texto);
+  });
+
+  it('paridade: o Codex recebe o estilo só pela ficha (uma vez); o lembrete por mensagem é só do Claude', () => {
+    for (const p of ['caveman', 'cansado'] as const) {
+      const codex = profile({ engine: 'codex', personality: p });
+      expect(renderFicha(codex, { ...ctx, codex: true }).trimEnd().endsWith(personalitySection(p))).toBe(true);
+      expect(staffSettings(codex, path.join(os.tmpdir(), 'style.txt')).hooks ?? {}).not.toHaveProperty('UserPromptSubmit');
+    }
+  });
+
   it('o hook do lembrete: com o style.txt responde additionalContext; sem arquivo ou vazio, não responde nada', async () => {
     const script = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-style-'));
@@ -719,9 +776,9 @@ describe('StaffService', () => {
     const sid = spawn.sessionId;
     expect(spawn.args).toEqual(expect.arrayContaining(['--session-id', sid, '--permission-mode', 'acceptEdits', '--strict-mcp-config']));
     // A config de MCP (com possíveis segredos) fica fora do projeto, só com o escolhido. O navegador limpo (ficha com Navegador) entra à
-    // parte, se o Chrome ou o Edge estiver nesta máquina: não conta aqui (ver cleanBrowser.test.ts).
+    // parte, se o Chrome ou o Edge estiver nesta máquina: não conta aqui (ver cleanBrowser.test.ts). O MCP de tarefa (cancelar; ver tarefaMcp.test.ts) também entra à parte.
     const mcp = JSON.parse(await fs.readFile(path.join(root, 'run', sid, 'mcp.json'), 'utf8'));
-    expect(Object.keys(mcp.mcpServers).filter((k) => k !== CLEAN_BROWSER_MCP_NAME)).toEqual(['docs']);
+    expect(Object.keys(mcp.mcpServers).filter((k) => k !== CLEAN_BROWSER_MCP_NAME && k !== TAREFA_MCP_NAME)).toEqual(['docs']);
   });
 
   it('retomar a conversa usa --resume na mesma sessão, sem duplicar', async () => {

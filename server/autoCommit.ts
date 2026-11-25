@@ -223,13 +223,15 @@ async function leftOutWhy(req: CommitRequest, e: StatusEntry, key: string, rel: 
   if (holding.length) return { why: 'shared', by: holding.join(', ') };
   // Staged e com mudança nova por cima (MM, AM…): o índice guarda uma escolha sua que o commit passaria por cima.
   if (e.x !== ' ' && e.x !== '?' && (e.y !== ' ' || fromPhoto)) return { why: 'staged' };
-  const w = req.ownerWrites[key];
-  if (w) {
-    const st = await fs.stat(path.join(req.dir, e.path)).catch(() => null);
-    // O mtime ainda é o da sua gravação: a última mão no arquivo foi a sua (a edição da tarefa, se houve, veio antes).
-    if (st && st.mtimeMs <= w.mtimeMs + OWNER_SLACK_MS) return { why: 'owner' };
-  }
+  if (await ownerWrote(req.dir, e.path, req.ownerWrites[key])) return { why: 'owner' };
   return null;
+}
+
+/** O arquivo ainda está como você o gravou pelo editor do Club (`w`, ver ownerEdits.ts)? O mtime ainda é o da sua gravação: a última mão nele foi a sua (a edição da tarefa, se houve, veio antes). */
+export async function ownerWrote(dir: string, rel: string, w: OwnerWrite | undefined): Promise<boolean> {
+  if (!w) return false;
+  const st = await fs.stat(path.join(dir, rel)).catch(() => null);
+  return !!st && st.mtimeMs <= w.mtimeMs + OWNER_SLACK_MS;
 }
 
 /**

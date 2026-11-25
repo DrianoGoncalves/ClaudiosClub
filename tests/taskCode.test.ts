@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { readBaseline } from '../server/proofBaseline';
 import { checkpoint, CodeError, locateCode, mergeCode, readCode } from '../server/taskCode';
 import { ensureWorktree } from '../server/staff/worktree';
 import { removeTemp } from './support/tmp';
@@ -62,6 +63,32 @@ describe('código da tarefa', () => {
     expect(await fs.readFile(path.join(dir, 'app.txt'), 'utf8')).toBe('v2\n');
     expect(git('log', '-1', '--format=%s').trim()).toBe('Merge myco/ana-1: Atualizar o app');
     expect(git('status', '--porcelain').trim()).toBe('');
+  }, 60_000);
+
+  it('com vitest: a mescla roda só os testes ligados ao que traz (`scopedTestCommand`) e essa rodada não vira baseline da suíte (`suite:<sha>`)', async () => {
+    const { dir, git } = await repo('escopada');
+    // O `vitest` do projeto (versionado) passa sem fazer nada; o que importa é o comando que a mescla rodou.
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: 'vitest run' }, devDependencies: { vitest: '^5.1.0' } }));
+    await fs.mkdir(path.join(dir, 'node_modules', '.bin'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'node_modules', '.bin', 'vitest'), '#!/usr/bin/env node\n');
+    await fs.writeFile(path.join(dir, 'node_modules', '.bin', 'vitest.cmd'), '@node "%~dp0vitest" %*\r\n');
+    await fs.writeFile(path.join(dir, 'src.ts'), 'export const x = 1;\n');
+    git('add', '.');
+    git('commit', '-qm', 'vitest');
+    await fs.mkdir(path.join(dir, '.myco'), { recursive: true }); // o baseline só grava onde o projeto tem `.myco/`
+    const suites = async () => Object.keys(await readBaseline(dir)).filter((k) => k.startsWith('suite:'));
+    const wt = await ensureWorktree(dir, 'ana-1');
+    const place = (await locateCode(dir, 'ana-1', true))!;
+
+    await fs.writeFile(path.join(wt.path, 'src.ts'), 'export const x = 2;\n');
+    const scoped = await mergeCode(dir, place, 'Código', { wholeBranch: true });
+    expect(scoped.tests).toMatchObject({ ok: true, command: 'npx vitest related src.ts --run --passWithNoTests --maxWorkers=2' });
+    expect(await suites()).toEqual([]);
+
+    await fs.writeFile(path.join(wt.path, 'app.txt'), 'v2\n'); // só texto: nada para o `related` achar, a suíte inteira
+    const full = await mergeCode(dir, place, 'Texto', { wholeBranch: true });
+    expect(full.tests).toMatchObject({ ok: true, command: 'npm test' });
+    expect(await suites()).toHaveLength(1);
   }, 60_000);
 
   it('a entrega tem o seu commit; mesclar ela não leva o que a próxima tarefa já começou', async () => {

@@ -34,6 +34,8 @@ const fwd = (p: string) => p.replace(/\\/g, '/');
 /** O projeto (o checkout principal), a worktree própria do funcionário (dentro dele), um repositório qualquer, um projeto sem git e uma pasta que não existe. */
 const proj = fwd(path.join(root, 'proj'));
 const wt = `${proj}/.claude/worktrees/myco-ana`;
+/** A worktree DE UM CARD (t-250de1, ver server/cardWorktree.ts): mesma pasta de worktrees, nome `myco-card-<id>`, branch `myco-card/<id>`. */
+const cardWt = `${proj}/.claude/worktrees/myco-card-t-250de1`;
 const scratch = fwd(path.join(root, 'scratch'));
 const nogit = fwd(path.join(root, 'nogit'));
 const gone = fwd(path.join(root, 'nao-existe'));
@@ -53,6 +55,7 @@ beforeAll(() => {
   }
   sh(proj, 'branch', 'feature');
   sh(proj, 'worktree', 'add', '-q', '-b', 'wt-ana', wt);
+  sh(proj, 'worktree', 'add', '-q', '-b', 'myco-card/t-250de1', cardWt);
   sh(proj, 'config', 'alias.nuke', 'reset --hard');
   sh(proj, 'config', 'alias.shnuke', '!git reset --hard');
   mkdirSync(nogit, { recursive: true });
@@ -254,6 +257,19 @@ describe('git-guard: o que passa', () => {
 
   it.each(DESTRUCTIVE)('%s: na worktree própria do funcionário, passa (nas duas ferramentas)', (command) => {
     for (const tool of TOOLS) expect(decision(run(command, wt, tool)), `${tool}: ${command}`).toBeNull();
+  });
+
+  // t-250de1: a worktree do card (myco-card-*) é outro git-dir, então o hook a libera; o principal segue barrado (conferido do mesmo cwd de baixo).
+  it.each(DESTRUCTIVE)('%s: na worktree do card (myco-card-*), passa (nas duas ferramentas); no principal, barra', (command) => {
+    for (const tool of TOOLS) {
+      expect(decision(run(command, cardWt, tool)), `${tool}: ${command}`).toBeNull();
+      expect(decision(run(command, proj, tool)), `${tool}: ${command}`).toBe('deny');
+    }
+  });
+
+  it('a worktree do card: -C a partir do principal também passa, e -C para o principal a partir dela barra', () => {
+    expect(decision(run(`git -C ${q(cardWt)} reset --hard`, proj))).toBeNull();
+    expect(decision(run(`git -C ${q(proj)} reset --hard`, cardWt))).toBe('deny');
   });
 
   it.each(DESTRUCTIVE)('%s: num repositório que não é o do projeto, passa', (command) => {

@@ -7,6 +7,7 @@ import { pathKey } from '../adapters/claude/paths';
 // O roteiro da ficha chama agents pelo nome (executor, pesquisador, revisor). Sem eles no projeto,
 // o funcionário não tem para quem delegar. Faltando no projeto e na conta, o Claudio’s Club cria o pronto em
 // `<projeto>/.claude/agents`: aparece no quadro e dá para editar. O que já existe não é tocado.
+// Os agents marcados na ficha (`profile.agents`, com ou sem roteiro) também chegam à worktree por `--agents`, mas sem criar nada.
 
 /** Formato de cada agent em `--agents` (o arquivo JSON que o claude aceita). */
 export interface InlineAgent {
@@ -21,24 +22,26 @@ export interface PlaybookAgentsResult {
   /** Agents criados agora no projeto. */
   created: string[];
   /**
-   * Rodando noutra pasta (a worktree, que não tem os arquivos novos do projeto): os que faltam lá,
+   * Rodando noutra pasta (a worktree, que não tem os arquivos novos do projeto nem `.claude/agents`, que o git ignora): os que faltam lá,
    * com a definição do projeto, para ir por `--agents`.
    */
   inline: Record<string, InlineAgent>;
 }
 
 export async function ensurePlaybookAgents(
-  profile: Pick<StaffProfile, 'playbook'>,
+  profile: Pick<StaffProfile, 'playbook'> & { agents?: string[] },
   dirs: { projectPath: string; cwd: string; userAgentsDir: string; backupDir: string },
 ): Promise<PlaybookAgentsResult> {
   const out: PlaybookAgentsResult = { created: [], inline: {} };
-  if (!profile.playbook) return out;
+  const playbook = profile.playbook ? PLAYBOOK_AGENTS[profile.playbook] : [];
   const projectAgents = path.join(dirs.projectPath, '.claude', 'agents');
   const away = pathKey(dirs.cwd) !== pathKey(dirs.projectPath);
-  for (const name of PLAYBOOK_AGENTS[profile.playbook]) {
+  // Os agents da ficha (`agents`) somam-se aos do roteiro: só o roteiro cria preset; o da ficha que não existe no projeto nem na conta é ignorado.
+  for (const name of new Set([...playbook, ...(profile.agents ?? [])])) {
     if (await readAgentSource(dirs.userAgentsDir, name)) continue; // o da conta vale em todo projeto
     let source = await readAgentSource(projectAgents, name);
     if (!source) {
+      if (!playbook.includes(name)) continue;
       source = await createPreset(projectAgents, name, dirs.backupDir);
       if (!source) continue;
       out.created.push(name);

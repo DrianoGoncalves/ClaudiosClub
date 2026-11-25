@@ -5,6 +5,7 @@ import type { TaskCode, TaskCodeFile, TestRun } from '../shared/model';
 import { cleanEnv } from './auth';
 import { killTree } from './chat/registry';
 import { HEAVY_HELD_ENV, withHeavyLock, type HeavyWaitFn } from './heavyQueue';
+import { recordSuite } from './proofBaseline';
 import { worktreeFor } from './staff/worktree';
 import { TestScan } from './testFailures';
 
@@ -36,6 +37,8 @@ export interface CodePlace {
   where: 'worktree' | 'project';
   path: string;
   branch: string | null;
+  /** A worktree é a de um CARD (server/cardWorktree.ts): o branch só tem o que é do card e a junção é a de `mergeCard`. */
+  card?: boolean;
 }
 
 /** Onde está o código da tarefa; null quando o projeto não é um repositório git. */
@@ -54,6 +57,8 @@ export async function locateCode(projectPath: string, staffId: string | null, ow
  */
 export async function checkpoint(place: CodePlace, title: string): Promise<string | null> {
   if (place.where !== 'worktree') return null;
+  // Conflito aberto (o merge do principal no worktree do card, ver `mergeCard`): o `add -A` commitaria os marcadores `<<<<<<<`. Sem commit: a entrega fica sem checkpoint e a junção a recusa com o motivo.
+  if ((await unresolvedFiles(place.path)).length) return null;
   if (await dirtyCount(place.path)) {
     await git(place.path, ['add', '-A', '--', '.', ...NOT_MYCO]);
     await git(place.path, ['commit', '-m', `${title} (Claudio’s Club)`]).catch(() => {});
@@ -108,13 +113,21 @@ export async function readCode(projectPath: string, place: CodePlace, upTo?: str
       return { sha: sha!, subject: rest.join('\t') };
     });
   const diff = await git(place.path, ['diff', from, ...(end ? [end] : []), '--', '.', ...NOT_MYCO]).catch(() => '');
+  // Worktree de card: o principal sujo só atrapalha onde é arquivo DO CARD (a junção só mexe neles, ver `mergeCard`); o resto fica como o dono deixou.
+  const overlap = place.card ? await dirtyOverlap(projectPath, files.map((f) => f.path)) : [];
   const whyNot = !base
     ? 'o projeto principal está com o HEAD destacado'
-    : mainDirty
-      ? `o projeto principal tem ${mainDirty} ${mainDirty === 1 ? 'arquivo alterado' : 'arquivos alterados'} sem commit: commite ou guarde antes de mesclar`
-      : !files.length && !commits.length
-        ? 'não há mudanças na worktree'
-        : null;
+    : place.card
+      ? overlap.length
+        ? overlapMessage(overlap)
+        : !files.length && !commits.length
+          ? 'não há mudanças na worktree'
+          : null
+      : mainDirty
+        ? `o projeto principal tem ${mainDirty} ${mainDirty === 1 ? 'arquivo alterado' : 'arquivos alterados'} sem commit: commite ou guarde antes de mesclar`
+        : !files.length && !commits.length
+          ? 'não há mudanças na worktree'
+          : null;
   return { where: 'worktree', path: place.path, branch: place.branch, base, files, commits, uncommitted, ...clip(diff), test, canMerge: !whyNot, whyNot };
 }
 
@@ -132,6 +145,7 @@ export async function mergeCode(
   opts: { skipTests?: boolean; upTo?: string | null; wholeBranch?: boolean; testTimeoutMs?: number } = {},
 ): Promise<{ sha: string; base: string; branch: string; tests: TestRun | null }> {
   if (place.where !== 'worktree' || !place.branch) throw new CodeError('só dá para mesclar o trabalho de uma worktree');
+  if (place.card) return mergeCard(projectPath, place, title, opts);
   const end = await validEnd(place, opts.upTo);
   if (!end && !opts.wholeBranch)
     throw new CodeError(
@@ -177,7 +191,152 @@ export async function mergeCode(
     }
   });
   const sha = (await git(projectPath, ['rev-parse', '--short', 'HEAD'])).trim();
+  await rememberSuite(projectPath, tests, 'HEAD', code.test);
   return { sha, base: code.base, branch: place.branch, tests };
+}
+
+/**
+ * Guarda a suíte completa da junção para o baseline das provas da entrega (ver proofBaseline.ts): a árvore testada é a do commit `rev` (o HEAD depois de a junção commitar). Nunca derruba a
+ * junção: a memória é só ganho de tempo. Rodada escopada (`scopedTestCommand`: só os testes ligados ao que mudou) não é a suíte: o baseline completo diria "não falhava" de teste que nem rodou,
+ * então só vale a rodada do comando inteiro do projeto (`full`).
+ */
+async function rememberSuite(projectPath: string, tests: TestRun | null, rev: string, full: string | null): Promise<void> {
+  if (!tests || tests.command !== full) return;
+  const sha = (await git(projectPath, ['rev-parse', '--verify', rev]).catch(() => '')).trim();
+  if (sha) await recordSuite(projectPath, sha, tests).catch(() => {});
+}
+
+/** Quantas vezes a junção do card refaz a atualização + os testes quando o principal anda no meio (commit do dono, outro card junto). Passou disso: erro passageiro, a retentativa refaz. */
+const CARD_MERGE_ROUNDS = 3;
+
+/** Os arquivos com conflito aberto em `dir` (um merge parado no meio); vazio se não há. */
+export async function unresolvedFiles(dir: string): Promise<string[]> {
+  const out = await git(dir, ['diff', '--name-only', '-z', '--diff-filter=U']).catch(() => '');
+  return out.split('\0').filter(Boolean);
+}
+
+/** Dos `paths`, os que estão com mudança não commitada (alterados, no índice ou novos sem rastreio, fora `.myco/`) em `dir`. */
+async function dirtyOverlap(dir: string, paths: string[]): Promise<string[]> {
+  if (!paths.length) return [];
+  const out = await git(dir, ['status', '--porcelain', '-z', '--untracked-files=all', '--', '.', ...NOT_MYCO]).catch(() => '');
+  const fields = out.split('\0').filter(Boolean);
+  const dirty = new Set<string>();
+  for (let i = 0; i < fields.length; i++) {
+    const entry = fields[i]!;
+    dirty.add(entry.slice(3));
+    // Renomeado ou copiado: o nome de origem vem no campo seguinte, sem o código de duas letras.
+    if (/[RC]/.test(entry.slice(0, 2))) dirty.add(fields[++i] ?? '');
+  }
+  return [...new Set(paths)].filter((p) => dirty.has(p));
+}
+
+const overlapMessage = (files: string[]): string =>
+  `o principal tem mudança não commitada em ${files.length === 1 ? 'arquivo' : 'arquivos'} do card: ${files.slice(0, 8).join(', ')}${files.length > 8 ? ` e mais ${files.length - 8}` : ''}. Commite ou guarde; a junção segue sozinha quando ficarem limpos`;
+
+/**
+ * A junção de um card (worktree própria, ver server/cardWorktree.ts): o branch do card só tem o que é dele, então nada de outro card entra. Ordem: confere a entrega (commit `upTo`, worktree limpa
+ * e sem merge parado), os arquivos do card que o principal tem sujos (barato, antes de gastar testes), traz o HEAD do principal para o branch do card POR MERGE (rebase reescreveria os commits
+ * que `Task.checkpoint(s)` e `integratedSha` conhecem), roda os testes no worktree do card (já com o principal dentro), confere de novo e só então move o principal: `commit-tree` (pais: o HEAD do
+ * principal e a ponta do card, árvore da ponta: é o `--no-ff` de sempre, um commit de merge por card) e `merge --ff-only`. O principal só muda no ff, de uma vez: nunca fica meio mesclado, e o
+ * git recusa sozinho se algum arquivo que o ff muda tem mudança não commitada; o resto que o dono deixou sujo (inclusive no índice) não é tocado.
+ * Conflito ao trazer o principal: NÃO desfaz. O worktree do card fica com o merge em andamento e os marcadores (`CodeError` `conflict` com os arquivos), para o responsável resolver nele.
+ */
+async function mergeCard(
+  projectPath: string,
+  place: CodePlace,
+  title: string,
+  opts: { skipTests?: boolean; upTo?: string | null; testTimeoutMs?: number },
+): Promise<{ sha: string; base: string; branch: string; tests: TestRun | null }> {
+  const branch = place.branch!;
+  const end = await validEnd(place, opts.upTo);
+  if (!end)
+    throw new CodeError(
+      opts.upTo ? 'o commit da entrega não é desta worktree (não é ancestral do HEAD dela): a mescla foi recusada, não vou levar o branch inteiro' : 'a entrega não tem commit gravado: a mescla foi recusada, não vou levar o branch inteiro',
+      'no-delivery',
+    );
+  const base = (await git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim();
+  if (!base || base === 'HEAD') throw new CodeError('o projeto principal está com o HEAD destacado');
+  const test = await detectTest(projectPath);
+  if (!test && !opts.skipTests) throw new CodeError('não achei testes neste projeto (npm test, composer test ou phpunit)', 'no-tests');
+
+  const parse = async (dir: string, rev: string) => (await git(dir, ['rev-parse', '--verify', rev])).trim();
+  const stuck = await unresolvedFiles(place.path);
+  if (stuck.length) throw new CodeError(`conflito ainda não resolvido na worktree do card: ${stuck.join(', ')}`, 'conflict', null, stuck);
+  if (await git(place.path, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).then(() => true, () => false)) {
+    throw new CodeError('a worktree do card está com um merge em andamento: termine o commit dele (git commit) e entregue de novo', 'no-delivery');
+  }
+  if ((await dirtyCount(place.path)) || (await parse(place.path, 'HEAD')) !== (await parse(place.path, end))) {
+    throw new CodeError('a worktree do card mudou depois da entrega: entregue de novo antes de mesclar', 'no-delivery');
+  }
+
+  let tests: TestRun | null = null;
+  for (let round = 0; round < CARD_MERGE_ROUNDS; round++) {
+    const mainHead = await parse(projectPath, 'HEAD');
+    // Barato e antes dos testes: o que o card muda desde onde saiu, e o dono deixou sujo no principal.
+    const mine = (await git(place.path, ['diff', '--name-only', '-z', `${mainHead}...HEAD`]).catch(() => '')).split('\0').filter(Boolean);
+    const early = await dirtyOverlap(projectPath, mine);
+    if (early.length) throw new CodeError(overlapMessage(early), 'main-dirty', null, early);
+
+    // Traz o principal para o branch do card (a junção do card nunca toca o principal antes do ff).
+    const behind = !(await git(place.path, ['merge-base', '--is-ancestor', mainHead, 'HEAD']).then(() => true, () => false));
+    if (behind) {
+      try {
+        await git(place.path, ['merge', '--no-edit', '-m', `Merge ${base} em ${branch}`, mainHead]);
+      } catch (err) {
+        const files = await unresolvedFiles(place.path);
+        if (!files.length) {
+          await git(place.path, ['merge', '--abort']).catch(() => {});
+          throw new CodeError(`não deu para trazer o principal para a worktree do card: ${firstLine((err as Error).message)}`);
+        }
+        throw new CodeError(`conflito ao trazer o principal para a worktree do card em: ${files.join(', ')}`, 'conflict', null, files);
+      }
+    }
+
+    if (test) {
+      // O que o ff leva ao principal, já com ele dentro do card: os testes ligados a isso (ver `scopedTestCommand`); a suíte inteira fica no CI do PR.
+      const brought = (await git(place.path, ['diff', '--name-only', '-z', mainHead, 'HEAD']).catch(() => '')).split('\0').filter(Boolean);
+      // Na fila pesada como a suíte, mesmo escopado: um arquivo muito importado faz o `related` rodar quase tudo.
+      tests = await runTests(place.path, (await scopedTestCommand(place.path, brought)) ?? test, opts.testTimeoutMs, 'npm test');
+      if (!tests.ok) {
+        if (tests.timedOut) throw new CodeError(`os testes passaram do tempo-limite de ${formatLimit(tests.limitMs ?? TEST_TIMEOUT_MS)} no worktree do card: nada foi mesclado (não é falha de teste: confira se a máquina está cheia e tente de novo)`, 'tests-timeout', tests);
+        throw new CodeError('os testes falharam no worktree do card com o principal dentro: nada foi mesclado', 'tests-failed', tests);
+      }
+    }
+
+    // O principal andou durante os testes (commit do dono, outro card): o que foi testado não é mais "o principal + o card". Atualiza e testa de novo.
+    if ((await parse(projectPath, 'HEAD')) !== mainHead) continue;
+
+    const tip = await parse(place.path, 'HEAD');
+    // Authoritativo: tudo o que o ff muda no principal (o card + o que o merge de sincronização trouxe), contra o que o dono tem sujo.
+    const changing = (await git(projectPath, ['diff', '--name-only', '-z', mainHead, tip]).catch(() => '')).split('\0').filter(Boolean);
+    const late = await dirtyOverlap(projectPath, changing);
+    if (late.length) throw new CodeError(overlapMessage(late), 'main-dirty', null, late);
+
+    // Já está no principal (nada a juntar): não há commit a criar.
+    const inMain = await git(projectPath, ['merge-base', '--is-ancestor', tip, mainHead]).then(() => true, () => false);
+    if (inMain) {
+      await rememberSuite(projectPath, tests, tip, test);
+      return { sha: (await git(projectPath, ['rev-parse', '--short', mainHead])).trim(), base, branch, tests };
+    }
+    const tree = await parse(place.path, `${tip}^{tree}`);
+    let joined: string;
+    try {
+      joined = (await git(projectPath, ['commit-tree', tree, '-p', mainHead, '-p', tip, '-m', `Merge ${branch}: ${title}`])).trim();
+      await git(projectPath, ['merge', '--ff-only', joined]);
+    } catch (err) {
+      const text = (err as Error).message;
+      // O git recusou o ff por mudança não commitada num arquivo que ele muda (o principal andou entre a conferência e o ff): espera, como a conferência.
+      if (/would be overwritten|seriam sobrescritas|sobrescrit/i.test(text)) {
+        const named = text.split(/\r?\n/).filter((l) => /^\s+\S/.test(l)).map((l) => l.trim());
+        throw new CodeError(overlapMessage(named.length ? named : changing.slice(0, 8)), 'main-dirty', null, named);
+      }
+      throw new CodeError(`não deu para juntar o card no principal: ${firstLine(text)}`);
+    }
+    // A árvore do commit de junção é a da ponta do card (a que os testes viram).
+    await rememberSuite(projectPath, tests, joined, test);
+    return { sha: (await git(projectPath, ['rev-parse', '--short', 'HEAD'])).trim(), base, branch, tests };
+  }
+  throw new CodeError('o principal andou durante os testes várias vezes seguidas: a junção tenta de novo');
 }
 
 /**
@@ -277,12 +436,15 @@ export function timeoutNote(limitMs: number): string {
  * por si, mas espera a vez como a suíte, para não rodar por cima de outra validação pesada e piorar a carga que causou a falha. `onWait`: avisa quando a suíte começa e quando deixa
  * de esperar a vez (ver `HeavyWaitFn`), para o estado da fila do funcionário mostrar a espera.
  */
-export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS, queueAs = command, onWait?: HeavyWaitFn): Promise<TestRun> {
-  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + LEASE_MARGIN_MS, onWait });
+export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS, queueAs = command, onWait?: HeavyWaitFn, signal?: AbortSignal): Promise<TestRun> {
+  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held, signal), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + LEASE_MARGIN_MS, onWait, signal });
 }
 
-/** `held`: a chave da trava da fila que esta execução segura; vai no ambiente dela (ver `HEAVY_HELD_ENV`). */
-function spawnTests(dir: string, command: string, timeoutMs: number, held: string | null): Promise<TestRun> {
+/**
+ * `held`: a chave da trava da fila que esta execução segura; vai no ambiente dela (ver `HEAVY_HELD_ENV`). `signal`: abortado com a rodada em andamento, a árvore de processos sai e a rodada volta com
+ * `aborted` (e `ok: false`); abortado antes de rodar, não roda (ver `withHeavyLock`).
+ */
+function spawnTests(dir: string, command: string, timeoutMs: number, held: string | null, signal?: AbortSignal): Promise<TestRun> {
   const started = Date.now();
   return new Promise((resolve) => {
     let out = '';
@@ -300,17 +462,29 @@ function spawnTests(dir: string, command: string, timeoutMs: number, held: strin
     child.stdout.on('data', keep(0));
     child.stderr.on('data', keep(1));
     let cut = false;
-    const timer = setTimeout(() => {
-      cut = true;
+    let aborted = false;
+    const stop = () => {
       if (child.pid) void killTree(child.pid);
       else child.kill();
+    };
+    const timer = setTimeout(() => {
+      cut = true;
+      stop();
     }, timeoutMs);
+    const onAbort = () => {
+      aborted = true;
+      stop();
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       scan.end();
       const read = scan.result();
       // Cortada só se o corte valeu: a suíte que acabou limpa (código 0) no instante do corte passou.
-      const timedOut = cut && code !== 0;
+      const timedOut = cut && !aborted && code !== 0;
+      const abortedRun = aborted && code !== 0;
       const output = timedOut ? `${out.trim()}\n${timeoutNote(timeoutMs)}`.trim() : out.trim();
       resolve({
         command,
@@ -318,14 +492,20 @@ function spawnTests(dir: string, command: string, timeoutMs: number, held: strin
         output,
         ms: Date.now() - started,
         at: new Date().toISOString(),
+        ...(code !== null && { exitCode: code }),
         ...(read.files !== undefined && { files: read.files }),
+        ...(read.counts && { counts: read.counts }),
+        ...(read.failureIds && { failureIds: read.failureIds }),
+        ...(read.typeErrors && { typeErrors: read.typeErrors, typeErrorsTotal: read.typeErrorsTotal }),
         ...(code !== 0 && read.failedFiles && { failedFiles: read.failedFiles }),
         ...(timedOut && { timedOut: true, limitMs: timeoutMs }),
+        ...(abortedRun && { aborted: true }),
       });
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      resolve({ command, ok: false, output: err.message, ms: Date.now() - started, at: new Date().toISOString() });
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ command, ok: false, output: err.message, ms: Date.now() - started, at: new Date().toISOString(), spawnFailed: true });
     });
   });
 }

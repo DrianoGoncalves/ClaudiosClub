@@ -45,23 +45,61 @@ export function newToolsKey(key: string): string {
   return key;
 }
 
+export interface ToolsKeysMigration {
+  /** Quantas chaves mudaram (a que perdeu para outra do mesmo nome, descartada, também conta). */
+  changed: number;
+  /** Chave antiga → nova, só das entradas que ficaram no arquivo: o rollback as devolve (ver revertToolsKeys). */
+  keys: Record<string, string>;
+}
+
 /**
  * Passa as chaves do arquivo de ferramentas para o modelo Global/Projeto (uma vez, e de novo sem efeito). Duas chaves antigas que viram a
- * mesma ficam com a testada por último. Devolve quantas chaves mudaram; sem mudança, nem regrava.
+ * mesma ficam com a testada por último (a outra é descartada e não volta no rollback). Sem mudança, nem regrava.
  */
-export async function migrateToolsKeys(file: string): Promise<number> {
+export async function migrateToolsKeys(file: string): Promise<ToolsKeysMigration> {
   const servers = await readDoc(file);
   const out: Record<string, Entry> = {};
+  /** A chave de onde veio a entrada que ficou em cada chave nova. */
+  const origin: Record<string, string> = {};
   let changed = 0;
   for (const [key, entry] of Object.entries(servers)) {
     const next = newToolsKey(key);
     if (next !== key) changed++;
     const prev = out[next];
-    if (!prev || entry.testedAt.localeCompare(prev.testedAt) > 0) out[next] = entry;
+    if (!prev || entry.testedAt.localeCompare(prev.testedAt) > 0) {
+      out[next] = entry;
+      origin[next] = key;
+    }
   }
-  if (changed === 0) return 0;
+  if (changed === 0) return { changed, keys: {} };
   await writeAtomic(file, JSON.stringify({ servers: out }, null, 2) + '\n');
-  return changed;
+  const keys = Object.fromEntries(Object.entries(origin).filter(([next, old]) => next !== old).map(([next, old]) => [old, next]));
+  return { changed, keys };
+}
+
+/**
+ * Desfaz migrateToolsKeys com o mapa que o relatório guarda (antiga → nova): a entrada de cada chave nova volta para a antiga. Chave nova que
+ * sumiu, ou antiga que já voltou a existir (testada de novo pelo modelo antigo), fica como está. Arquivo que não existe ou está estragado não
+ * é tocado. Copia o arquivo para `backupDir` antes de gravar. Devolve quantas voltaram e o caminho da cópia (null: nada gravado).
+ */
+export async function revertToolsKeys(file: string, keys: Record<string, string>, backupDir: string): Promise<{ reverted: number; backup: string | null }> {
+  const raw = await fs.readFile(file, 'utf8').catch(() => null);
+  const parsed = raw === null ? null : Doc.safeParse(tryJson(raw.replace(/^﻿/, '')));
+  if (raw === null || !parsed?.success) return { reverted: 0, backup: null };
+  const servers = parsed.data.servers;
+  let reverted = 0;
+  for (const [old, next] of Object.entries(keys)) {
+    if (!Object.prototype.hasOwnProperty.call(servers, next) || Object.prototype.hasOwnProperty.call(servers, old)) continue;
+    servers[old] = servers[next]!;
+    delete servers[next];
+    reverted++;
+  }
+  if (reverted === 0) return { reverted, backup: null };
+  await fs.mkdir(backupDir, { recursive: true });
+  const backup = path.join(backupDir, `${path.basename(file)}.${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  await fs.writeFile(backup, raw, { encoding: 'utf8', flag: 'wx' });
+  await writeAtomic(file, JSON.stringify({ servers }, null, 2) + '\n');
+  return { reverted, backup };
 }
 
 /**

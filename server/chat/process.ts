@@ -170,6 +170,8 @@ export interface ChatProcessOptions {
   clock?: () => number;
   /** Pergunta só de escolhas (AskUserQuestion) esperando resposta: no formato da dúvida da tarefa (ver TaskQuestion). Texto e número não vão. */
   onAsk?: (requestId: string, questions: NonNullable<TaskQuestion['questions']>) => void;
+  /** Plano pronto (ExitPlanMode) esperando aprovação: o texto inteiro do plano, para o card da tarefa levá-lo a quem pediu (ver `TaskService.onPlan`). */
+  onPlan?: (requestId: string, plan: string) => void;
   /** `MYCO_TOKEN` da conversa (ver server/callers.ts): vai no ambiente, ao lado do `MYCO_SESSION_ID`, para as chamadas à API do Claudio’s Club. */
   mycoToken?: string;
   /**
@@ -1001,6 +1003,8 @@ export class ChatProcess {
         if (questions?.every((q) => q.kind === 'choice')) {
           this.opts.onAsk?.(requestId, questions.map((q) => ({ question: q.question, options: q.options.map((o) => o.label), ...(q.multiSelect && { multiSelect: true }) })));
         }
+        // O plano da tarefa de um gestor vai a ele (a conversa segue esperando o cartão; quem decide responde por `ChatManager.answer`).
+        if (typeof plan === 'string') this.opts.onPlan?.(requestId, plan);
         return;
       }
       case 'rate_limit_event': {

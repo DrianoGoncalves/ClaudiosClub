@@ -136,3 +136,13 @@ function byQuestion<V extends z.ZodTypeAny>(value: V) {
 
 export const AnswersField = byQuestion(z.union([z.string().max(5_000), z.array(z.string().max(5_000)).max(20)])).optional();
 export const AnnotationsField = byQuestion(z.object({ preview: z.string().max(20_000).optional(), notes: z.string().max(5_000).optional() })).optional();
+
+// Resposta do gestor à dúvida da tarefa (ver TaskService.answerQuestion): `answers` por pergunta; `text` na dúvida escrita; `escalate` passa a você.
+// A chave de `answers` é o texto da pergunta, de até 1000 caracteres (`parseQuestions`). Ela não leva teto aqui: o do zod 4 só diz "Invalid key in record"
+// e o corpo já tem teto (MAX_BODY). Quem confere a chave contra as perguntas abertas é `answerQuestion`, com 400 que diz qual chave e quais valem.
+export const TaskAnswerBody = z.object({
+  questionId: z.string().min(1).max(100),
+  answers: z.record(z.string(), z.union([z.string().max(500), z.array(z.string().max(500)).max(20)])).optional(),
+  text: z.string().max(2_000).optional(),
+  escalate: z.boolean().optional(),
+});

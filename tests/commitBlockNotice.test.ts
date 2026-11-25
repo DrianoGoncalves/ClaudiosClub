@@ -124,7 +124,8 @@ describe('commit barrado por outra tarefa: o aviso a quem pediu', () => {
     expect(text).toContain('só levou parte dos arquivos');
     expect(text).toContain('`b.ts`');
     expect(text).toContain(`${other} (“Tela B”, fazendo)`);
-    expect(text).toContain('não se refaz sozinho');
+    expect(text).toContain('tenta commitá-los sozinho');
+    expect(text).not.toContain('não se refaz sozinho');
     expect(t.commitNotice).toMatchObject({ key: expect.stringMatching(/^[0-9a-f]{32}$/), at: expect.any(String) });
     // O mesmo texto do histórico e do aviso vem do mesmo `left`: o id que barrou é o mesmo.
     expect(t.history.at(-1)!.note).toContain(other);

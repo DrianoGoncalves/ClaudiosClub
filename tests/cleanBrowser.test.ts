@@ -333,7 +333,9 @@ describe('prepareRun (Claude): o navegador limpo no mcp.json e na ficha', () => 
     await fs.mkdir(proj, { recursive: true });
     const r = await prepareRun({ ...claudeOf({ mcps: null }), browser: false }, launch(proj, { chromeMcpCli: CLI, cleanBrowserChannel: 'chrome', cleanBrowser: false }), 'sess-claude-off', proj);
     expect(r.cleanBrowser).toBe(false);
-    expect(r.mcpConfigPath).toBeNull();
+    // O mcp.json existe só por causa do MCP de tarefa (que entra em toda conversa do Claude fora da revisão): o navegador limpo não está nele.
+    const cfg = JSON.parse(await fs.readFile(r.mcpConfigPath!, 'utf8')) as { mcpServers: Record<string, unknown> };
+    expect(Object.keys(cfg.mcpServers)).toEqual(['myco-tarefa']);
     expect(await fichaDe(proj)).not.toContain('## Navegador');
   });
 });

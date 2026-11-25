@@ -1,11 +1,11 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { McpScope, McpServerView, McpType } from '../../shared/model';
+import type { McpMigrationPending, McpScope, McpServerList, McpServerView, McpType } from '../../shared/model';
 import { tryJson } from '../adapters/claude/fsutil';
 import { pathKey } from '../adapters/claude/paths';
 import { DEFAULT_SECRETS_DIR, deleteSecret, hasSecret, moveSecret, setSecret, VaultError, type VaultOptions } from '../secretVault';
-import { clubDefOf, CLUB_MCP_FILE, clubEntry, clubSecretId, isLiteralSecret, McpError, readClub, resolveClub, type ClubEntry } from './mcp';
+import { clubDefOf, CLUB_MCP_FILE, clubEntry, clubSecretId, isLiteralSecret, MCP_MIGRATION_FILE, McpError, MIGRATION_NAME_EXISTS, readClub, readMigrationConflicts, resolveClub, type ClubEntry } from './mcp';
 import { testMcpConfig, type McpTestResult } from './mcpTest';
 import { MCP_TOOLS_FILE, mcpFingerprint, saveTestedTools, toolsKey } from './mcpTools';
 import { writeAtomic } from './store';
@@ -74,6 +74,8 @@ export interface McpLibraryOptions {
   vault?: VaultOptions;
   /** Onde fica a lista de ferramentas do último teste (padrão ~/.myco/mcp-tools.json; ver mcpTools.ts). */
   toolsFile?: string;
+  /** O relatório da migração dos MCPs do Club (padrão: `mcps-migracao.json` na pasta do registro): de onde vêm os conflitos que a lista mostra. */
+  recordFile?: string;
 }
 
 type Obj = Record<string, unknown>;
@@ -425,6 +427,8 @@ async function fileRows(file: string, section: (doc: Obj, create: boolean) => Ob
 
 export function createMcpLibrary(o: McpLibraryOptions) {
   const clubFile = o.clubFile ?? CLUB_MCP_FILE;
+  // O relatório mora ao lado do registro (`~/.myco`): quem troca o registro (os testes) não lê o relatório de verdade.
+  const recordFile = o.recordFile ?? (o.clubFile ? path.join(path.dirname(o.clubFile), path.basename(MCP_MIGRATION_FILE)) : MCP_MIGRATION_FILE);
   const vault = o.vault;
 
   async function projectDir(projectId: string | undefined): Promise<string> {
@@ -465,13 +469,32 @@ export function createMcpLibrary(o: McpLibraryOptions) {
     return [...rows.values()].map(toView);
   }
 
-  async function list(projectIdRaw: unknown): Promise<{ servers: McpServerView[] }> {
+  /**
+   * Os conflitos da migração (ver readMigrationConflicts) na lista: a entrada da Global de mesmo nome que não é a do Club leva `pending`; o que
+   * não tem entrada na Global (nome inválido, não deu para montar) vai à parte. Entrada do Club (`managed`) é a conflito já resolvido.
+   */
+  async function withPending(global: McpServerView[]): Promise<{ pending?: McpMigrationPending[] }> {
+    const conflicts = await readMigrationConflicts(recordFile, clubFile).catch(() => new Map<string, string>());
+    const orphans: McpMigrationPending[] = [];
+    for (const [name, reason] of conflicts) {
+      const row = global.find((s) => s.name === name);
+      if (!row) {
+        // O nome que bloqueava a migração foi liberado depois (a entrada da Global saiu): o motivo do relatório já não vale.
+        orphans.push({ name, reason: reason === MIGRATION_NAME_EXISTS ? 'o nome da Global foi liberado depois da migração; o MCP do Club segue só no registro: cadastre-o de novo para carregá-lo' : reason });
+      } else if (!row.managed) row.pending = `O MCP do Claudio’s Club de mesmo nome ficou em ~/.myco/mcps.json e não é carregado (${reason}).`;
+    }
+    return orphans.length ? { pending: orphans } : {};
+  }
+
+  async function list(projectIdRaw: unknown): Promise<McpServerList> {
     const projectId = typeof projectIdRaw === 'string' && projectIdRaw ? projectIdRaw : undefined;
     if (projectId && !PROJECT_ID.test(projectId)) throw new McpError('projeto inválido');
-    const servers: McpServerView[] = [...(await globalViews())];
+    const global = await globalViews();
+    const extra = await withPending(global);
+    const servers: McpServerView[] = [...global];
     if (projectId) servers.push(...(await projectViews(projectId, await projectDir(projectId))));
     servers.sort((a, b) => SCOPE_ORDER.indexOf(a.scope) - SCOPE_ORDER.indexOf(b.scope) || a.name.localeCompare(b.name));
-    return { servers };
+    return { servers, ...extra };
   }
 
   /** Onde está um MCP do Projeto: o escopo local vale primeiro (a precedência do Claude Code), depois o .mcp.json. */

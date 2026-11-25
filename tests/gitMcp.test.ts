@@ -272,13 +272,14 @@ describe('Claude: mcp.json, --allowedTools, --disallowedTools e o hook de acesso
     expect(cfg.mcpServers[GIT_MCP_NAME]!.type).toBe('stdio');
     expect(cfg.mcpServers[GIT_MCP_NAME]!.args).toEqual([path.join(sessionDir('sess-git-cl'), 'git-mcp.mjs'), '--project', repo, '--root', repo, '--run', sessionDir('sess-git-cl')]);
     const args = buildClaudeArgs(p, { ...run, sessionId: 's', resume: false, firstPrompt: null });
-    expect(allowed(args)).toEqual(GIT_READ_TOOLS.map(tool));
+    // Mais o MCP de tarefa (cancelar a própria tarefa; ver tests/tarefaMcp.test.ts), que entra em toda conversa do Claude fora da revisão.
+    expect(allowed(args)).toEqual([...GIT_READ_TOOLS.map(tool), 'mcp__myco-tarefa']);
     for (const w of GIT_WRITE_TOOLS) {
       expect(allowed(args)).not.toContain(tool(w));
       expect(denied(args)).not.toContain(tool(w));
     }
     const plan = buildClaudeArgs(claude({ autonomy: 'plan' }), { ...run, sessionId: 's', resume: false, firstPrompt: null });
-    expect(allowed(plan)).toEqual([]);
+    expect(allowed(plan)).toEqual(['mcp__myco-tarefa']);
   });
 
   it('na revisão as de escrita saem de vez; off sai por --disallowedTools', async () => {

@@ -66,7 +66,8 @@ async function setup() {
   const club = path.join(dir, 'mcps.json');
   const claude = path.join(dir, 'claude.json');
   const toolsFile = path.join(dir, 'mcp-tools.json');
-  const snapshotFile = path.join(dir, 'run', 'codex-mcp.json');
+  // Como no Club: `<MYCO_HOME>/run/<sessão>/codex-mcp.json` (o lançador só aceita o --snapshot aí; o MYCO_HOME dos testes que o sobem é `dir`).
+  const snapshotFile = path.join(dir, 'run', 'sessao-1', 'codex-mcp.json');
   await fs.mkdir(proj, { recursive: true });
   // Script do MCP de teste: grava o valor da env num arquivo e sai com 7 (ver o teste do lançador de verdade).
   const out = path.join(dir, 'saida.txt');
@@ -488,7 +489,7 @@ describe('snapshotSpec e o lançador: o arquivo da conversa', () => {
     const env = await setup();
     const L = mcpLaunchCommand(false);
     await run(env, ['phttp'], undefined, L);
-    const r = spawnSync(L.command, [...L.args, '--headers', '--snapshot', env.snapshotFile, '--server', 'phttp'], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const r = spawnSync(L.command, [...L.args, '--headers', '--snapshot', env.snapshotFile, '--server', 'phttp'], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: { ...process.env, MYCO_HOME: env.dir } });
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({ Authorization: `Bearer ${VALOR_PROJ}` });
   }, 60_000);
@@ -497,7 +498,7 @@ describe('snapshotSpec e o lançador: o arquivo da conversa', () => {
     const env = await setup();
     const L = mcpLaunchCommand(false);
     await run(env, ['pfake'], undefined, L);
-    const r = spawnSync(L.command, [...L.args, '--snapshot', env.snapshotFile, '--server', 'pfake'], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const r = spawnSync(L.command, [...L.args, '--snapshot', env.snapshotFile, '--server', 'pfake'], { encoding: 'utf8', timeout: 60_000, windowsHide: true, env: { ...process.env, MYCO_HOME: env.dir } });
     expect(r.status).toBe(7);
     expect(await fs.readFile(env.out, 'utf8')).toBe(VALOR_PROJ);
     expect(`${r.stdout}${r.stderr}`).not.toContain(VALOR_PROJ);

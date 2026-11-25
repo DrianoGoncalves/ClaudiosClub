@@ -436,6 +436,8 @@ describe('aprovação presa à entrega', () => {
     // Você manda um ajuste e ele entrega de novo: é outra entrega.
     await p.svc.onSent('s-1');
     expect((await p.get(t.id)).ownerGate).toBeUndefined();
+    // O ajuste edita o código: só o turno que edita (ou traz a entrega no formato) é entrega nova; a resposta seca à mensagem deixa a entrega de antes (ver `holdReply`).
+    await p.svc.onCodeEdit({ sessionId: 's-1', projectId: 'p', staffId: 'ana-1', engine: 'claude', cwd: p.dir, files: [path.join(p.dir, 'a.ts')], request: 'ajuste' });
     await sleep(5);
     await p.svc.onTurnDone('s-1');
     const again = await p.get(t.id);

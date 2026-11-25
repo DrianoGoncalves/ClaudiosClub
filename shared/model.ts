@@ -708,14 +708,22 @@ export interface BoardWriterConfig {
 }
 
 /**
+ * Worktree por card (também em `<projeto>/.myco/board.json`, na chave `cardWorktree`; LIGADA por padrão: só o `false` gravado desliga): cada card que edita código trabalha numa cópia git
+ * só dele e o Club a junta no principal na aprovação (ver server/cardWorktree.ts). Ligada, a vaga de escrita (`BoardWriterConfig`) não se aplica aos cards que ganham worktree. Só liga e desliga pela tela.
+ */
+export interface BoardCardWorktreeConfig {
+  cardWorktree: boolean;
+}
+
+/**
  * Política de fluxo do projeto (fonte única de quanto do fluxo é automático): `mode` diz de onde vêm os portões. 'auto', 'supervised' e 'manual' são presets (`FLOW_PRESETS`); 'custom' é o que
  * sobra quando o dono mexe num portão sozinho (ou o valor de um projeto que ainda não tem política, ver `FlowPolicy.source`).
  */
 export type FlowMode = 'auto' | 'supervised' | 'manual' | 'custom';
 
 /**
- * Os portões. `plan`: quem aprova o plano de um card que pede plano primeiro; 'owner' = como hoje (quem pediu o card ou o dono decide), 'ai' fica só guardado (a aprovação por IA é de outro
- * card e ainda não age). `completion`: quem leva uma tarefa em revisão a "pronto"; 'ai' = o veredito APROVADO do revisor (e, sem revisor, a tarefa espera o dono), 'owner' = só o dono, pela tela.
+ * Os portões. `plan`: quem aprova o plano de um card que pede plano primeiro; 'owner' = como hoje (quem pediu o card ou o dono decide), 'ai' = a IA decide (o gestor que pediu o card; senão o
+ * revisor do quadro; sem nenhum dos dois, o dono, nunca sozinho): ver `TaskPlanWait.ai`. `completion`: quem leva uma tarefa em revisão a "pronto"; 'ai' = o veredito APROVADO do revisor (e, sem revisor, a tarefa espera o dono), 'owner' = só o dono, pela tela.
  * `commit`: o commit automático local da tarefa pronta (o `autoCommit` de sempre).
  */
 export interface FlowGates {
@@ -806,6 +814,12 @@ export interface TaskCommit {
    * `for` e `files` seguem sendo os do commit original; `left`, `status` e `alert` refletem o que ainda ficou de fora. Só o servidor grava.
    */
   redos?: CommitRedo[];
+  /**
+   * A tentativa AUTOMÁTICA de commitar as sobras que não commitou nada (ver `TaskService.leftoversSoon`): uma por `key` (a entrega mais as sobras de agora), então o Club não repete em laço. Com `note`, o git
+   * falhou (hook, repositório fora de condição): o aviso vira `failed` com ela, e o botão do dono segue valendo. Sem `note`, nada podia ir sozinho agora (arquivo ficou em conflito, staged ou editado por você).
+   * Sai quando o `left` muda (outro commit, o botão). Só o servidor grava.
+   */
+  auto?: { key: string; at: string; note?: string };
 }
 
 /** Quantos commits complementares uma tarefa guarda em `TaskCommit.redos`. */
@@ -816,6 +830,8 @@ export interface CommitRedo {
   at: string;
   sha: string;
   files: string[];
+  /** Saiu sozinho, quando o último card que travava as sobras ficou pronto (e não pelo botão). */
+  auto?: true;
 }
 
 /**
@@ -859,7 +875,7 @@ export interface CommitLeft {
   files: CommitLeftFile[];
   /** Os cards abertos que travam, um por card; só em `waiting`. */
   blockers: CommitLeftBlocker[];
-  /** Só em `ready`, com pelo menos um arquivo `redo`: a tela pode oferecer o botão. */
+  /** Só em `ready` (ou em `failed` por uma tentativa automática que o git recusou, ver `TaskCommit.auto`), com pelo menos um arquivo `redo`: a tela pode oferecer o botão. */
   canRedo: boolean;
   /** A lista de sobras bateu no teto (`COMMIT_LIST_MAX`): pode haver mais arquivos de fora do que os listados. */
   truncated?: true;
@@ -1017,10 +1033,14 @@ export interface Task {
    * Onde o código DESTE card é escrito, gravado quando a conversa de trabalho abre (ver `TaskService.startNow`): `project` = o checkout principal; `worktree` = a do funcionário,
    * no `branch`. A mescla e a aprovação decidem por isto, não pela worktree que o funcionário tem agora (ela pode ter sido criada depois, para outro card). Ausente (card
    * anterior a este campo) = vale a worktree atual dele (ver `locateTaskCode`). Só o servidor grava: nenhuma edição (tela ou API) aceita este campo.
+   * Worktree DO CARD (ver server/cardWorktree.ts): `path` é a pasta dela e `card: true`; `port` a porta de servidor de tela reservada ao card; `base` o HEAD de onde partiu. Card que ficou no principal
+   * porque a worktree não deu (sem git, sem commit, disco, falha): `why` diz o motivo. `cleanup`: a limpeza da pasta (card junto ou cancelado) não terminou e é refeita.
    */
-  codeAt?: { where: 'worktree' | 'project'; branch: string | null };
+  codeAt?: { where: 'worktree' | 'project'; branch: string | null; path?: string; card?: true; port?: number; base?: string | null; why?: string; cleanup?: { reason: string; since: string } };
   /** Último teste rodado pelo Claudio’s Club para esta tarefa. */
   tests?: TestRun | null;
+  /** As provas que o Claudio’s Club gerou na última entrega (tsc e testes relacionados, com baseline); só o servidor grava. Ver `DeliveryProofs`. */
+  proofs?: DeliveryProofs;
   /** Segunda opinião do Codex sobre o diff (Markdown), quando você pediu. */
   secondOpinion?: { at: string; text: string } | null;
   /** Gestor (funcionário) que pediu a tarefa pela API; recebe o resumo quando ela é entregue. */
@@ -1058,6 +1078,13 @@ export interface Task {
    */
   planWait?: TaskPlanWait;
   /**
+   * A versão do plano (`plan`) que foi aprovada: o hash do texto e quando. A aprovação vale para ESSA versão: um plano diferente apresentado depois (outro cartão de plano, outro fim de turno)
+   * não herda a aprovação e espera uma nova (ver `TaskService.onPlan`, `planWait.ai`). Só o servidor grava.
+   */
+  planApproved?: TaskPlanApproval;
+  /** Quantas vezes a IA reprovou o plano deste card (portão 'ai'); no teto (`AUTO_REVIEW_ROUNDS`) o plano passa a ir ao dono. Só o servidor grava. */
+  aiPlanRounds?: number;
+  /**
    * A tarefa em "revisão" espera a aprovação do dono (política de fluxo com conclusão 'owner', ou 'ai' sem revisor configurado): só a EXIBIÇÃO (a nota e o item na caixa). Quem autoriza a ir
    * a "pronto" é a política lida de `~/.myco` e o pedido do dono pela tela, nunca este campo. Vale só para a entrega `deliveryAt`; entrega nova, ou sair de "revisão", o desfaz. Só o servidor grava.
    */
@@ -1073,6 +1100,25 @@ export interface Task {
    * sempre, com uma nota no histórico (`expiredAt`). Sai quando o card sai de "fazendo" ou quando o fim de turno acha o segundo plano vazio. Só o servidor grava.
    */
   backgroundWait?: TaskBackgroundWait;
+  /**
+   * O card voltou de "revisão" para "fazendo" por mensagem na conversa de trabalho (nota "você respondeu"): o turno que vem responde a ela, e resposta não é entrega. Se esse turno não
+   * editou arquivo (`edited` marca a edição que o Club viu) nem trouxe a entrega no formato, o card volta para "revisão" com a entrega ANTERIOR (sem resumo novo, sem rodada de revisão nova,
+   * sem aviso a quem pediu). `kept`: o que a revisão tinha antes de sair (a espera pelo dono, a mescla automática, o retry), devolvido junto. Some quando o card sai de "fazendo". Só o servidor grava.
+   */
+  reopened?: { at: string; edited?: true; kept?: Pick<Task, 'ownerGate' | 'autoMerge' | 'reviewRetry'> };
+  /**
+   * Contestação da reprovação (impasse de revisão): o card foi reprovado e o responsável respondeu SEM editar nenhum arquivo nessa rodada (a prova já existia, ou ele discorda do 🔴). Isso não é
+   * rodada nova de revisão: o card fica em "fazendo" (a tela mostra o ícone de espera) enquanto o revisor que reprovou recebe só a resposta, item a item, e mantém ou retira cada 🔴. Retirou todos:
+   * aprovado, pelo fluxo normal. Manteve algum: volta ao responsável com o motivo, como ajuste. Não conta no limite de revisões automáticas nem grava reprovação nova. O segundo impasse no mesmo item
+   * leva o card a Aguardar, para quem pediu decidir. Some quando a contestação se resolve ou o card sai de "fazendo". Só o servidor grava.
+   */
+  contest?: TaskContest;
+  /**
+   * O card foi para Aguardar porque a conversa "parou no meio" de uma ação com efeito fora do projeto (`TurnCapHit` `restart`, ou `retry` com `why: 'cut'`): uma parada PRESUMIDA, lida do
+   * transcript. Se o turno da conversa terminar normal depois (a parada era falsa, ou ela seguiu por mensagem), o card sai de Aguardar e o fim do turno decide como em "fazendo": a entrega
+   * é gravada e ele vai para revisão. Some quando o card sai de Aguardar. Só o servidor grava.
+   */
+  waitCut?: { at: string };
   /**
    * O turno de trabalho terminou em erro do motor (autenticação, ou o erro do turno que não é passageiro nem foi retomado: ver `TurnCapHit` `engine`) e o card foi para Aguardar em vez de
    * revisão: não há entrega. Quem pediu o card é avisado (gestor, na conversa em que pediu; o usuário, pela caixa, que também recebe o item do erro). Some quando o card sai de Aguardar.
@@ -1282,6 +1328,11 @@ export interface TaskAutoMerge {
   retry?: RetryState;
   /** A mescla automática parou e só o dono segue (mescla pelo card): o motivo e quando. */
   stopped?: { detail: string; at: string };
+  /**
+   * O pedido é do DONO ("Aprovar entrega" num card de worktree por card): vale sem veredito de revisão nem a política de conclusão por IA, e a junção que não pôde rodar (principal sujo nos arquivos
+   * do card, testes cortados) espera aqui, com o motivo em `wait`, e roda sozinha depois; `verdict` é só o da revisão que havia (pode não existir).
+   */
+  byOwner?: true;
 }
 
 /** A espera pela aprovação do dono (`Task.ownerGate`). */
@@ -1310,6 +1361,45 @@ export interface TaskPlanWait {
   notifyRetry?: RetryState;
   /** Quando o aviso ao gestor foi dado como perdido e o plano passou a `to: 'owner'` (ISO). */
   escalatedAt?: string;
+  /**
+   * O plano veio pelo cartão ExitPlanMode da conversa (ficha `plan`, Claude; ver `TaskService.onPlan`): o id do pedido pendente (`requestId`). O processo está vivo esperando o cartão,
+   * então o card segue ocupando o funcionário, e quem decide (a rota `/plan`) responde o cartão. Decidir pelo cartão da conversa também encerra esta espera. Ausente: o plano é o fim de turno
+   * (ficha que edita) e a decisão vai como mensagem.
+   */
+  card?: string;
+  /**
+   * A decisão é da IA (política de fluxo com `plan: 'ai'`): o plano vai a quem decide (o gestor que pediu o card; senão o revisor do quadro) numa conversa de decisão, que responde APROVADO ou
+   * REPROVADO na primeira linha. Presente, o aviso com os caminhos de API ao gestor (`notifyRetry`) não existe, e o plano não vai para a caixa do dono. Perdida a decisão (a conversa não
+   * abriu, ou não respondeu no prazo), o plano passa a `to: 'owner'` e esta marca sai.
+   */
+  ai?: TaskPlanAi;
+}
+
+/** A decisão do plano pela IA (`TaskPlanWait.ai`). */
+export interface TaskPlanAi {
+  /** Quem decide: o gestor que pediu o card ('manager') ou o revisor do quadro ('reviewer'). */
+  by: 'manager' | 'reviewer';
+  staffId: string;
+  /** A versão do plano (o hash de `TaskPlanWait.text`) que a conversa de decisão julga: o veredito de outra versão não vale. */
+  hash: string;
+  /** Desde quando o plano espera esta decisão (ISO): passado o prazo sem veredito, vai ao dono. */
+  since: string;
+  /** A conversa de decisão, quando ela abriu. */
+  sessionId?: string;
+  /** O veredito não veio na primeira linha e já foi pedido de novo (uma vez). */
+  reasked?: true;
+  /** A conversa de decisão ainda não abriu (limite de consumo, conversa fechando…): tentativas e a próxima (backoff); o tick refaz. */
+  retry?: RetryState;
+}
+
+/** A versão do plano aprovada (`Task.planApproved`). */
+export interface TaskPlanApproval {
+  /** O hash do texto do plano aprovado (`planHash` em server/tasks.ts). */
+  hash: string;
+  /** Quando foi aprovado (ISO). */
+  at: string;
+  /** Quem aprovou (o nome; com a decisão da IA, o de quem decidiu). */
+  by?: string;
 }
 
 /** A parada do card por erro do motor (`Task.engineStop`). `why`/`engine`/`error` são os do `TurnCapHit` `engine` que o originou. */
@@ -1561,6 +1651,44 @@ export interface Rejection {
   raw?: string;
   /** A resposta do executor, ao fim do turno que seguiu a reprovação (a entrega seguinte). `cited`: os ids Rn que ela cita, lidos antes do corte. */
   reply?: { at: string; text: string; cut?: true; cited: string[] };
+  /** A última edição que o Club viu o executor fazer depois desta reprovação (ISO): é o que separa a reentrega com edição (rodada nova) da sem edição (contestação, ver `Task.contest`). */
+  editedAt?: string;
+  /** A contestação desta reprovação que o revisor já respondeu (os itens com a decisão dele): o que fecha o laço, porque o item mantido que o executor contesta de novo sem editar vai a Aguardar. */
+  contested?: { at: string; items: TaskContestItem[] };
+}
+
+/** Um 🔴 da reprovação que o executor contesta, com o que ele respondeu sobre ele e, depois, a decisão do revisor. */
+export interface TaskContestItem {
+  /** `R1`, `R2`… (o id do 🔴); `GERAL` quando a reprovação veio sem bloco válido (o texto do revisor é um item só). */
+  id: string;
+  /** arquivo:linha do 🔴, como o revisor deu. */
+  where: string;
+  /** O que o revisor pediu (o problema), como no bloco dele. */
+  problem: string;
+  /** O que o executor respondeu sobre este item (a linha dele; vazio = não tem linha própria na resposta). Texto dele, a tela o mostra como texto puro. */
+  answer: string;
+  /** A decisão do revisor: manteve o 🔴 ou o retirou. Ausente enquanto ele não respondeu. */
+  decision?: 'keep' | 'withdraw';
+  /** Por que ele decidiu assim, em uma linha. */
+  reason?: string;
+}
+
+/** A contestação em andamento (`Task.contest`): a reprovação contestada, os itens e a conversa curta do revisor que os confere. */
+export interface TaskContest {
+  /** `Rejection.round` da reprovação contestada. */
+  round: number;
+  at: string;
+  items: TaskContestItem[];
+  /** A resposta inteira do executor (até 3000 caracteres), para o item sem linha própria. Texto dele, a tela o mostra como texto puro. */
+  reply: string;
+  /** O revisor que reprovou: é ele que mantém ou retira cada 🔴. */
+  reviewer: { staffId: string; name: string };
+  /** A conversa nova do revisor para esta contestação (só lê e responde). Ausente enquanto não abriu. */
+  sessionId?: string;
+  /** A conversa ainda não abriu (limite de consumo, conversa fechando…): tentativas e a próxima (backoff); o tick refaz. */
+  retry?: RetryState;
+  /** O re-pedido ("uma linha por item, MANTIDO ou RETIRADO") já foi feito, uma vez só. */
+  reasked?: true;
 }
 
 export interface TaskDelivery {
@@ -1764,6 +1892,73 @@ export interface TestRun {
   timedOut?: boolean;
   /** O tempo-limite que valia, em ms; vem junto com `timedOut`. */
   limitMs?: number;
+  /** O código de saída do comando (ausente se ele foi morto por sinal ou nem abriu). */
+  exitCode?: number;
+  /** As linhas "Tests" do vitest: quantos testes passaram, falharam e o total; ausente se a saída não é a do vitest. */
+  counts?: TestCounts;
+  /** Um id por falha (`arquivo > suíte > teste`), lido da saída inteira; é o que o baseline compara. Ausente sem falha lida. */
+  failureIds?: string[];
+  /** Os erros do tsc lidos da saída inteira (`arquivo: TS1234 mensagem`, sem a linha), e quantos eram (a lista tem teto); ausentes sem erro do tsc na saída. */
+  typeErrors?: string[];
+  typeErrorsTotal?: number;
+  /** A rodada foi cancelada (o orçamento das provas acabou) com o comando em andamento: não diz nada sobre o código. */
+  aborted?: boolean;
+  /** O comando não abriu (erro do sistema): `output` é a mensagem do erro. */
+  spawnFailed?: boolean;
+}
+
+export interface TestCounts {
+  passed: number;
+  failed: number;
+  total: number;
+}
+
+/** Como uma prova ficou: `ran` rodou (passou ou falhou); `na` não se aplica ao projeto ou à entrega (`reason`); `unavailable` não deu para provar (tempo, fila, comando quebrado; `reason`). */
+export type ProofStatus = 'ran' | 'na' | 'unavailable';
+
+/** Falha de uma prova contra a base: `new` só aparece nesta entrega; `base` já falhava na base; `unknown` a base não ficou disponível. */
+export type ProofBaseline = 'new' | 'base' | 'unknown';
+
+export interface ProofFailure {
+  /** teste: `arquivo > suíte > teste`; tsc: `arquivo: TS1234 mensagem` (sem a linha). */
+  id: string;
+  /** O arquivo da falha (o de teste, ou o do erro do tsc). */
+  file: string;
+  baseline: ProofBaseline;
+  /** Em `new`/`unknown`: o arquivo da entrega que o arquivo da falha é ou importa; ausente = não vem dos arquivos da tarefa. */
+  touches?: string;
+  /** Só em teste: o arquivo passa quando roda sozinho (instável sob carga ou por ordem); não conta contra a entrega. */
+  flaky?: boolean;
+}
+
+export interface DeliveryProof {
+  status: ProofStatus;
+  /** O comando que o Club rodou (só em `ran`/`unavailable` depois de montado). */
+  command?: string;
+  exitCode?: number;
+  ms?: number;
+  /** Contagem de testes (só nos testes, e só com a saída do vitest). */
+  counts?: TestCounts;
+  /** Quantos erros o tsc deu (só no tsc que rodou e falhou). */
+  errors?: number;
+  /** As falhas lidas, até `PROOF_FAILURES_MAX`; `failuresTotal` é quantas eram. */
+  failures?: ProofFailure[];
+  failuresTotal?: number;
+  /** O fim da saída quando não há lista (outro executor, saída que não deu para ler). */
+  tail?: string;
+  /** `na`: por que não se aplica; `unavailable`: por que não deu para provar. */
+  reason?: string;
+  /** O commit da base contra o qual as falhas foram comparadas; ausente = sem comparação (sem falha, ou base indisponível). */
+  baseSha?: string;
+  /** De onde veio o baseline: `suite` = a última suíte completa no mesmo sha, `checkout` = rodada num checkout destacado, `cache` = rodada anterior de só estes arquivos. */
+  baseFrom?: 'suite' | 'checkout' | 'cache';
+}
+
+/** As provas da entrega: a hora em que foram geradas (comparada com `delivery.at` para saber se são desta entrega). */
+export interface DeliveryProofs {
+  at: string;
+  typecheck: DeliveryProof;
+  tests: DeliveryProof;
 }
 
 export interface TestFailedFile {
@@ -2175,8 +2370,27 @@ export interface McpServerView {
   args?: string[];
   /** Algum argumento tinha segredo: vem trocado pelo marcador `••••`. */
   argsMasked?: boolean;
+  /**
+   * Global: um MCP do Club de mesmo nome ficou no registro (`~/.myco/mcps.json`) e não é carregado, porque esta entrada já existia na Global e a
+   * migração não sobrescreve. O texto traz o motivo, do relatório `mcps-migracao.json`. Some quando o conflito se resolve (nome trocado, ou
+   * definição do Club apagada).
+   */
+  pending?: string;
   env: Array<{ key: string; set: boolean }>;
   headers: Array<{ key: string; set: boolean }>;
+}
+
+/** Um MCP do Club que a migração deixou no registro, sem nenhuma entrada de mesmo nome na Global para levar o aviso (nome inválido, entrada que não deu para montar). */
+export interface McpMigrationPending {
+  name: string;
+  /** O motivo, do relatório da migração (pt-br). */
+  reason: string;
+}
+
+/** `GET /api/mcp-servers`: os MCPs dos escopos Global e Projeto, e os do Club que ficaram para trás na migração e não têm linha (só vem se houver). */
+export interface McpServerList {
+  servers: McpServerView[];
+  pending?: McpMigrationPending[];
 }
 
 /** `ssh` = .vps/config.json (chave); `ftps` = FTP com TLS explícito; `ftp` = FTP puro, sem criptografia. */
@@ -2272,6 +2486,12 @@ export const GIT_MCP_NAME = 'myco-git';
 /** Ferramentas do `myco-git` só de leitura (a ficha com acesso `readonly` e a conversa de revisão veem só estas) e as de escrita. */
 export const GIT_READ_TOOLS: string[] = ['git_status', 'git_diff', 'git_log'];
 export const GIT_WRITE_TOOLS: string[] = ['git_commit', 'git_push', 'git_pr_criar'];
+
+/**
+ * MCP de tarefa do Club (`tarefa_cancelar`, `tarefa_pedir_cancelamento`, `tarefa_recusar_cancelamento`), só no Claude: outro caminho para as rotas `cancel`, `cancel-request` e
+ * `cancel-request/refuse`, com o token da própria conversa (o servidor confere quem é dono da tarefa). O Codex segue pelo curl, que lá não passa por classificador.
+ */
+export const TAREFA_MCP_NAME = 'myco-tarefa';
 
 /** MCP que leva uma pergunta ao GPT (Codex): a ferramenta aparece como `mcp__myco-gpt__perguntar_gpt`. */
 export const GPT_MCP_NAME = 'myco-gpt';

@@ -4,13 +4,16 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { tryJson } from '../adapters/claude/fsutil';
+import { pathKey } from '../adapters/claude/paths';
+import { MYCO_HOME } from '../config';
 import { ROOT } from '../root';
 import { DEFAULT_SECRETS_DIR, type VaultOptions } from '../secretVault';
 import { CLUB_MCP_FILE, readClub, resolveClub } from './mcp';
 
 // Lançador dos MCPs da biblioteca do Claudio’s Club (entrada: server/mcp-launch.ts). O mcp.json da sessão leva só este
 // comando e o nome do servidor: os valores (env e cabeçalhos) saem do cofre aqui, na hora de subir, e não passam pelo
-// arquivo que o agente lê. Comando, argumentos e nomes de env/cabeçalho vêm da biblioteca lida agora, nunca da linha de comando.
+// arquivo que o agente lê. Comando, argumentos e nomes de env/cabeçalho vêm da biblioteca lida agora, nunca da linha de comando; e os próprios
+// caminhos (--club, --vault, --snapshot) só valem se forem os padrão do Club (ver refuseLaunchPaths).
 //   stdio (padrão): sobe o comando com o ambiente do cofre e repassa sinais e código de saída.
 //   --headers: imprime no stdout os cabeçalhos do cofre em JSON (é o `headersHelper` do Claude Code, para http e sse).
 // Mesmo padrão do MCP de FTP (ftpMcp.ts).
@@ -133,13 +136,13 @@ export interface LaunchArgs {
   snapshot?: string;
 }
 
-/** Lê `--server`, `--club`, `--vault`, `--snapshot` e `--headers`. Não há flag de comando: o comando vem sempre da biblioteca ou do arquivo. */
-export function parseLaunchArgs(argv: string[]): LaunchArgs {
+/** Lê `--server`, `--club`, `--vault`, `--snapshot` e `--headers` (sem `--club`/`--vault`, valem os padrão). Não há flag de comando: o comando vem sempre da biblioteca ou do arquivo. */
+export function parseLaunchArgs(argv: string[], defaults: Pick<LaunchPaths, 'club' | 'vault'> = defaultLaunchPaths()): LaunchArgs {
   return {
     headers: argv.includes('--headers'),
     server: argOf(argv, '--server'),
-    club: argOf(argv, '--club') ?? CLUB_MCP_FILE,
-    vault: argOf(argv, '--vault') ?? DEFAULT_SECRETS_DIR,
+    club: argOf(argv, '--club') ?? defaults.club,
+    vault: argOf(argv, '--vault') ?? defaults.vault,
     snapshot: argOf(argv, '--snapshot'),
   };
 }
@@ -190,14 +193,45 @@ export function runChild(name: string, command: string, args: string[], env: Rec
   });
 }
 
+/** Os caminhos que a linha de comando pode pedir: os do Club deste usuário. Os testes trocam (o padrão sai de MYCO_HOME, lido ao carregar o módulo). */
+export interface LaunchPaths {
+  club: string;
+  vault: string;
+  /** Pasta de lançamento das conversas: o `--snapshot` só vale num arquivo direto numa subpasta dela (`run/<sessão>/arquivo`). */
+  runDir: string;
+}
+
+export const defaultLaunchPaths = (): LaunchPaths => ({ club: CLUB_MCP_FILE, vault: DEFAULT_SECRETS_DIR, runDir: path.join(MYCO_HOME, 'run') });
+
+/** O arquivo está em `<runDir>/<sessão>/` (um nível só, nada de `..`). Compara como o sistema compara (sem caixa no Windows). */
+const inSessionDir = (file: string, runDir: string): boolean => {
+  const rel = path.relative(pathKey(runDir), pathKey(file));
+  const parts = rel.split(path.sep);
+  return !path.isAbsolute(rel) && parts.length === 2 && parts.every((p) => p !== '' && p !== '.' && p !== '..');
+};
+
+/**
+ * A linha de comando não decide de onde vêm a biblioteca, o cofre e o arquivo do Codex: uma entrada de MCP escrita à mão (um .mcp.json
+ * aprovado) podia chamar este lançador com um `--club` do repositório e receber no env o segredo real do cofre com o nome que escolhesse.
+ * Aceita o argumento só quando é o caminho padrão (as entradas que o Club grava o levam, ver clubEntry). Devolve a recusa (sem o valor), ou null.
+ */
+export function refuseLaunchPaths(a: LaunchArgs, p: LaunchPaths): string | null {
+  if (pathKey(a.club) !== pathKey(p.club)) return '--club fora do padrão do Claudio’s Club: recusado';
+  if (pathKey(a.vault) !== pathKey(p.vault)) return '--vault fora do padrão do Claudio’s Club: recusado';
+  if (a.snapshot !== undefined && !inSessionDir(a.snapshot, p.runDir)) return '--snapshot fora da pasta de lançamento das conversas: recusado';
+  return null;
+}
+
 /** Entrada da linha de comando (server/mcp-launch.ts). Devolve o código de saída; mensagens só no stderr, sem valor. */
-export async function runMcpLaunchCli(argv: string[]): Promise<number> {
+export async function runMcpLaunchCli(argv: string[], paths: LaunchPaths = defaultLaunchPaths()): Promise<number> {
   const fail = (msg: string) => {
     process.stderr.write(`[myco-mcp] ${msg}\n`);
     return 1;
   };
-  const a = parseLaunchArgs(argv);
+  const a = parseLaunchArgs(argv, paths);
   if (!a.server) return fail('uso: --server <nome> --club <mcps.json> --vault <pasta> [--headers] ou --snapshot <arquivo> --server <nome> [--headers]');
+  const refused = refuseLaunchPaths(a, paths);
+  if (refused) return fail(refused);
   try {
     const spec = a.snapshot ? await snapshotSpec(a.server, a.snapshot) : await launchSpec(a.server, { clubFile: a.club, vault: { dir: a.vault } });
     if (a.headers) {

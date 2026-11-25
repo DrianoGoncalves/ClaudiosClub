@@ -31,6 +31,19 @@ const relOf = (p: string): string | null => {
   }
 };
 
+/** A chave de um arquivo de `left` para comparar com o `git status` (`pathKey` do caminho limpo). */
+export const keyOfLeft = (p: string): string => pathKey(relOf(p) ?? p);
+
+/** A impressão das sobras desta entrega (`TaskCommit.auto.key`): a tentativa automática vale para ela, e mudou a entrega ou as sobras, é outra. */
+export const leftKey = (c: Pick<TaskCommit, 'for' | 'left'>): string =>
+  createHash('sha256')
+    .update(`${c.for}\n${c.left.map((l) => `${l.path}|${l.why}|${l.by ?? ''}`).sort().join('\n')}`)
+    .digest('hex')
+    .slice(0, 32);
+
+/** O refazer pode levar arquivo agora: `ready`, ou `failed` por uma tentativa automática que o git recusou (o dono corrige e confirma pelo botão). Os outros `failed` não têm botão (`canRedo` falso). */
+export const redoOpen = (v: CommitLeft): boolean => v.state === 'ready' || (v.state === 'failed' && v.canRedo);
+
 /**
  * Por que o botão não leva o arquivo AGORA, ou null se pode levar: segredo/dependência/caminho inválido (pelo caminho: a mesma checagem da leitura de arquivos do projeto e do commit automático),
  * conflito no git, ou staged por você com mudança nova por cima (o índice guarda uma escolha sua que o commit passaria por cima). O motivo gravado em `left` não decide: o que vale é o estado de agora.
@@ -75,7 +88,10 @@ export function deriveCommitLeft(task: Task, all: readonly Task[], status: Reado
   if (!files.length) return null;
   const blockers: CommitLeftBlocker[] = open.filter((x) => touched.has(x.o.id)).map((x) => ({ id: x.o.id, title: x.o.title.slice(0, 200), status: x.o.status, paths: touched.get(x.o.id)! }));
   const state = blockers.length ? 'waiting' : 'ready';
-  return { state, sha: c.sha, files, blockers, canRedo: state === 'ready' && files.some((f) => f.redo), ...truncated };
+  // O Club tentou commitar as sobras sozinho e o git recusou: erro, com a linha dele. Só enquanto nenhum card aberto trava (se um voltou a tocar, o aviso volta a esperar) e as sobras são as mesmas
+  // da tentativa. O botão segue valendo (`canRedo`): corrigido o hook, o dono confirma o diff e refaz, e só o automático não tenta de novo.
+  const autoFailed = state === 'ready' && !!c.auto?.note && c.auto.key === leftKey(c);
+  return { state: autoFailed ? 'failed' : state, sha: c.sha, files, blockers, canRedo: state === 'ready' && files.some((f) => f.redo), ...truncated, ...(autoFailed && { note: c.auto!.note }) };
 }
 
 /** O `git status` dos arquivos de fora e o estado do repositório. Nunca lança: `status` null = não deu para ler (repositório fora de condição de commit, ou o git falhou). */
@@ -244,7 +260,7 @@ export async function planLeftovers(dir: string, task: Task, all: readonly Task[
     const rel = relOf(l.path);
     if (rel !== null && !status.get(pathKey(rel))) plan.dropped.push(l.path);
   }
-  if (view?.state !== 'ready' || !plan.head) return plan;
+  if (!view || !redoOpen(view) || !plan.head) return plan;
   const byKey = new Map(view.files.map((f) => [pathKey(relOf(f.path) ?? f.path), f]));
   const seen = new Set<string>();
   for (const l of left) {
@@ -316,7 +332,7 @@ export async function leftoversPreview(dir: string, task: Task, plan: LeftPlan, 
     const rel = relOf(f.path);
     const entry = rel !== null ? plan.status?.get(pathKey(rel)) : undefined;
     const base = { ...f, status: entry ? statusLetter(entry) : ('M' as const), diff: '' };
-    if (!f.redo || !entry || rel === null || view.state !== 'ready' || isBlockedRel(f.path)) {
+    if (!f.redo || !entry || rel === null || !redoOpen(view) || isBlockedRel(f.path)) {
       files.push(base);
       continue;
     }
