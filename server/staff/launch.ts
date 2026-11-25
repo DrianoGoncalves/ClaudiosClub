@@ -436,7 +436,7 @@ export function memoriaLaunchOf(
 }
 
 /**
- * O MCP de tarefa (`myco-tarefa`): cancelar, pedir cancelamento e recusar pedido de cancelamento pelas mesmas rotas HTTP do curl, com o `MYCO_TOKEN` da conversa. Só no
+ * O MCP de tarefa (`myco-tarefa`): cancelar, pedir cancelamento, recusar pedido de cancelamento e decidir o limite de revisões (`tarefa_decidir_limite`) pelas mesmas rotas HTTP do curl, com o `MYCO_TOKEN` da conversa. Só no
  * Claude (o Codex segue pelo curl, onde não há classificador: ver server/staff/tarefaText.ts), nunca na conversa de revisão (o revisor não cancela) e com o acesso
  * `myco-tarefa` ligado na ficha (`off`, e também `readonly` e `ask`, que não têm lista de leitura para ele, deixam o MCP de fora). Sem endereço do Club, não entra.
  * `info` é o que a ficha diz (undefined: Codex). O MCP não abre permissão nenhuma: o servidor confere token, quem pediu, responsável atual, pedido e coluna.

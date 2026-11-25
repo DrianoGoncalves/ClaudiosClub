@@ -103,12 +103,13 @@ const STAFF_ROUTES = [
   '/api/projects/p1/tasks/t1/followup/f1/resolve',
   '/api/projects/p1/tasks/t1/followup/f1/card',
   '/api/projects/p1/tasks/t1/review-anyway',
+  '/api/projects/p1/tasks/t1/review-limit',
 ];
 
 describe('POST de funcionário: o token é do projeto da URL', () => {
   it('a lista de teste cobre todas as rotas de funcionário', () => {
     for (const p of STAFF_ROUTES) expect(staffMayPost(p), p).toBe(true);
-    expect(STAFF_ROUTES).toHaveLength(16);
+    expect(STAFF_ROUTES).toHaveLength(17);
   });
 
   it('token de OUTRO projeto é 403 em toda rota de funcionário, com o que fazer; o do mesmo projeto passa como antes', async () => {

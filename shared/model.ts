@@ -1013,6 +1013,15 @@ export interface Task {
   reviewerId?: string | null;
   /** Rodadas de revisão automática já pedidas (no máximo AUTO_REVIEW_ROUNDS). */
   reviewRounds?: number;
+  /**
+   * O limite de revisões automáticas (`AUTO_REVIEW_ROUNDS`) foi atingido e quem pediu a tarefa decide o que fazer com o que sobrou: aceitar com trade-off, reabrir com instrução nova ou cancelar
+   * (ver `TaskService.decideCap`). Vale só para a entrega `deliveryAt`; entrega nova, a decisão ou sair de "revisão" a desfazem. Só o servidor grava.
+   */
+  capWait?: TaskCapWait;
+  /** A última entrega que quem pediu aceitou como trade-off no limite de revisões (ver `TaskCapAccepted`): fica no card depois de ela seguir o caminho da aprovação. Só o servidor grava. */
+  capAccepted?: TaskCapAccepted;
+  /** Quantas vezes quem pediu reabriu a tarefa no limite de revisões (cada uma dá UMA rodada a mais, ver `TaskService.decideCap`). Ausente = nenhuma. Só o servidor grava. */
+  capReopens?: number;
   /** Reprovações que devolveram a tarefa para ajuste (manuais ou automáticas). Ausente = nenhuma. */
   reworkRounds?: number;
   /** As últimas reprovações com os 🔴 e a resposta do executor (ver `Rejection`); o pedido de revisão da rodada seguinte as leva. Só o servidor grava. */
@@ -1345,6 +1354,48 @@ export interface TaskOwnerGate {
   why: 'approved' | 'no-reviewer';
   /** O nome de quem aprovou (com `why: 'approved'`). */
   by?: string;
+}
+
+/** Um 🔴 que a última reprovação deixou aberto no limite de revisões (do bloco do revisor, ver `Rejection.blockers`). */
+export interface TaskCapItem {
+  id: string;
+  /** arquivo:linha */
+  where: string;
+  problem: string;
+}
+
+/** O limite de revisões automáticas esperando a decisão de quem pediu (`Task.capWait`). */
+export interface TaskCapWait {
+  /** Quando o limite foi atingido (ISO); também identifica esta espera (a decisão só vale para ela). */
+  since: string;
+  /** A entrega (`Task.delivery.at`) que o limite deixou sem revisão e que a decisão julga; null = a tarefa não tinha entrega gravada. */
+  deliveryAt: string | null;
+  /** O commit dessa entrega (`checkpoint.sha`); null = sem commit (aceitar vai a "pronto" só sem worktree: a mescla recusa a entrega sem commit). */
+  sha: string | null;
+  /** Quem decide: o gestor que pediu a tarefa (`Task.requestedBy`) ou o usuário (caixa; pedido dele, sem gestor, ou aviso ao gestor que se perdeu ou ficou sem resposta). */
+  to: 'manager' | 'owner';
+  /** Quando o aviso chegou à conversa do gestor (ISO): daqui contam os `ESCALATE_AFTER_MS` sem decisão. Ausente com `to: 'owner'` e enquanto não chegou. */
+  deliveredAt?: string;
+  /** O aviso ao gestor ainda não chegou (conversa fechando, limite de consumo…): tentativas e a próxima (backoff); esgotado o retry (`ESCALATE_AFTER_MS` desde a primeira) vai ao usuário. Some ao entregar ou ao escalar. */
+  notifyRetry?: RetryState;
+  /** Quando o pedido passou ao usuário (ISO), por aviso perdido ou sem decisão no prazo. */
+  escalatedAt?: string;
+  /** Os 🔴 da última reprovação, que a entrega aceita deixa em aberto: o aviso os mostra e quem aceitar os grava. */
+  items: TaskCapItem[];
+}
+
+/** A entrega que quem pediu aceitou como trade-off no limite de revisões (`Task.capAccepted`): o que ficou em aberto, o porquê e o commit aceito. */
+export interface TaskCapAccepted {
+  at: string;
+  /** O nome de quem aceitou (o gestor que pediu, ou o usuário). */
+  by: string;
+  /** A entrega aceita (`Task.delivery.at`) e o commit dela (`checkpoint.sha`). */
+  deliveryAt: string | null;
+  sha: string | null;
+  /** A justificativa de quem aceitou (texto dele). */
+  justification: string;
+  /** Os 🔴 aceitos em aberto. */
+  items: TaskCapItem[];
 }
 
 /** O plano que espera decisão (`Task.planWait`). */
@@ -1861,6 +1912,11 @@ export interface TaskHandoff {
   reasked?: boolean;
   /** A tarefa foi entregue de novo depois deste pedido: é de uma rodada anterior e não decide mais nada (fica só no histórico). */
   superseded?: boolean;
+  /**
+   * O motor em que a conversa de revisão rodou, quando não foi o da ficha do revisor: o revisor do Codex com o Codex desligado nas configurações revisa no Claude (só leitura), no mesmo
+   * commit da entrega (`sha`). Ausente = o motor da ficha.
+   */
+  ranOn?: { engine: Engine; why: 'codex-off'; sha: string | null };
 }
 
 /** Uma conversa que foi da tarefa: o trabalho, a revisão ou a dúvida ao gestor. `staffId` é quem conversa nela. */

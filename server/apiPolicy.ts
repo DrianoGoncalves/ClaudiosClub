@@ -37,6 +37,9 @@ const STAFF_POSTS: RegExp[] = [
   new RegExp(`^/api/projects/${ID}/tasks/${ID}/review-anyway$`),
   // Decidir o plano do card que ele pediu (`planWait`: aprovar ou recusar; quem pediu o card, com o token; `decidePlan` confere que é ele e que o card espera o plano; o responsável, o revisor e o resto levam 403).
   new RegExp(`^/api/projects/${ID}/tasks/${ID}/plan$`),
+  // Decidir o limite de revisões automáticas do card que ele pediu (`capWait`: aceitar com trade-off, reabrir com instrução ou cancelar; quem pediu o card, com o token; `decideCap` confere que é ele e que o card espera
+  // a decisão; o responsável, o revisor e o resto levam 403).
+  new RegExp(`^/api/projects/${ID}/tasks/${ID}/review-limit$`),
   // Consultar um funcionário de outro projeto vinculado pelo dono (server/consult/). A rota é do projeto de ORIGEM (o do token: o gate recusa o resto) e a origem e o remetente vêm do token; o vínculo
   // (só a tela grava: `/api/consult/links*` fica FORA desta lista) e os limites são conferidos pelo serviço. A conversa de consulta não tem token, então nunca chega aqui.
   new RegExp(`^/api/projects/${ID}/consult$`),
