@@ -149,5 +149,8 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 ### 10. Conversa parada sai quando falta memória
 
 - Com a RAM livre abaixo do `minFreeRamGb` da config (o mesmo mínimo da fila), a rodada do `reap` (a cada minuto) fecha a conversa parada há mais tempo, uma por rodada, sem esperar os 15 min (`server/chat/memoryPressure.ts`). Parada é sem turno, sem pergunta ou permissão pendente e sem tarefa em segundo plano, e há mais de 2 min. A sessão fica no disco: a próxima mensagem reabre.
+- Conversa de tarefa (trabalho, revisão, deploy) parada fecha em 2 min (`TASK_CHAT_IDLE_MS`): o próximo passo dela vem do Club, minutos ou horas depois. A sua conversa, e a de card automático, seguem com 15 min.
+- Antes de abrir um processo novo do Claude com a RAM curta, a abertura fecha até 2 conversas paradas e espera elas saírem (`makeRoom`, com teto de espera). O pedido de revisão novo não fecha nada: recusa com "aguardando memória" **antes** de preparar a conversa, e o `retryReviews` tenta de novo com backoff. O Codex fica fora: parado, ele não segura processo.
+- Conversa fechando (`isClosing`: o processo ainda não saiu) não recebe nada: quem vai mandar espera sair e reabre. Duas aberturas da mesma conversa ao mesmo tempo dividem um processo só (`ChatManager.opening`).
 
 *Por quê:* cada conversa aberta segura o Claude Code (~580 MB) até 15 min depois do último turno. Em 25/11/2026, 7 conversas abertas (4 paradas) numa máquina de 8 GB: 16,6 GB em uso, disco 0% ocioso e até 4 mil páginas por segundo no HDD.

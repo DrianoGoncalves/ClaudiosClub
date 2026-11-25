@@ -57,7 +57,7 @@ import { resumeText, type ResumeEntry } from './resume';
 import { externalBackground, externalCutWithAgents, subagentsDirOf } from './cutAction';
 import { legacyLabel, worseVerdict, type ClassifiedSecret, type SecretHint, type SecretKind, type SecretReason, type SecretSource, type SecretVerdict } from './secrets';
 import { capReason, capText, type TurnCaps } from './turnCap';
-import { pickIdleForMemory, type MemoryReading } from './memoryPressure';
+import { gb, idleTaskChats, makeRoom, pickIdleForMemory, stillShort, TASK_CHAT_IDLE_MS, type MemoryReading } from './memoryPressure';
 import type { ConsultStamp, TurnCapHit } from '../../shared/model';
 
 export interface ChatSpawn {
@@ -811,6 +811,8 @@ export class ChatManager {
     if (!auto && sessionId) this.voidRetry(sessionId);
     if (guard && !guard()) throw new ChatError('a retomada foi cancelada');
     const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride, reviewOnly, consult);
+    // Vai receber uma mensagem agora: não é mais "parada" para os fechamentos por prazo e por memória (o que vem abaixo ainda espera antes de escrever).
+    chat.lastActivity = Date.now();
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
     if (!auto) {
       this.dropRetry(chat.sessionId, 'message'); // conversa nova: o id só existe agora
@@ -1660,9 +1662,31 @@ export class ChatManager {
     };
   }
 
-  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp): Promise<ChatProcess> {
+  /** Aberturas em voo, por sessão: duas chamadas ao mesmo tempo para a mesma conversa fechada (sua mensagem e um despertador) dividem o mesmo processo. */
+  private readonly opening = new Map<string, Promise<ChatProcess>>();
+
+  private ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp): Promise<ChatProcess> {
+    // A conversa aberta de outro projeto não é desta chamada: conferido antes de dividir uma abertura em voo.
+    try {
+      this.assertSameProject(projectId, sessionId);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+    if (!sessionId) return this.ensureNow(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult);
+    const inFlight = this.opening.get(sessionId);
+    if (inFlight) return inFlight;
+    const run = this.ensureNow(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult).finally(() => {
+      if (this.opening.get(sessionId) === run) this.opening.delete(sessionId);
+    });
+    this.opening.set(sessionId, run);
+    return run;
+  }
+
+  private async ensureNow(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp): Promise<ChatProcess> {
     this.assertSameProject(projectId, sessionId);
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
+    // Fechando (pela memória ou pelo prazo): o processo ainda não saiu, mas nada pode ser escrito nele. Espera sair e reabre.
+    if (existing?.running && existing.isClosing) await existing.stopAndWait();
     // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
     if (existing?.running && !(existing.stale && !existing.working)) return existing;
     if (existing?.running) await existing.stopAndWait(); // reabre com a ficha nova
@@ -1677,10 +1701,22 @@ export class ChatManager {
         throw new ChatError(holdMessage(other));
       }
     }
+    // Pedido de revisão novo com a RAM abaixo do mínimo (ver chat/memoryPressure.ts): tem nova tentativa com backoff (`retryReviews`), então só espera a próxima,
+    // sem fechar nada (a rodada do `reap` libera aos poucos). Conferido ANTES do `resolve`: ele já grava a conversa na ficha do revisor, e cada tentativa
+    // recusada deixaria uma sessão sem processo. O motor ainda não é conhecido aqui: o revisor no Codex também espera (raro, e só com a memória curta).
+    if (this.opts.memory && reviewOnly && !sessionId) {
+      const m = await this.opts.memory().catch(() => null);
+      if (stillShort(m)) throw new ChatError(`aguardando memória livre para abrir a revisão (${gb(m!.freeBytes)} GB livres, mínimo ${gb(m!.minBytes)})`);
+    }
     // Conversa já aberta no secundário segue nele (continue, respawn, reabrir); o pedido de uma conversa nova vale só para ela.
     const override = sessionId ? this.overrides.get(sessionId) : engineOverride;
     const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override, reviewOnly, consult);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
+    // O resto (sua mensagem, tarefa, retomadas), num processo do Claude a mais (o Codex abre um por mensagem e parado não segura memória): com a RAM abaixo do
+    // mínimo, fecha até 2 conversas paradas do Claude e abre do mesmo jeito.
+    if (this.opts.memory && spawn.engine !== 'codex' && !(reviewOnly && !sessionId)) {
+      await makeRoom(() => this.claudeChats(), this.opts.memory, { log: (l) => this.log(l) });
+    }
     if (override) this.overrides.set(spawn.sessionId, override);
     // Consulta de outro projeto: marcada já, antes de o processo abrir (sem token, sem aprovação, fora da conta de trabalho do funcionário; ver `isConsultSession`).
     if (spawn.consult) this.consultSessions.set(spawn.sessionId, spawn.consult.id);
@@ -2267,33 +2303,60 @@ export class ChatManager {
         this.opts.tokens?.revoke(id);
       } else if (!chat.working && Date.now() - chat.lastActivity > idle) chat.stop();
     }
-    void this.reapForMemory();
+    void this.reapAsync();
   }
 
   private reapingMemory = false;
+
+  /** A parte da rodada que precisa de leitura (o quadro, a memória): uma de cada vez. Nunca lança. */
+  private async reapAsync(): Promise<void> {
+    if (this.reapingMemory) return;
+    this.reapingMemory = true;
+    try {
+      await this.reapTaskChats();
+      await this.reapForMemory();
+    } catch {
+      /* fica para a próxima rodada */
+    } finally {
+      this.reapingMemory = false;
+    }
+  }
+
+  /** Conversa de tarefa (trabalho, revisão, deploy) parada há mais de `TASK_CHAT_IDLE_MS` fecha já, sem esperar os 15 min (ver chat/memoryPressure.ts). */
+  private async reapTaskChats(): Promise<void> {
+    const isTask = this.opts.keepSession;
+    if (!isTask) return;
+    for (const chat of await idleTaskChats(this.claudeChats(), Date.now(), isTask)) {
+      // Conferido de novo na hora: algo pode ter chegado enquanto o quadro era lido.
+      if (chat.working || chat.isClosing || Date.now() - chat.lastActivity < TASK_CHAT_IDLE_MS) continue;
+      this.log(`${chat.sessionId}: conversa de tarefa parada há ${Math.round((Date.now() - chat.lastActivity) / 60_000)} min, fecho (reabre sozinha no próximo passo)`);
+      chat.stop();
+    }
+  }
+
+  /** As conversas do Claude: só elas seguram processo parado (o Codex abre um por mensagem). */
+  private claudeChats(): ChatProcess[] {
+    return [...this.chats.values()].filter((c) => !(c instanceof CodexProcess));
+  }
 
   /**
    * Falta memória (livre abaixo do mínimo da config): fecha a conversa parada há mais tempo, uma por rodada (a cada minuto), sem esperar os 15 min. Uma por vez
    * porque a memória do processo leva alguns segundos para voltar; fechar todas de uma vez derrubaria conversas que nem precisavam sair. Nunca lança.
    */
   private async reapForMemory(): Promise<void> {
-    if (this.reapingMemory || !this.opts.memory) return;
-    this.reapingMemory = true;
+    if (!this.opts.memory) return;
     try {
       const m = await this.opts.memory();
       if (!m || m.freeBytes >= m.minBytes) return;
       const now = Date.now();
-      const victim = pickIdleForMemory(this.chats.values(), now);
+      const victim = pickIdleForMemory(this.claudeChats(), now);
       if (!victim) return;
-      const gb = (b: number) => (b / 1024 ** 3).toFixed(1);
       (this.opts.log ?? ((l: string) => console.log(`[chat] ${l}`)))(
         `memória: ${gb(m.freeBytes)} GB livres (mínimo ${gb(m.minBytes)}): fecho ${victim.sessionId}, parada há ${Math.round((now - victim.lastActivity) / 60_000)} min (reabre sozinha na próxima mensagem)`,
       );
       victim.stop();
     } catch {
       /* a leitura da memória ou da config falhou: fica para a próxima rodada */
-    } finally {
-      this.reapingMemory = false;
     }
   }
 }
