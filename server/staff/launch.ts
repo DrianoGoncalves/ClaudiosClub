@@ -830,6 +830,8 @@ export async function writeFicha(
     codexAgents: run.codexAgents,
     // Mesma regra de prepareRun (manualEditable): só o projeto do Claudio’s Club, fora de worktree.
     manualEditable: !absolute && isClaudeRoot(ctx.projectPath),
+    // Numa worktree do projeto do Claudio’s Club, a documentação se edita na cópia (o ROOT segue negado: ver secretDenyRules).
+    manualInCopy: absolute && isClaudeRoot(ctx.projectPath),
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);

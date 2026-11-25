@@ -296,6 +296,52 @@ describe('só o que é do card', () => {
   });
 });
 
+// t-edf1bf: card de documentação. A cópia do card edita `docs/uso` e `client/public/manual.html` como qualquer código; o principal não é tocado até a aprovação e a junção leva os arquivos.
+describe('documentação na cópia do card', () => {
+  it('edita docs/uso e o manual na própria cópia: o principal fica limpo até aprovar e a junção leva os arquivos, sem tocar o doc que o dono deixou sujo', async () => {
+    const p = await proj('docs-na-copia');
+    const at = (...f: string[]) => path.join(p.dir, ...f);
+    await fs.mkdir(at('docs', 'uso'), { recursive: true });
+    await fs.mkdir(at('client', 'public'), { recursive: true });
+    await fs.writeFile(at('docs', 'uso', '02-funcionarios.md'), '# Funcionários\n');
+    await fs.writeFile(at('docs', 'uso', '04-tarefas.md'), '# Tarefas\n');
+    await fs.writeFile(at('client', 'public', 'manual.html'), '<h1>Manual</h1>\n');
+    git(p.dir, 'add', '.');
+    git(p.dir, 'commit', '-qm', 'docs');
+
+    const a = await p.start('ana-1', 'Manual: avisos');
+    expect(a.codeAt).toMatchObject({ where: 'worktree', card: true });
+    const ra = await p.deliver(a, {
+      'docs/uso/02-funcionarios.md': '# Funcionários\nlinha do card\n',
+      'docs/uso/10-novo.md': '# Novo\n',
+      'client/public/manual.html': '<h1>Manual</h1>\n<p>do card</p>\n',
+    });
+    // A edição foi na cópia: o principal segue limpo e sem nenhum dos arquivos até a aprovação.
+    expect(mainClean(p.dir)).toBe('');
+    expect(await fs.readFile(at('docs', 'uso', '02-funcionarios.md'), 'utf8')).toBe('# Funcionários\n');
+    expect(existsSync(at('docs', 'uso', '10-novo.md'))).toBe(false);
+    expect(git(ra.codeAt!.path!, 'diff', '--name-only', 'main', 'HEAD').split(/\r?\n/).sort()).toEqual(['client/public/manual.html', 'docs/uso/02-funcionarios.md', 'docs/uso/10-novo.md']);
+
+    // O dono deixa sujo OUTRO doc (o caso real: docs de um card em revisão): não trava a junção.
+    await fs.writeFile(at('docs', 'uso', '04-tarefas.md'), '# Tarefas\nrascunho do dono\n');
+    const out = await p.svc.update('p', ra.id, { status: 'done' }, true);
+    expect(out?.status).toBe('done');
+
+    expect(await fs.readFile(at('docs', 'uso', '02-funcionarios.md'), 'utf8')).toBe('# Funcionários\nlinha do card\n');
+    expect(await fs.readFile(at('docs', 'uso', '10-novo.md'), 'utf8')).toBe('# Novo\n');
+    expect(await fs.readFile(at('client', 'public', 'manual.html'), 'utf8')).toBe('<h1>Manual</h1>\n<p>do card</p>\n');
+    expect(await fs.readFile(at('docs', 'uso', '04-tarefas.md'), 'utf8')).toBe('# Tarefas\nrascunho do dono\n');
+    const status = git(p.dir, 'status', '--porcelain', '--', '.', ':(exclude).myco');
+    expect(status).toMatch(/M docs\/uso\/04-tarefas\.md/); // (o git() do teste apara a saída: sem o espaço da frente)
+    expect(status).not.toMatch(/02-funcionarios|10-novo|manual\.html/);
+    const joined = git(p.dir, 'diff', '--name-only', 'HEAD^1', 'HEAD'); // o commit de merge, contra o principal de antes
+    expect(joined).toMatch(/docs\/uso\/02-funcionarios\.md/);
+    expect(joined).toMatch(/docs\/uso\/10-novo\.md/);
+    expect(joined).toMatch(/client\/public\/manual\.html/);
+    expect(joined).not.toMatch(/04-tarefas/);
+  });
+});
+
 describe('a aprovação do revisor (conclusão por IA)', () => {
   it('junta sozinha e vai a Finalizado; com o arquivo do card sujo no principal espera mais que o teto de 5 e junta quando limpo', async () => {
     const p = await proj('revisor', { policy: 'auto' });

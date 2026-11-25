@@ -79,6 +79,8 @@ export interface FichaContext {
   codexMcpOut?: Array<{ name: string; motivo: CodexMcpMotivo }>;
   /** O manual é editável nesta conversa (projeto do Claudio’s Club, sem worktree): ver `manualSection`. */
   manualEditable?: boolean;
+  /** A sessão roda numa worktree (do card ou do funcionário) do projeto do Claudio’s Club: a documentação se edita na cópia dela, nunca no ROOT (ver `manualSection`). */
+  manualInCopy?: boolean;
   /** Projetos que o dono liberou a este funcionário consultar (ver server/consult/): sem eles a seção Consulta não existe e a ficha fica como antes (ver `consultSection`). */
   consult?: { targets: Array<{ projectId: string; projectName: string }> };
 }
@@ -776,7 +778,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, codexOf(p) ? 'Nada específico além do AGENTS.md e do CLAUDE.md do projeto, se existirem.' : 'Nada específico além do CLAUDE.md do projeto.')}`,
     postureSection(p),
     questionsSection(p),
-    manualSection(ctx.manualEditable === true),
+    manualSection(ctx.manualEditable === true, ctx.manualInCopy === true),
     `## Regras\n${list(p.rules, codexOf(p) ? 'Siga o AGENTS.md e o CLAUDE.md do projeto, se existirem.' : 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
     // Quem pediu confere pela entrega: com as provas nela, não precisa abrir tudo de novo.
@@ -887,14 +889,20 @@ function questionsSection(p: StaffProfile): string {
 
 /**
  * Manual de uso do Claudio’s Club (ver MANUAL_DIR). Só leitura, salvo quando o projeto é o próprio Claudio’s Club (`editable`, ver isClaudeRoot):
- * aí o manual é código do projeto e o "(só leitura)" seria falso.
+ * aí o manual é código do projeto e o "(só leitura)" seria falso. `inCopy`: o projeto é o do Claudio’s Club, mas a sessão roda numa worktree: o caminho do ROOT segue só leitura (é a versão aprovada,
+ * a que se consulta) e a documentação do card se edita na cópia dela, que o Claudio’s Club junta na aprovação (a pasta principal não fica suja).
  */
-function manualSection(editable: boolean): string {
+function manualSection(editable: boolean, inCopy = false): string {
   const readme = path.join(MANUAL_DIR, 'README.md').replace(/\\/g, '/');
   return [
     '## Manual do Claudio’s Club',
     `Se o usuário perguntar como usar o Claudio’s Club, consulte o manual em \`${readme}\`${editable ? '' : ' (só leitura)'} e responda com base nele; se não estiver lá, diga que não sabe.`,
-  ].join('\n');
+    !editable && inCopy
+      ? 'Se a tarefa pede para editar a documentação (`docs/uso/` e `client/public/manual.html`), edite a cópia na sua pasta de trabalho, pelo caminho relativo à raiz dela: o caminho acima é o da pasta principal e não se edita. O Claudio’s Club junta a sua cópia na aprovação; não aplique o arquivo na pasta principal.'
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /** Os agents da ficha e os do roteiro dela (que o Claudio’s Club garante no projeto ao abrir a sessão). */
