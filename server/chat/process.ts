@@ -363,6 +363,8 @@ export class ChatProcess {
     });
     child.on('error', (err) => this.finish(`não foi possível iniciar o claude: ${err.message}`));
     child.on('exit', (code, signal) => this.finish(this.exitError(code), { code, signal }));
+    // EPIPE/"write after end" no stdin de um processo que está saindo: sem ouvinte, o evento 'error' derrubaria o servidor inteiro. A saída do processo já é tratada acima.
+    child.stdin?.on('error', () => undefined);
   }
 
   /** O erro da conversa quando o processo sai: nenhum se saiu limpo ou se fomos nós que fechamos; senão o stderr, o último erro do stream, ou o código. */
@@ -709,6 +711,14 @@ export class ChatProcess {
 
   get error(): string | null {
     return this.state.error;
+  }
+
+  /**
+   * Pedimos para fechar e o processo ainda não saiu (até ~3 s, mais o `killTree`). Nessa janela `running` segue verdadeiro, mas nada pode ser escrito nele:
+   * quem vai mandar mensagem espera sair e reabre (ver `ChatManager.ensure`).
+   */
+  get isClosing(): boolean {
+    return this.closedByUs && this.state.running;
   }
 
   stop() {
@@ -1157,6 +1167,8 @@ export class ChatProcess {
   private write(obj: unknown) {
     this.lastActivity = Date.now();
     if (!this.child) throw new Error('a conversa não está aberta');
+    // Fechando (o stdin já terminou): escrever daria "write after end". Erro limpo, e a mensagem não some calada.
+    if (this.child.stdin.writableEnded || this.child.stdin.destroyed) throw new Error('a conversa está fechando: mande de novo em instantes');
     this.child.stdin.write(JSON.stringify(obj) + '\n');
   }
 
