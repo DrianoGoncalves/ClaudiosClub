@@ -1,0 +1,81 @@
+import { defineMessages } from './define';
+
+// Perfis de uso das Configurações (shared/configProfiles.ts, toolbar/ProfilePicker.tsx): o seletor, a frase de cada perfil e a confirmação com o que muda.
+// Os nomes dos itens que mudam reaproveitam os títulos que a tela já tem (toolbar.*, office.ctxTitle).
+export default defineMessages({
+  'pt-BR': {
+    'profile.title': 'Perfil de uso',
+    'profile.desc':
+      'Ajusta de uma vez as configurações de gasto, de limites e de uso da máquina. Privacidade e segurança não mudam (Codex, Chrome do GPT, internet), nem o modelo de cada funcionário.',
+    'profile.keywords': 'perfil predefinição preset economia tokens desempenho performance qualidade máquina leve padrão',
+    'profile.balanced': 'Equilibrado',
+    'profile.economy': 'Economia de tokens',
+    'profile.light': 'PC leve',
+    'profile.quality': 'Máxima qualidade',
+    'profile.custom': 'Personalizado',
+    'profile.balancedDesc': 'Os padrões do Claudio’s Club.',
+    'profile.economyDesc': 'Gasta menos: sem títulos por IA, conversa nova quando o assunto fecha, turnos mais curtos e trava de consumo mais cedo.',
+    'profile.lightDesc': 'Para computador modesto: no máximo 2 conversas trabalhando, mais RAM de reserva e espera a CPU baixar.',
+    'profile.qualityDesc': 'Resultado primeiro: usa a folga da cota para subir o esforço, turnos mais longos e até 4 conversas trabalhando (para computador com folga).',
+    'profile.customDesc': 'Você ajustou itens à mão, e nenhum perfil bate. Escolher um perfil troca esses itens.',
+    'profile.confirm': 'Aplicar o perfil {name}? Muda:\n{list}',
+    'profile.apply': 'Aplicar',
+    'profile.same': 'Já está no perfil {name}: nada muda.',
+    'profile.noCap': 'sem teto',
+    'profile.off': 'desligado',
+    'profile.failed': 'Não deu para aplicar o perfil: {error}',
+    'ss.profile.title': 'Perfil de uso',
+    'ss.profile.effect':
+      'Um clique ajusta gasto, limites e uso da máquina: economia de tokens, PC leve, máxima qualidade ou o equilibrado. Antes de aplicar, mostra o que muda. Privacidade e segurança não mudam.',
+  },
+  en: {
+    'profile.title': 'Usage profile',
+    'profile.desc':
+      'Adjusts spending, limits and machine usage settings at once. Privacy and security do not change (Codex, GPT’s Chrome, internet), and neither does each staff member’s model.',
+    'profile.keywords': 'profile preset economy tokens performance quality light machine default',
+    'profile.balanced': 'Balanced',
+    'profile.economy': 'Token saving',
+    'profile.light': 'Light PC',
+    'profile.quality': 'Top quality',
+    'profile.custom': 'Custom',
+    'profile.balancedDesc': 'Claudio’s Club defaults.',
+    'profile.economyDesc': 'Spends less: no AI titles, a new conversation when a topic closes, shorter turns and an earlier usage limit.',
+    'profile.lightDesc': 'For a modest computer: at most 2 conversations working, more RAM in reserve and it waits for the CPU to calm down.',
+    'profile.qualityDesc': 'Results first: uses spare quota to raise effort, longer turns and up to 4 conversations working (for a computer with headroom).',
+    'profile.customDesc': 'You adjusted items by hand, and no profile matches. Picking a profile changes those items.',
+    'profile.confirm': 'Apply the {name} profile? It changes:\n{list}',
+    'profile.apply': 'Apply',
+    'profile.same': 'Already on the {name} profile: nothing changes.',
+    'profile.noCap': 'no cap',
+    'profile.off': 'off',
+    'profile.failed': 'Could not apply the profile: {error}',
+    'ss.profile.title': 'Usage profile',
+    'ss.profile.effect':
+      'One click adjusts spending, limits and machine usage: token saving, light PC, top quality or balanced. Before applying, it shows what changes. Privacy and security do not change.',
+  },
+  es: {
+    'profile.title': 'Perfil de uso',
+    'profile.desc':
+      'Ajusta de una vez las configuraciones de gasto, de límites y de uso de la máquina. La privacidad y la seguridad no cambian (Codex, Chrome del GPT, internet), ni el modelo de cada empleado.',
+    'profile.keywords': 'perfil preajuste preset ahorro tokens rendimiento calidad máquina ligera predeterminado',
+    'profile.balanced': 'Equilibrado',
+    'profile.economy': 'Ahorro de tokens',
+    'profile.light': 'PC ligero',
+    'profile.quality': 'Máxima calidad',
+    'profile.custom': 'Personalizado',
+    'profile.balancedDesc': 'Los valores predeterminados de Claudio’s Club.',
+    'profile.economyDesc': 'Gasta menos: sin títulos por IA, conversación nueva cuando el tema se cierra, turnos más cortos y freno de consumo antes.',
+    'profile.lightDesc': 'Para una computadora modesta: como máximo 2 conversaciones trabajando, más RAM de reserva y espera a que baje la CPU.',
+    'profile.qualityDesc': 'El resultado primero: usa la cuota sobrante para subir el esfuerzo, turnos más largos y hasta 4 conversaciones trabajando (para una computadora con holgura).',
+    'profile.customDesc': 'Ajustaste elementos a mano y ningún perfil coincide. Elegir un perfil cambia esos elementos.',
+    'profile.confirm': '¿Aplicar el perfil {name}? Cambia:\n{list}',
+    'profile.apply': 'Aplicar',
+    'profile.same': 'Ya está en el perfil {name}: nada cambia.',
+    'profile.noCap': 'sin tope',
+    'profile.off': 'desactivado',
+    'profile.failed': 'No se pudo aplicar el perfil: {error}',
+    'ss.profile.title': 'Perfil de uso',
+    'ss.profile.effect':
+      'Un clic ajusta gasto, límites y uso de la máquina: ahorro de tokens, PC ligero, máxima calidad o equilibrado. Antes de aplicar, muestra lo que cambia. La privacidad y la seguridad no cambian.',
+  },
+});
