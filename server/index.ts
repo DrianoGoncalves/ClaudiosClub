@@ -46,6 +46,7 @@ import { createSkill } from './skillCreate';
 import { projectClaudeDir } from './adapters/claude/projects';
 import { ChatClosingError, ChatError, ChatManager, CloseRefusedError, findTranscript } from './chat/manager';
 import { ResumeFile, bootResume, resumeText } from './chat/resume';
+import { platformTaskText } from './chat/items';
 import { AnnotationsField, AnswersField } from './chat/questions';
 import { touchedFiles } from './chatChanges';
 import { uncommittedByConversation } from './uncommitted';
@@ -617,7 +618,7 @@ const sendNewConversation = async (projectId: string, staffId: string, text: str
     timer.stage('consumo');
     if (!force) await staff.checkUsage(projectId, { staffId, ...(override && { engine: override.engine }) });
     timer.stage('abrir');
-    return await chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, override, reviewOnly);
+    return await chats.send(projectId, null, staffId, platformTaskText(text), undefined, [], [], false, undefined, override, reviewOnly);
   } finally {
     timer.finish();
   }
@@ -778,7 +779,7 @@ const directFallback = new DirectFallback({
     await turnRetries.cancel(sessionId, 'fallback');
   },
   send: (projectId, sessionId, staffId, text, priority, images, files, override) =>
-    chats.send(projectId, sessionId, staffId, text, priority, images, files, false, undefined, override),
+    chats.send(projectId, sessionId, staffId, platformTaskText(text), priority, images, files, false, undefined, override),
   log: (line) => console.log(`[chat] ${line}`),
 });
 /**

@@ -46,6 +46,10 @@ Cada decisão com data e o porquê.
 Ex.: 2026-11-06: SQLite, porque o cliente não tem servidor de banco.
 -->
 
+- 2026-11-25: cada funcionário tem duas memórias: a do projeto (só daquele projeto) e a pessoal (a mesma em todos os projetos dele). As duas são editáveis pelo próprio funcionário durante a conversa e pelo usuário na ficha. A pessoal existe para levar o que ele aprendeu de um projeto para outro. Não há memória compartilhada entre funcionários diferentes.
+- 2026-11-25: projeto sigiloso usa funcionário exclusivo, mas isso é só recomendação e nada bloqueia. Trazer um funcionário existente avisa que a memória pessoal vai junto. A responsabilidade de reaproveitar o funcionário depois é do usuário.
+- 2026-11-25: estilo de comunicação trata do jeito de escrever, e roteiro trata do jeito de trabalhar. "Ponytail" (código mínimo, inspirado em github.com/DietrichGebert/ponytail, MIT) é roteiro, com texto próprio e não o plugin original, porque assim vale igual no Claude e no Codex e não depende de terceiro. Atalho com limite conhecido leva o marcador `ponytail:` no comentário.
+
 ## Dúvidas em aberto
 
 <!--
@@ -69,6 +73,8 @@ Ex.: 2026-11-06: toda rota que grava confere o cabeçalho x-myco.
 - 2026-11-21: critério "o botão X faz Y" se prova acionando o handler (onClick/onSubmit) e conferindo a chamada que sai (rota e corpo), não só o HTML renderizado; sem jsdom, use o despachante de hooks mínimo de `tests/followUpDecideFlow.test.ts`.
 - 2026-11-21: botões de ação fora do `ActionBar` (formulário, balão, caixa) seguem a mesma ordem: secundárias primeiro, a primária por último no DOM; no celular ela ocupa a largura inteira, embaixo (confira em cada estado: fechado e aberto).
 - 2026-11-21: regra de token de CSS (fonte, cor, espaçamento) cobre também o shorthand (`font: 700 9px`); varra e teste todas as formas, não só a declaração isolada (`font-size:`).
+
+- 2026-11-25: classificar mensagem por origem (quem enviou), nunca só pelo texto: o que decide o balão (usuário × plataforma) é uma marca posta pelo servidor (`[MyCo]`, `platformTaskText` em `server/chat/items.ts`), e o mesmo texto digitado pelo usuário tem que seguir como dele (teste com os dois casos).
 
 ## Desempenho: regras que não podem voltar atrás
 
