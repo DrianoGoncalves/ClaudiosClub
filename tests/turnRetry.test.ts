@@ -855,8 +855,10 @@ describe('Claude: Parar, mensagem sua e teto invalidam a retomada', () => {
     const sending = h.retries.tick();
     await settle();
     hold = false;
-    await h.m.send('p', 's1', 'ana', 'outra coisa'); // sua mensagem abre a conversa e vai
+    // Sua mensagem anula a retomada na hora (síncrono) e divide a abertura que ela já começou (`opening`): só termina quando essa abertura sai.
+    const mine = h.m.send('p', 's1', 'ana', 'outra coisa');
     release();
+    await mine;
     await sending;
     await settle();
     const texts = h.procs.flatMap((f) => f.texts());
