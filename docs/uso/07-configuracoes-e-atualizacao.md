@@ -8,6 +8,21 @@
 - No **Avançado**, a lista é técnica, com os grupos **Geral**, **Quadro**, **Conversa**, **Consumo**, **Fila de tarefas**, **Cargos**, **MCPs** e **Créditos**. Dentro de **Geral** há as seções **Ajuda**, **Internet e GPT**, **Extensão do Chrome** e **Sistema**. Só aparecem no Avançado: **Servidor**, **Monitor de CPU e memória**, **Mostrar o escopo do usuário** e os **MCPs**.
 - Os nomes dos grupos e dos itens nas tabelas abaixo são os do **Avançado**. Os mesmos itens existem no Simples, com o título em linguagem comum (por exemplo, **Idioma** fica em **Aparência**, e **Atualizações** em **Segurança e atualização**).
 
+## Perfil de uso
+
+**Perfil de uso** fica logo abaixo de **Nível de uso**, no Simples e no Avançado (grupo **Geral**). Um clique ajusta de uma vez as configurações de gasto, de limites e de uso da máquina:
+
+| Perfil | Para quem | O que muda |
+| --- | --- | --- |
+| **Equilibrado** | Quem quer os padrões do Club | Os valores de fábrica. |
+| **Economia de tokens** | Quem quer gastar menos da cota | Sem títulos por IA; conversa nova quando o assunto fecha (contexto menor); teto de 200 ferramentas e 60 min por turno; trava de consumo em 80% (5 h) e 90% (7 dias); no máximo 3 conversas trabalhando. |
+| **PC leve** | Computador modesto (pouca RAM, HD) | No máximo 2 conversas trabalhando; reserva de 2 GB de RAM livre; espera também a CPU baixar; sem títulos por IA. |
+| **Máxima qualidade** | Quem quer o melhor resultado e tem máquina com folga | Usa a folga da cota para subir o esforço (**Otimizar assinatura**); teto de 1.000 ferramentas e 240 min por turno; trava de consumo em 95% e 97%; até 4 conversas trabalhando. |
+
+- Antes de aplicar, o Club mostra a lista do que muda, item por item (de → para), e pede confirmação.
+- Se você mexer à mão em algum desses itens, nenhum perfil fica marcado e aparece **Personalizado**. Escolher um perfil troca esses itens de novo.
+- **Privacidade e segurança não mudam** com o perfil: **Usar o Codex (GPT)**, **Permitir que o GPT use meu Chrome**, **Permitir acesso à internet** e **Bloquear o Claudio’s Club no navegador dos funcionários** seguem do jeito que você deixou. O modelo e o esforço de cada funcionário também não mudam: são da ficha dele.
+
 ## Itens mais usados
 
 | Item | Grupo | O que faz |

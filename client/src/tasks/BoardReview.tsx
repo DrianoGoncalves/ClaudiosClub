@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import type { BoardCommitConfig, BoardConfig, BoardWriterConfig, StaffProfile } from '../../../shared/model';
+import type { BoardCommitConfig, BoardConfig, BoardWriterConfig, FlowGates, FlowPolicy, StaffProfile } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 import { ReviewIcon } from '../icons';
@@ -15,7 +15,8 @@ export interface BoardReviewState {
   missing: boolean;
   error: string | null;
   saving: boolean;
-  save: (next: BoardConfig) => Promise<void>;
+  /** true quando o servidor gravou (false: o erro está em `error`). */
+  save: (next: BoardConfig) => Promise<boolean>;
 }
 
 const isConfig = (x: unknown): x is BoardConfig =>
@@ -49,8 +50,10 @@ export function useBoardReview(projectId: string): BoardReviewState {
       try {
         const saved = await api.saveBoardReview(projectId, next);
         setConfig(isConfig(saved) ? saved : await api.boardReview(projectId));
+        return true;
       } catch (e) {
         setError((e as Error).message);
+        return false;
       } finally {
         setSaving(false);
       }
@@ -157,6 +160,69 @@ export function useBoardWriter(projectId: string): BoardWriterState {
   return { config, error, saving, save };
 }
 
+export interface FlowCompletionState {
+  /** A política lida do servidor; null = ainda lendo, falhou ou o servidor não tem a rota. */
+  policy: FlowPolicy | null;
+  error: string | null;
+  saving: boolean;
+  save: (completion: FlowGates['completion']) => Promise<void>;
+}
+
+const isPolicy = (x: unknown): x is FlowPolicy =>
+  typeof x === 'object' && x !== null && ((x as FlowPolicy).completion === 'ai' || (x as FlowPolicy).completion === 'owner') && typeof (x as FlowPolicy).completionChosen === 'boolean';
+
+/** Lê a política de fluxo e grava só o portão da conclusão (`{ completion }`). Sem estado otimista: a tela mostra o que o servidor devolveu; se a gravação falha, relê o GET para mostrar o estado real. */
+export function useFlowCompletion(projectId: string): FlowCompletionState {
+  const [policy, setPolicy] = useState<FlowPolicy | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setPolicy(null);
+    setError(null);
+    api.flowPolicy(projectId).then(
+      (p) => live && isPolicy(p) && setPolicy(p),
+      (e: Error) => live && !/: 404$/.test(e.message) && setError(e.message),
+    );
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
+
+  const save = useCallback(
+    async (completion: FlowGates['completion']) => {
+      setSaving(true);
+      setError(null);
+      try {
+        const saved = await api.setFlowCompletion(projectId, completion);
+        setPolicy(isPolicy(saved) ? saved : await api.flowPolicy(projectId));
+      } catch (e) {
+        setError((e as Error).message);
+        await api.flowPolicy(projectId).then((p) => isPolicy(p) && setPolicy(p), () => undefined);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [projectId],
+  );
+
+  return { policy, error, saving, save };
+}
+
+/** "Ligado" só quando o servidor mescla de fato (`autoMergeOn`): política gravada pelo dono, conclusão 'ai' e escolhida. O 'ai' herdado do projeto antigo (padrão/legado) não mescla, então aparece desligado. */
+export const completionIsOn = (policy: FlowPolicy | null): boolean => !!policy && policy.source === 'stored' && policy.completion === 'ai' && policy.completionChosen;
+
+/** Ao ligar a revisão ou escolher o revisor, a conclusão automática vem marcada, mas só se o dono ainda não escolheu (uma escolha já gravada, inclusive "só eu", não é sobrescrita). */
+export const completionDefaultOnReviewer = (policy: FlowPolicy | null): 'ai' | null => (policy && !policy.completionChosen ? 'ai' : null);
+
+/** Grava a revisão do quadro e, ao ligá-la ou trocar o revisor, marca a conclusão automática (ver `completionDefaultOnReviewer`). Se a revisão não gravou, a política não é tocada. */
+export async function saveWithCompletionDefault(saveReview: BoardReviewState['save'], flow: FlowCompletionState | undefined, next: BoardConfig): Promise<void> {
+  const ok = await saveReview(next);
+  const def = completionDefaultOnReviewer(flow?.policy ?? null);
+  if (ok && next.autoReview && def && flow) await flow.save(def);
+}
+
 /** O funcionário que passa a ser o responsável ao ligar: o que já estava gravado (se ainda é do projeto) ou o primeiro da hierarquia. */
 export function reviewerToTurnOn(config: BoardConfig, staff: Pick<StaffProfile, 'id'>[]): string | null {
   return staff.some((s) => s.id === config.reviewerId) ? config.reviewerId : (staff[0]?.id ?? null);
@@ -168,13 +234,16 @@ interface Props {
   commit?: BoardCommitState;
   /** "Um card escrevendo por vez", junto do commit automático; mesma regra: sem `config` o controle não aparece. */
   writer?: BoardWriterState;
+  /** A conclusão automática (portão `completion` da política de fluxo), junto do revisor; sem `policy` (lendo, ou servidor sem a rota) a linha não aparece. */
+  flow?: FlowCompletionState;
   /** Funcionários do projeto, na ordem da hierarquia. */
   staff: StaffProfile[];
 }
 
-export function BoardReview({ review, commit, writer, staff }: Props) {
-  const { config, missing, error, saving, save } = review;
+export function BoardReview({ review, commit, writer, flow, staff }: Props) {
+  const { config, missing, error, saving, save: saveReview } = review;
   const labelId = useId();
+  const flowLabelId = useId();
   const commitLabelId = useId();
   const writerLabelId = useId();
   if (missing || (!config && !error)) return null;
@@ -184,6 +253,9 @@ export function BoardReview({ review, commit, writer, staff }: Props) {
   const name = staff.find((s) => s.id === reviewerId)?.name ?? reviewerId ?? '';
   const commitOn = !!commit?.config?.autoCommit;
   const writerOn = !!writer?.config?.singleWriter;
+  const policy = flow?.policy ?? null;
+  const finishOn = completionIsOn(policy);
+  const save = (next: BoardConfig) => saveWithCompletionDefault(saveReview, flow, next);
   return (
     <details className="collapse board-review">
       <summary>
@@ -222,6 +294,32 @@ export function BoardReview({ review, commit, writer, staff }: Props) {
           )}
           <p className="muted small">{t('tasks.boardReviewRule')}</p>
           {!staff.length && <p className="muted small">{t('tasks.boardReviewNobody')}</p>}
+          {flow && (policy || flow.error) && (
+            <>
+              <div className="board-review-row board-commit-row">
+                <span id={flowLabelId}>{t('tasks.flowCompletion')}</span>
+                {policy && (
+                  <button
+                    type="button"
+                    className="btn-secondary btn-toggle"
+                    aria-pressed={finishOn}
+                    aria-labelledby={flowLabelId}
+                    disabled={flow.saving}
+                    onClick={() => void flow.save(finishOn ? 'owner' : 'ai')}
+                  >
+                    {finishOn ? t('tasks.boardReviewOn') : t('tasks.boardReviewOff')}
+                  </button>
+                )}
+              </div>
+              {policy && (
+                <>
+                  <p className="muted small">{t(finishOn ? 'tasks.flowCompletionAi' : 'tasks.flowCompletionOwner')}</p>
+                  {!on && <p className="muted small">{t('tasks.flowCompletionNoReviewer')}</p>}
+                  {(policy.source !== 'stored' || !policy.completionChosen) && <p className="muted small">{t('tasks.flowCompletionDefault')}</p>}
+                </>
+              )}
+            </>
+          )}
           {commit?.config && (
             <>
               <div className="board-review-row board-commit-row">
@@ -260,9 +358,9 @@ export function BoardReview({ review, commit, writer, staff }: Props) {
           )}
         </div>
       )}
-      {(error || commit?.error || writer?.error) && (
+      {(error || commit?.error || writer?.error || flow?.error) && (
         <p className="error small" role="alert">
-          {error ?? commit?.error ?? writer?.error}
+          {error ?? commit?.error ?? writer?.error ?? flow?.error}
         </p>
       )}
     </details>

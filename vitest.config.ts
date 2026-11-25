@@ -13,5 +13,9 @@ export default defineConfig({
     // entrega virava "falhou". 30 s dão folga sem esconder travamento de verdade (teste parado ainda cai); quem precisa de mais declara no próprio `it`.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // No máximo 2 processos de teste na máquina local (HDD, 4 núcleos, 8 GB): 3 workers de ~350 MB cada, com os funcionários trabalhando, faziam o Windows paginar e tudo
+    // travar. No GitHub Actions fica o padrão do vitest. Olha o GITHUB_ACTIONS, não o CI: o Club roda as suítes com CI=1 (ver `spawnTests`). `MYCO_TEST_WORKERS` troca o
+    // número (SPEC "Desempenho" 9).
+    maxWorkers: process.env.GITHUB_ACTIONS ? undefined : Number(process.env.MYCO_TEST_WORKERS) || 2,
   },
 });

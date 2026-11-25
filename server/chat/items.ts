@@ -96,6 +96,17 @@ export const RESTART_PENDING_TEXT = `${RESTART_PREFIX}, quando havia um pedido d
 export const RETRY_TEXT =
   'O turno foi interrompido. Confira arquivos e resultados já produzidos antes de continuar. Se uma ação externa puder ter ocorrido e não houver confirmação, pare e peça orientação.';
 
+/** Cabeçalho dos pedidos que o quadro (tarefas.ts) manda ao funcionário: tarefa, revisão, deploy, dúvida. */
+const TASK_HEAD = /^\s*\[(?:Tarefa|Revisão da tarefa|Deploy da tarefa|Dúvida da tarefa|Dúvida sobre a sua reprovação da tarefa) "/;
+
+/**
+ * Pedido do quadro ganha o prefixo `[MyCo] `, a marca de mensagem da plataforma que a tela lê. Só o servidor chama isto (tarefas e
+ * guia); o texto que o usuário digita no navegador não passa por aqui, então o mesmo cabeçalho digitado por ele segue como dele.
+ */
+export function platformTaskText(text: string): string {
+  return TASK_HEAD.test(text) ? `[MyCo] ${text.trimStart()}` : text;
+}
+
 /** A mensagem veio com a marca de outro funcionário (blocos do transcript)? */
 export function hasStaffNotice(blocks: Array<Record<string, unknown>>): boolean {
   return blocks.some((b) => b.type === 'text' && typeof b.text === 'string' && b.text.trimStart().startsWith(STAFF_NOTICE));

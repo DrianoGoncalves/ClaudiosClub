@@ -65,6 +65,14 @@
       .log td.at, .log td.src { white-space: nowrap; color: var(--muted); }
       .log td.msg { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
       .log tr.is-error td.msg { color: var(--danger); }
+      /* Opcional: Windows Defender. Recolhido; o comando vem com Copiar (a página nunca roda nada). */
+      .defender .def-group { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); margin-top: 8px; }
+      .defender .def-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
+      .defender ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+      .defender li { font: 12px ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+      .defender li.is-ok { color: var(--ink-green); }
+      .defender .def-cmd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+      .defender .def-done { color: var(--ink-green); font-weight: 600; }
     </style>
   </head>
   <body>
@@ -100,6 +108,20 @@
           </p>
           <button id="recheck" class="btn-secondary" type="button">Verificar de novo</button>
         </div>
+        <details class="log defender" id="defender" hidden>
+          <summary><h2>Opcional: disco mais rápido</h2><span class="muted small" id="defender-state"></span></summary>
+          <p class="muted small">
+            O antivírus do Windows (Defender) verifica cada arquivo que o Claudio’s Club, o git e os testes abrem, e num HD isso pesa no disco.
+            Tirar estas pastas da verificação em tempo real alivia o disco. É opcional e quem roda é você: copie o comando e cole no
+            <strong>PowerShell aberto como administrador</strong>. A página nunca roda nada.
+          </p>
+          <div id="defender-groups"></div>
+          <p class="muted small" id="defender-unknown" hidden>
+            Não deu para ler as exclusões atuais do Defender (falta permissão de administrador). Confira antes de rodar: no PowerShell como administrador,
+            <code>Get-MpPreference | Select-Object -ExpandProperty ExclusionPath</code>.
+          </p>
+          <p class="muted small">Depois de rodar, o estado aqui atualiza na próxima verificação (<code>npm run doctor</code> ou ao iniciar).</p>
+        </details>
         <details class="log" id="log">
           <summary><h2>Log</h2><span class="muted small" id="log-at"></span></summary>
           <div class="log-scroll" id="log-box" hidden>
@@ -268,6 +290,65 @@
         return li;
       }
 
+      // Opcional: Windows Defender (status.defender, do npm run doctor; ausente fora do Windows). Dois grupos: o recomendado (transcripts e o
+      // git do Club, risco baixo) e o opcional (node_modules: mais ganho, mas é código de terceiros do npm). Cada um com o comando, o Copiar e o
+      // desfazer. Tudo por textContent: caminho nenhum vira HTML.
+      const DEFENDER_GROUPS = [
+        { key: 'recommended', title: 'Recomendado (risco baixo)', why: 'Os transcripts das conversas (só texto, lidos o tempo todo pelo quadro) e o histórico do git do Claudio’s Club.' },
+        { key: 'optional', title: 'Opcional (mais ganho, mais risco)', why: 'O node_modules é o que mais pesa nos testes e no tsc, mas é código de terceiros baixado do npm: um pacote malicioso deixaria de ser verificado.' },
+      ];
+      function cmdLine(label, cmd) {
+        const p = document.createElement('p');
+        p.className = 'small def-cmd';
+        const code = document.createElement('code');
+        code.textContent = cmd;
+        p.append(`${label} `, code, ' ', copyButton(cmd));
+        return p;
+      }
+      function renderDefender(tip) {
+        const box = el('defender');
+        if (!tip || !tip.recommended || !tip.optional) {
+          box.hidden = true;
+          return;
+        }
+        box.hidden = false;
+        const groups = el('defender-groups');
+        groups.textContent = '';
+        let pending = 0;
+        DEFENDER_GROUPS.forEach(({ key, title, why }) => {
+          const g = tip[key];
+          if (!g || !Array.isArray(g.paths)) return;
+          const done = g.paths.length > 0 && g.paths.every((p) => p.excluded === true);
+          pending += g.paths.filter((p) => p.excluded !== true).length;
+          const div = document.createElement('div');
+          div.className = 'def-group';
+          const h = document.createElement('h3');
+          h.textContent = title;
+          const p = document.createElement('p');
+          p.className = 'muted small';
+          p.textContent = why;
+          const ul = document.createElement('ul');
+          g.paths.forEach((x) => {
+            const li = document.createElement('li');
+            li.className = x.excluded === true ? 'is-ok' : '';
+            li.textContent = `${x.excluded === true ? '✓ já fora da verificação: ' : ''}${x.path}`;
+            ul.append(li);
+          });
+          div.append(h, p, ul);
+          if (done) {
+            const ok = document.createElement('p');
+            ok.className = 'small def-done';
+            ok.textContent = '✓ Já aplicado.';
+            div.append(ok, cmdLine('Para desfazer:', g.undo));
+          } else {
+            div.append(cmdLine('Comando:', g.cmd), cmdLine('Para desfazer:', g.undo));
+          }
+          groups.append(div);
+        });
+        el('defender-unknown').hidden = tip.excludedKnown !== false;
+        el('defender-state').textContent = tip.excludedKnown === false ? 'não verificado' : pending ? '' : '✓ aplicado';
+      }
+
       function render(st, buildOk, up) {
         const byId = {};
         if (st && Array.isArray(st.checks)) st.checks.forEach((c) => { if (c && c.id) byId[c.id] = c; });
@@ -286,6 +367,7 @@
           ? `verificado em ${at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
           : '';
         el('doctor-tip').hidden = Array.isArray(st && st.checks);
+        renderDefender(st && st.defender);
       }
 
       async function refresh(up) {

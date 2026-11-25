@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
@@ -45,6 +46,7 @@ import { createSkill } from './skillCreate';
 import { projectClaudeDir } from './adapters/claude/projects';
 import { ChatClosingError, ChatError, ChatManager, CloseRefusedError, findTranscript } from './chat/manager';
 import { ResumeFile, bootResume, resumeText } from './chat/resume';
+import { platformTaskText } from './chat/items';
 import { AnnotationsField, AnswersField } from './chat/questions';
 import { touchedFiles } from './chatChanges';
 import { uncommittedByConversation } from './uncommitted';
@@ -145,6 +147,7 @@ import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, dropStaffSessions, hasStaffFiles, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
 import { StateBusyError } from './atomicWrite';
+import { BoardCorruptError, boardIncidents, boardIncidentSummary, dismissBoardIncident } from './boardGuard';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { writeOwnerFile } from './ownerEdits';
@@ -486,6 +489,12 @@ const turnLedger = new TurnRetryLedger(path.join(MYCO_HOME, 'turn-retry.json'));
 const chats: ChatManager = new ChatManager({
   // O aviso de segredo achar o arquivo que um comando leu (vários no mesmo comando): precisa da raiz do projeto para nada fora dela ser aberto.
   projectDirOf: (projectId) => projectPathOf(projectId),
+  // Falta memória (livre abaixo do `minFreeRamGb` da config, o mesmo mínimo da fila): a conversa parada há mais tempo fecha sem esperar os 15 min (ver
+  // chat/memoryPressure.ts). Desligado com o portão de recursos desligado ou o mínimo em 0.
+  memory: async () => {
+    const c = await readConfig();
+    return c.resourceGate && c.minFreeRamGb > 0 ? { freeBytes: os.freemem(), minBytes: c.minFreeRamGb * 1024 ** 3 } : null;
+  },
   // Plano B de quem roda no Codex: a conta recusou o modelo da ficha, o turno é refeito com o mais parecido do catálogo.
   codexModels: async () => (await codexModels.list()).models,
   // Antes de cada execução do Codex: o recurso `network_proxy` presente e o 127.0.0.2 de pé (senão roda sem rede e avisa) e a versão mínima.
@@ -609,7 +618,7 @@ const sendNewConversation = async (projectId: string, staffId: string, text: str
     timer.stage('consumo');
     if (!force) await staff.checkUsage(projectId, { staffId, ...(override && { engine: override.engine }) });
     timer.stage('abrir');
-    return await chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, override, reviewOnly);
+    return await chats.send(projectId, null, staffId, platformTaskText(text), undefined, [], [], false, undefined, override, reviewOnly);
   } finally {
     timer.finish();
   }
@@ -770,7 +779,7 @@ const directFallback = new DirectFallback({
     await turnRetries.cancel(sessionId, 'fallback');
   },
   send: (projectId, sessionId, staffId, text, priority, images, files, override) =>
-    chats.send(projectId, sessionId, staffId, text, priority, images, files, false, undefined, override),
+    chats.send(projectId, sessionId, staffId, platformTaskText(text), priority, images, files, false, undefined, override),
   log: (line) => console.log(`[chat] ${line}`),
 });
 /**
@@ -1701,7 +1710,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), async ({ params: [id] }) => tasks.commitLeftOf(id!, withInboxWait(await tasks.list(id!), id!, chats.attention()))],
   // Refazer o commit das sobras de uma tarefa pronta (ver `TaskService.redoLeftovers`): o GET mostra os arquivos, o diff e o `digest`; o POST `{ digest }` faz o commit complementar. Só pela tela
   // (o serviço responde 403 a quem não é a tela; o gate já barra o POST de funcionário e as rotas nem estão na lista de apiPolicy.ts). 404 se o projeto ou a tarefa não existem; 409 com o motivo se não dá.
-  ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/commit-leftovers$`), ({ params: [id, taskId], fromBrowser }) => tasks.previewLeftovers(id!, taskId!, fromBrowser)],
+  // O GET confere o cookie do pareamento (`paired`), como /api/consult/links: o navegador não manda Origin num GET do próprio site, então `fromBrowser` era sempre
+  // falso aqui e o "Revisar sobras" da caixa sempre dava "só são vistas pelo Claudio’s Club". O POST (o commit) segue exigindo `fromBrowser`.
+  ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/commit-leftovers$`), ({ params: [id, taskId], paired }) => tasks.previewLeftovers(id!, taskId!, paired)],
   ['POST', new RegExp(`^/api/projects/${ID}/tasks/${ID}/commit-leftovers$`), ({ params: [id, taskId], body, fromBrowser }) => tasks.redoLeftovers(id!, taskId!, body, fromBrowser)],
   // Revisão automática do quadro: `{ autoReview, reviewerId }` (ver server/boardConfig.ts). Ler é livre; gravar só pela tela, como as outras
   // configurações de projeto (o funcionário nem tem este POST na lista de apiPolicy.ts).
@@ -2093,8 +2104,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       // `error:<sessão>` (parou com erro), `cap:<sessão>` (parou no teto), `commit:<projeto>:<tarefa>` (o commit automático falhou ou foi parcial) ou `guardoff:<sessão>` (a fila de
       // validação pesada ficou desligada por hooks.json na conta do Codex) ou `codexsandbox:password-policy` (a política de senha do Windows quebra o sandbox do Codex): o id do item da caixa.
-      const b = parse(z.object({ id: z.string().regex(/^(error|cap|commit|guardoff|codexsandbox):.+/).max(300) }), body);
-      return { ok: b.id.startsWith('commit:') ? await tasks.ackCommit(b.id) : b.id.startsWith('guardoff:') ? chats.dismissGuardOff(b.id) : b.id.startsWith('codexsandbox:') ? codexPolicy.dismiss(b.id) : chats.dismissError(b.id) };
+      // `board:<projeto>:<data>`: o quadro de tarefas que estava corrompido e voltou de uma cópia (o de "corrompido sem cópia" só some quando o arquivo volta a ler).
+      const b = parse(z.object({ id: z.string().regex(/^(error|cap|commit|guardoff|codexsandbox|board):.+/).max(300) }), body);
+      return { ok: b.id.startsWith('commit:') ? await tasks.ackCommit(b.id) : b.id.startsWith('guardoff:') ? chats.dismissGuardOff(b.id) : b.id.startsWith('codexsandbox:') ? codexPolicy.dismiss(b.id) : b.id.startsWith('board:') ? dismissBoardIncident(b.id) : chats.dismissError(b.id) };
     },
   ],
   [
@@ -2909,6 +2921,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
           console.error('[estado] arquivo ocupado:', err.file, (err.cause as Error | undefined)?.message);
           return send(res, 503, { error: err.message }, { 'retry-after': String(err.retryAfter) });
         }
+        // O tasks.json não lê como lista e não há cópia boa (ver boardGuard.ts): nada foi gravado por cima dele; o aviso na caixa explica.
+        if (err instanceof BoardCorruptError) return send(res, 503, { error: err.message });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         // Teto de títulos manuais: só criar outro recusa (409); editar ou apagar um que existe segue.
@@ -3279,6 +3293,14 @@ async function getInbox(): Promise<InboxItem[]> {
   for (const s of chats.secretHits()) {
     const w = where(s.sessionId, liveById.get(s.sessionId));
     if (!hidden(w)) out.push(secretInboxItem(s, w, projects.find((p) => p.id === w.projectId)?.path ?? null));
+  }
+  // Quadro de tarefas que não lia como lista (gravação que não chegou ao disco): voltou de uma cópia, ou segue corrompido sem cópia boa (ver boardGuard.ts). Aviso do projeto,
+  // sem conversa: o clique abre a sala do projeto.
+  for (const inc of boardIncidents()) {
+    const same = (a: string, b: string) => (process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b));
+    const p = projects.find((x) => same(x.path, inc.dir));
+    if (!p || hidden({ projectId: p.id, staffId: null, sessionId: '' })) continue;
+    out.push({ id: inc.id, kind: 'error', projectId: p.id, projectName: p.name, sessionId: '', staffId: null, name: p.name, summary: boardIncidentSummary(inc), at: inc.at });
   }
   // Chave escrita no .mcp.json de um projeto: o arquivo vai para o git junto com o código.
   for (const p of projects.filter((x) => x.exists && !x.worktreeOf)) {

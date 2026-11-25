@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { systemMessageText } from '../client/src/chat/systemMessage';
+import { platformTaskText } from '../server/chat/items';
 
 describe('systemMessageText (mensagem automática da plataforma no chat)', () => {
   it('reconhece o prefixo [MyCo] e tira ele do texto', () => {
@@ -14,6 +15,16 @@ describe('systemMessageText (mensagem automática da plataforma no chat)', () =>
 
   it('mantém as quebras de linha depois do prefixo', () => {
     expect(systemMessageText('[MyCo]\nlinha 1\nlinha 2')).toBe('\nlinha 1\nlinha 2');
+  });
+
+  it('pedido do quadro sai do servidor com [MyCo] e vira automático, com o título; o mesmo cabeçalho digitado pelo usuário segue dele', () => {
+    const head = '[Revisão da tarefa "Login"]\n\nPrecisa de revisão.';
+    expect(systemMessageText(platformTaskText(head))).toBe(head);
+    for (const h of ['[Tarefa "Botão"] faça', '[Deploy da tarefa "X"]', '[Dúvida da tarefa "X" (id t-1)]']) expect(systemMessageText(platformTaskText(h))).toBe(h);
+    // texto igual vindo do navegador (não passa por platformTaskText) continua do usuário
+    expect(systemMessageText(head)).toBeNull();
+    expect(platformTaskText('[Tarefa sem aspas] oi')).toBe('[Tarefa sem aspas] oi');
+    expect(platformTaskText(platformTaskText(head))).toBe(platformTaskText(head)); // idempotente
   });
 
   it('mensagem normal do usuário não é automática', () => {

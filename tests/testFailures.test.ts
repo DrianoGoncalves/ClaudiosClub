@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { isHeavyCommand } from '../scripts/hooks/heavy-lock.mjs';
+import { isFullSuiteCommand, isHeavyCommand } from '../scripts/hooks/heavy-lock.mjs';
 import type { StaffProfile, TestRun } from '../shared/model';
 import { TaskService } from '../server/tasks';
 import { runTests } from '../server/taskCode';
@@ -186,14 +186,14 @@ describe('isolateFailures: passa isolado, falha isolado, toca a entrega', () => 
     expect(iso!.files[0]).toEqual({ file: 'tests/a.test.ts', failed: 1, status: 'fail', isolatedFailed: 1 });
   });
 
-  it('o comando da nova rodada nunca é a suíte inteira, e a fila é a da suíte (não a do comando leve)', async () => {
+  it('o comando da nova rodada nunca é a suíte inteira, e espera a vez na fila como a suíte', async () => {
     const dir = await project('fila');
     const { rerun, calls } = fakeRerun({});
     await isolateFailures(dir, failedRun([['tests/a.test.ts', 1]]), [], rerun);
-    expect(isHeavyCommand('npm test')).toBe(true);
-    expect(isHeavyCommand(calls[0]!.command)).toBe(false); // sem a fila ela rodaria solta, por cima da validação de outra pessoa
+    expect(isFullSuiteCommand(calls[0]!.command)).toBe(false); // só os arquivos que falharam
+    expect(isHeavyCommand(calls[0]!.command)).toBe(true); // mas toda rodada de testes espera a vez
     expect(calls[0]!.queueAs).toBe('npm test');
-    expect(isHeavyCommand(calls[0]!.queueAs)).toBe(true); // e é este comando que `runTests` leva à fila
+    expect(isHeavyCommand(calls[0]!.queueAs)).toBe(true);
   });
 
   it('muito arquivo: leva só os ISOLATED_MAX primeiros (mais falhas primeiro); o resto fica sem resultado isolado', async () => {

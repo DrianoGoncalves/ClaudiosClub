@@ -9,6 +9,7 @@ import detail from './detail';
 import extension from './extension';
 import files from './files';
 import office from './office';
+import profiles from './profiles';
 import release from './release';
 import schedules from './schedules';
 import settingsSimple from './settingsSimple';
@@ -27,7 +28,7 @@ export const LOCALES: { id: Locale; label: string }[] = [
 ];
 
 const STORAGE_KEY = 'myco.locale';
-const AREAS = [app, board, chat, consult, detail, extension, files, office, release, schedules, settingsSimple, skillgh, staff, tasks, toolbar];
+const AREAS = [app, board, chat, consult, detail, extension, files, office, profiles, release, schedules, settingsSimple, skillgh, staff, tasks, toolbar];
 
 type Messages = (typeof app)['pt-BR'] &
   (typeof board)['pt-BR'] &
@@ -37,6 +38,7 @@ type Messages = (typeof app)['pt-BR'] &
   (typeof extension)['pt-BR'] &
   (typeof files)['pt-BR'] &
   (typeof office)['pt-BR'] &
+  (typeof profiles)['pt-BR'] &
   (typeof release)['pt-BR'] &
   (typeof schedules)['pt-BR'] &
   (typeof settingsSimple)['pt-BR'] &

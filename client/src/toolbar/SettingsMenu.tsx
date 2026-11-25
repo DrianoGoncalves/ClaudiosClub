@@ -24,6 +24,8 @@ import { RETENTION_DAYS_MAX, normalizeRetentionDays, previewFor, previewTotal, r
 import { TURN_MINUTES_MAX, TURN_TOOLS_MAX, normalizeTurnMinutes, normalizeTurnTools } from './turnCap';
 import { askConfirm, isInsideDialog } from '../lib/dialogStore';
 import { SIMPLE_GROUPS, SimpleList, simpleInfo, type SimpleInfo } from './SettingsSimple';
+import { ProfilePicker } from './ProfilePicker';
+import type { ProfileValues } from '../../../shared/configProfiles';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -406,6 +408,23 @@ function SettingRow({ setting: s }: { setting: Setting }) {
   );
 }
 
+/** Os valores que o perfil de uso ajusta; null enquanto algum ainda não chegou (o item do perfil espera). */
+function profileValues(p: Props): ProfileValues | null {
+  if (p.aiTitles === null || p.optimizeQuota === null || !p.contextSwitch || !p.usageStop || !p.turnCap || !p.queueGate) return null;
+  return {
+    aiTitles: p.aiTitles,
+    optimizeQuota: p.optimizeQuota,
+    contextSwitch: p.contextSwitch,
+    usageStop: p.usageStop,
+    maxTurnTools: p.turnCap.maxTurnTools,
+    maxTurnMinutes: p.turnCap.maxTurnMinutes,
+    resourceGate: p.queueGate.resourceGate,
+    minFreeRamGb: p.queueGate.minFreeRamGb,
+    cpuGate: p.queueGate.cpuGate,
+    maxActiveChats: p.queueGate.maxActiveChats,
+  };
+}
+
 /** A lista de configurações; itens que dependem do config.json só entram depois que ele chega. */
 function buildSettings(
   p: Props,
@@ -429,6 +448,23 @@ function buildSettings(
           },
         ]
       : []),
+    // Perfil de uso (economia de tokens, PC leve, máxima qualidade): só depois que todos os itens que ele ajusta chegaram (ver shared/configProfiles.ts).
+    ...((): Setting[] => {
+      const values = profileValues(p);
+      return values
+        ? [
+            {
+              id: 'profile',
+              group: 'general',
+              title: t('profile.title'),
+              description: t('profile.desc'),
+              keywords: t('profile.keywords'),
+              control: <ProfilePicker values={values} onConfig={p.onConfig} />,
+              simple: simpleInfo('level', 'profile', true),
+            },
+          ]
+        : [];
+    })(),
     // Idioma: a escolha vale para a página toda e recarrega.
     {
       id: 'language',

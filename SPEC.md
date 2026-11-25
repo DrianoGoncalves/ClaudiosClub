@@ -7,16 +7,11 @@
 
 ## Visão
 
-<!--
-O que é o projeto, em duas ou três frases, e para quem é.
--->
+Uma plataforma que organiza projetos e estipula funcionários com memórias persistentes para trabalhar com multi motores de IA. Simulando uma software factory, permite automatizar e centralizar o workflow de maneira visual e profissional.
 
 ## Problema que resolve
 
-<!--
-Qual dor existe hoje e o que muda para quem usa
-quando o projeto estiver pronto.
--->
+Unifica as memórias de AI Dev e integra com Codex e Claude signatures. Permite enxergar todo o fluxo de trabalho dos agentes de maneira visual e dedicado, melhorando a consistência, qualidade e economia de tokens.
 
 ## Escopo
 
@@ -51,6 +46,10 @@ Cada decisão com data e o porquê.
 Ex.: 2026-11-06: SQLite, porque o cliente não tem servidor de banco.
 -->
 
+- 2026-11-25: cada funcionário tem duas memórias: a do projeto (só daquele projeto) e a pessoal (a mesma em todos os projetos dele). As duas são editáveis pelo próprio funcionário durante a conversa e pelo usuário na ficha. A pessoal existe para levar o que ele aprendeu de um projeto para outro. Não há memória compartilhada entre funcionários diferentes.
+- 2026-11-25: projeto sigiloso usa funcionário exclusivo, mas isso é só recomendação e nada bloqueia. Trazer um funcionário existente avisa que a memória pessoal vai junto. A responsabilidade de reaproveitar o funcionário depois é do usuário.
+- 2026-11-25: estilo de comunicação trata do jeito de escrever, e roteiro trata do jeito de trabalhar. "Ponytail" (código mínimo, inspirado em github.com/DietrichGebert/ponytail, MIT) é roteiro, com texto próprio e não o plugin original, porque assim vale igual no Claude e no Codex e não depende de terceiro. Atalho com limite conhecido leva o marcador `ponytail:` no comentário.
+
 ## Dúvidas em aberto
 
 <!--
@@ -75,27 +74,33 @@ Ex.: 2026-11-06: toda rota que grava confere o cabeçalho x-myco.
 - 2026-11-21: botões de ação fora do `ActionBar` (formulário, balão, caixa) seguem a mesma ordem: secundárias primeiro, a primária por último no DOM; no celular ela ocupa a largura inteira, embaixo (confira em cada estado: fechado e aberto).
 - 2026-11-21: regra de token de CSS (fonte, cor, espaçamento) cobre também o shorthand (`font: 700 9px`); varra e teste todas as formas, não só a declaração isolada (`font-size:`).
 
+- 2026-11-25: classificar mensagem por origem (quem enviou), nunca só pelo texto: o que decide o balão (usuário × plataforma) é uma marca posta pelo servidor (`[MyCo]`, `platformTaskText` em `server/chat/items.ts`), e o mesmo texto digitado pelo usuário tem que seguir como dele (teste com os dois casos).
+
 ## Desempenho: regras que não podem voltar atrás
 
 O Claudio's Club roda numa máquina comum (Windows, 4 núcleos, HDD, pouca RAM livre) ao lado de vários agentes. Em 22/11/2026 o servidor chegou a
 responder rotas triviais em 30 s e arquivos estáticos em 99 s. As causas medidas estão abaixo, com a regra que impede cada uma de voltar. Quem mexer
 nessas áreas confere a regra antes de entregar; mudar uma delas pede medição (antes e depois) no pedido de revisão.
 
-### 1. O quadro (`.myco/tasks.json`) é lido uma vez por versão do arquivo
+### 1. O quadro (`.myco/tasks.json` e o arquivo morto) é lido uma vez por versão do arquivo
 
-- Toda leitura passa por `readTasks` (guardado por versão do arquivo: mtime, ctime, tamanho e inode). Não ler o `tasks.json` por outro caminho em rota ou rotina.
-- Toda gravação passa por `mutate` (que descarta o guardado). Nunca gravar o `tasks.json` fora dele.
-- Tarefa lida nunca é alterada no lugar: sempre objeto novo (`{ ...t, campo }`). O guardado é o mesmo para todos os leitores; nos testes ele vem congelado e a alteração no lugar quebra o teste.
+- O quadro são dois arquivos: o ativo (`.myco/tasks.json`) e o arquivo morto (`.myco/tasks-arquivo.json`), com as tarefas fechadas (prontas ou canceladas) sem mudança há mais de 6 h (`MYCO_COLD_AFTER_HOURS` troca). O ativo é regravado inteiro, com fsync, a cada mudança; o morto quase nunca muda.
+- Toda leitura passa por `readTasks` (os dois arquivos juntos, cada um guardado por versão do arquivo: mtime, ctime, tamanho e inode) ou por `readActiveTasks` (só o ativo). Não ler nenhum dos dois por outro caminho em rota ou rotina.
+- `readActiveTasks` só em caminho que olha tarefa aberta e não procura tarefa por id vindo de fora, nem dependência, pai/filho, idempotência ou pronta com pendência (commit, vaga de escrita, aviso da caixa). Na dúvida, `readTasks`: a cancelada do morto ainda bloqueia quem espera por ela.
+- Toda gravação passa por `mutate` (que descarta o guardado do arquivo gravado). Nunca gravar nenhum dos dois fora dele. A mudança de arquivo segue a ordem de `writeBoard`: o morto ganha a tarefa (e a cópia dele sai) antes de o ativo perdê-la; o ativo ganha a reaberta antes de o morto perdê-la. Em nenhum instante, nem numa queda de energia, a tarefa fica fora dos dois; repetida nos dois, vale a do ativo. Tarefa do morto que muda volta ao ativo: a única gravação que decide é a do ativo.
+- Entrada no morto no máximo uma vez por hora por projeto; saída na hora. Quem lê durante uma mudança de arquivo recebe o quadro de antes dela, sem esperar as gravações.
+- Tarefa lida nunca é alterada no lugar: sempre objeto novo (`{ ...t, campo }`). O guardado é o mesmo para todos os leitores; nos testes ele vem congelado e a alteração no lugar quebra o teste. As do morto vêm congeladas sempre: a gravação descobre o que mudou nele pela identidade dos objetos.
 - Arquivo mexido há menos de 3 s não é guardado (o mtime do Windows anda em degraus de ~15,6 ms: duas gravações seguidas de mesmo tamanho dariam a mesma versão).
 
-*Por quê:* o arquivo passa de 5 MB; reler e refazer o parse a cada listagem, rodada da fila e mudança era o maior gasto de CPU do servidor.
+*Por quê:* o arquivo passa de 5 MB; reler e refazer o parse a cada listagem, rodada da fila e mudança era o maior gasto de CPU do servidor. Com o fsync (regra 6), regravar os 6,3 MB custava 204 ms (mediana no HDD); só o ativo (0,23 MB, em 24/11/2026), 67 ms.
 
 ### 2. Caminho quente sem varrer transcripts
 
 - Achar a pasta de um projeto e a lista de projetos do quadro no caminho das tarefas usa `adapter.projectPath` / `adapter.boardProjectIds` (só a descoberta e um `access`).
 - `adapter.listProjects()` (que faz `stat` de todo transcript do `~/.claude/projects`, mais de mil arquivos) não entra em caminho chamado por tarefa, por cartão ou por polling.
+- O `/api/board` lê o começo e o fim de cada transcript **uma vez por versão do arquivo** (`transcriptFacts` em `server/adapters/claude/sessions.ts`, com a mesma janela de 3 s da regra 1). O que muda sem mexer no transcript (ao vivo, `custom-title.json`, subagents) é lido a cada montagem e não entra no guardado.
 
-*Por quê:* o `stat` em rajada ocupava o pool de I/O do Node, e a leitura e a gravação do quadro ficavam esperando atrás dele.
+*Por quê:* o `stat` em rajada ocupava o pool de I/O do Node, e a leitura e a gravação do quadro ficavam esperando atrás dele. Em 23/11/2026 o `/api/board` era a rota mais lenta (até 5,7 min com o HDD 100% ocupado): cada montagem relia 2 × 64 KB de ~600 transcripts.
 
 ### 3. Git e CLIs nas leituras da tela: uma vez por projeto, com teto e prazo
 
@@ -120,9 +125,13 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 - A rodada da fila de tarefas (60 s) roda uma por vez. Rodada presa há mais de 10 min é liberada com aviso no log, para não desligar a rede de segurança.
 - Rotina nova com `setInterval` que faz I/O ou sobe processo segue o mesmo padrão: uma de cada vez.
 
-### 6. Gravação atômica tolerante ao Windows
+### 6. Gravação atômica tolerante ao Windows e à queda de energia
 
 - O rename do `writeAtomic` tenta por pelo menos ~3 s (backoff com jitter) antes de desistir: no HDD, o antivírus segura o destino por mais que meio segundo. A desistência vai para o log; ela nunca é silenciosa.
+- O `writeAtomic` força os dados no disco (`sync`) **antes** do rename. Sem isso, uma queda de energia logo depois deixa o arquivo com o tamanho certo e só zeros: em 23/11/2026 o `tasks.json` do MyCo (6,3 MB) voltou assim, e só foi recuperado varrendo o disco inteiro. Custo medido no HDD para esses 6,3 MB: de 22 para 205 ms por gravação (mediana). Encolher o arquivo (tirar as tarefas prontas antigas) é o que baixa esse custo; tirar o `sync`, não. Foi o que o arquivo morto fez (regra 1).
+- Quem vai gravar o quadro lê de forma estrita (`readTasksForWrite`): arquivo preso que não solta vira `StateBusyError`, e quadro que não lê como lista vira `BoardCorruptError`. Nunca `[]`. Antes, as duas viravam lista vazia, e a gravação seguinte trocava o quadro inteiro por quase nada.
+- O quadro tem cópias em `.myco/backups/tasks/` (no máximo uma a cada 10 min; ficam as 6 mais novas e a última de cada dia por 7 dias). Arquivo que não lê como lista é guardado ao lado (`tasks.json.corrompido-<data>`) e volta a cópia boa mais nova, ou a última versão lida pelo servidor. Sem nenhuma das duas, as gravações são recusadas até o arquivo ser consertado. Qualquer desses casos vira aviso na caixa "precisa de mim" (`server/boardGuard.ts`).
+- O arquivo morto tem a mesma proteção, com cópias em `.myco/backups/tasks-arquivo/`: uma a cada entrada de tarefa nele (sem o limite de 10 min, e antes de a tarefa sair do ativo; sem a cópia, a entrada fica para depois). Morto que já existiu (tem cópia) e sumiu conta como estragado e volta da cópia. Estragado sem conserto trava o quadro inteiro, como o ativo: nada aparece e nada é gravado (sem ele, a fila liberaria quem espera por uma cancelada que está nele). Para zerar o quadro de propósito, com o servidor parado, apague também `.myco/backups/tasks-arquivo/`.
 
 ### 7. Estáticos e subida
 
@@ -134,3 +143,20 @@ nessas áreas confere a regra antes de entregar; mudar uma delas pede medição 
 
 - Pedido acima de 2 s vai para o log como `[lento] MÉTODO caminho status em N ms`, sem a query (pode levar código ou token) e sem o SSE.
 - Mudança que afeta essas regras traz no pedido de revisão o número de antes e de depois: tempo da rota, processos git por leitura, atraso do event loop.
+
+### 9. Testes em camadas
+
+- Na entrega e na mescla, com vitest e a lista dos arquivos mudados, rodam só os testes ligados a eles: `vitest related … --passWithNoTests --maxWorkers=2` (`scopedTestCommand` em `server/taskCode.ts`). A suíte inteira roda no CI do PR e no botão "rodar testes" do cartão. `MYCO_FULL_TESTS=1` força a suíte inteira.
+- Fora do CI, a suíte do Club roda com no máximo 2 processos de teste (`maxWorkers` no `vitest.config.ts`; `MYCO_TEST_WORKERS` troca o número).
+- **Toda rodada de testes espera a vez na fila de validação pesada**, com arquivo ou filtro também (`isHeavyCommand` em `scripts/hooks/heavy-lock.mjs`). "É a suíte inteira?" é outra pergunta (`isFullSuiteCommand`), usada pela nova rodada só dos arquivos que falharam. Só o que não roda teste (`vitest list`, versão, ajuda) passa direto.
+
+*Por quê:* a suíte inteira (372 arquivos, ~6.800 testes) levava de 10 a 30 min por entrega nesta máquina, duas vezes por tarefa (entrega e mescla). Com 3 processos de ~350 MB ao lado dos funcionários, o Windows paginava no HDD. No CI ela roda em ~3 min. Em 25/11/2026, três funcionários rodavam "só este arquivo" ao mesmo tempo, fora da fila (~1 GB cada), mais uma suíte do Club.
+
+### 10. Conversa parada sai quando falta memória
+
+- Com a RAM livre abaixo do `minFreeRamGb` da config (o mesmo mínimo da fila), a rodada do `reap` (a cada minuto) fecha a conversa parada há mais tempo, uma por rodada, sem esperar os 15 min (`server/chat/memoryPressure.ts`). Parada é sem turno, sem pergunta ou permissão pendente e sem tarefa em segundo plano, e há mais de 2 min. A sessão fica no disco: a próxima mensagem reabre.
+- Conversa de tarefa (trabalho, revisão, deploy) parada fecha em 2 min (`TASK_CHAT_IDLE_MS`): o próximo passo dela vem do Club, minutos ou horas depois. A sua conversa, e a de card automático, seguem com 15 min.
+- Antes de abrir um processo novo do Claude com a RAM curta, a abertura fecha até 2 conversas paradas e espera elas saírem (`makeRoom`, com teto de espera). O pedido de revisão novo não fecha nada: recusa com "aguardando memória" **antes** de preparar a conversa, e o `retryReviews` tenta de novo com backoff. O Codex fica fora: parado, ele não segura processo.
+- Conversa fechando (`isClosing`: o processo ainda não saiu) não recebe nada: quem vai mandar espera sair e reabre. Duas aberturas da mesma conversa ao mesmo tempo dividem um processo só (`ChatManager.opening`).
+
+*Por quê:* cada conversa aberta segura o Claude Code (~580 MB) até 15 min depois do último turno. Em 25/11/2026, 7 conversas abertas (4 paradas) numa máquina de 8 GB: 16,6 GB em uso, disco 0% ocioso e até 4 mil páginas por segundo no HDD.
