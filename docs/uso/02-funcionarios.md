@@ -217,7 +217,7 @@ Os selos aparecem onde você decide: **Modelo** e **Esforço** (aba **Ficha**), 
 
 | Recurso | Selo | O que pesa | Quando vale ligar |
 |---|---|---|---|
-| Cada conversa aberta do Claude | Usa memória | 200–290 MB por conversa aberta. O Club fecha sozinho a que fica 15 minutos parada. | Não é uma opção, é o custo de manter conversas abertas: feche as que não usa. |
+| Cada conversa aberta do Claude | Usa memória | 200–290 MB por conversa aberta. O Club fecha sozinho a que fica 15 minutos parada (a de tarefa, 2 minutos; com pouca RAM livre, antes). | Não é uma opção, é o custo de manter conversas abertas: feche as que não usa. |
 | **Usar o navegador** (Claude) | Usa memória | Um aviso leve, cerca de 54 MB, fica aberto em toda conversa com a caixa marcada. Ao abrir uma página, o navegador sem os seus logins soma 80–120 MB e fecha sozinho depois de 10 minutos sem uso. O seu Chrome real (Claude in Chrome) não foi medido. | Para quem testa telas, confere sites ou lê páginas. Para quem só mexe em código, desmarque. |
 | **Perguntar ao GPT** (**Usar o Codex (GPT)** nas Configurações) | Usa memória e Gasta limite | 20–45 MB em cada conversa do Claude. Cada pergunta abre outra chamada no Codex e gasta a cota do seu ChatGPT (não a do Claude). | Para quem decide coisas que pesam e ganha com uma segunda opinião. Desligar tira também o GPT como motor. |
 | **Modelo** Opus ou Fable | Gasta limite | Custam mais por token que Sonnet e Haiku na tabela de preços do Club, e tendem a gastar o limite mais rápido. | Para planejar, decidir e revisar. Em trabalho mecânico, Sonnet ou Haiku gastam menos. |

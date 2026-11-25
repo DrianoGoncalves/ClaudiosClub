@@ -816,6 +816,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <p>Se o botão <b class="ui">Iniciar</b> não fizer nada, rode esse comando <b>uma vez</b>: ele registra o link e sobe o Claudio’s Club.</p>
       </div>
     </div>
+    <p><b>Opcional, no Windows: disco mais rápido.</b> A página de início tem a seção <b class="ui">Opcional: disco mais rápido</b>, recolhida. O antivírus do Windows (Defender) verifica cada arquivo que o Claudio’s Club, o git e os testes abrem, e num HD isso pesa. A seção mostra dois comandos, cada um com o botão <b class="ui">Copiar</b> e o comando que desfaz: o <b>recomendado</b> (risco baixo) tira da verificação os transcripts das conversas e o histórico do git do Claudio’s Club; o <b>opcional</b> (mais ganho, mais risco) tira o <code>node_modules</code>, código de terceiros baixado do npm que deixaria de ser verificado. Quem roda é você, no PowerShell aberto como administrador: a página nunca roda nada.</p>
   </article>
 
   <article class="blk" id="segundo-plano">
@@ -1434,7 +1435,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <div class="tw"><table class="tbl stack">
       <thead><tr><th>Recurso</th><th>Selo</th><th>O que pesa</th><th>Quando vale ligar</th></tr></thead>
       <tbody>
-        <tr><td data-label="Recurso">Cada conversa aberta do Claude</td><td data-label="Selo">Usa memória</td><td data-label="O que pesa">200–290 MB por conversa aberta. O Club fecha sozinho a que fica 15 minutos parada.</td><td data-label="Quando vale ligar">Não é uma opção, é o custo de manter conversas abertas: feche as que não usa.</td></tr>
+        <tr><td data-label="Recurso">Cada conversa aberta do Claude</td><td data-label="Selo">Usa memória</td><td data-label="O que pesa">200–290 MB por conversa aberta. O Club fecha sozinho a que fica 15 minutos parada (a de tarefa, 2 minutos; com pouca RAM livre, antes).</td><td data-label="Quando vale ligar">Não é uma opção, é o custo de manter conversas abertas: feche as que não usa.</td></tr>
         <tr><td data-label="Recurso"><b class="ui">Usar o navegador</b> (Claude)</td><td data-label="Selo">Usa memória</td><td data-label="O que pesa">Um aviso leve, cerca de 54 MB, fica aberto em toda conversa com a caixa marcada. Ao abrir uma página, o navegador sem os seus logins soma 80–120 MB e fecha sozinho depois de 10 minutos sem uso. O seu Chrome real (Claude in Chrome) não foi medido.</td><td data-label="Quando vale ligar">Para quem testa telas, confere sites ou lê páginas. Para quem só mexe em código, desmarque.</td></tr>
         <tr><td data-label="Recurso"><b class="ui">Perguntar ao GPT</b> (<b class="ui">Usar o Codex (GPT)</b> nas Configurações)</td><td data-label="Selo">Usa memória e Gasta limite</td><td data-label="O que pesa">20–45 MB em cada conversa do Claude. Cada pergunta abre outra chamada no Codex e gasta a cota do seu ChatGPT (não a do Claude).</td><td data-label="Quando vale ligar">Para quem decide coisas que pesam e ganha com uma segunda opinião. Desligar tira também o GPT como motor.</td></tr>
         <tr><td data-label="Recurso"><b class="ui">Modelo</b> Opus ou Fable</td><td data-label="Selo">Gasta limite</td><td data-label="O que pesa">Custam mais por token que Sonnet e Haiku na tabela de preços do Club, e tendem a gastar o limite mais rápido.</td><td data-label="Quando vale ligar">Para planejar, decidir e revisar. Em trabalho mecânico, Sonnet ou Haiku gastam menos.</td></tr>
@@ -1820,7 +1821,8 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <div class="split wide-r">
       <ul>
         <li>No painel do funcionário, o botão <b class="ui">+</b> (título “Nova conversa”) começa do zero. A ficha e a memória continuam.</li>
-        <li><b class="ui">Fechar conversa</b> encerra o processo e os MCPs da conversa para liberar memória; o histórico fica. Se estiver parada, fecha direto; se estiver trabalhando, pede confirmação. Se o servidor recusar, a tela mostra o motivo. Depois de 15 minutos parada, o processo fecha sozinho.</li>
+        <li><b class="ui">Fechar conversa</b> encerra o processo e os MCPs da conversa para liberar memória; o histórico fica. Se estiver parada, fecha direto; se estiver trabalhando, pede confirmação. Se o servidor recusar, a tela mostra o motivo. Depois de 15 minutos parada, o processo fecha sozinho. A conversa de uma tarefa (trabalho, revisão, deploy) fecha depois de 2 minutos parada, porque o próximo passo dela vem do Club, que a reabre quando chega a hora.</li>
+        <li><b>Pouca memória</b>: com a RAM livre abaixo da <b class="ui">Reserva de RAM livre</b> das Configurações, o Club fecha antes a conversa parada há mais tempo, uma por minuto, e abrir uma conversa nova fecha até 2 paradas para caber. A revisão automática não fecha nada: espera a memória voltar e tenta de novo sozinha. Nunca fecha conversa com turno em andamento, pergunta ou permissão esperando você. Mandar mensagem numa conversa fechada a reabre (leva alguns segundos), sem gasto extra de tokens.</li>
         <li><b class="ui">Arquivar</b> uma conversa também fecha seu processo: se estiver trabalhando, pede confirmação; se o servidor recusar, mostra o motivo e não arquiva. Ao arquivar funcionário ou projeto, só as conversas paradas fecham; as que trabalham continuam abertas e a tela avisa.</li>
         <li><b class="ui">Duplicar</b>: uma cópia da conversa, com todo o histórico, para tentar outro caminho sem perder a original.</li>
         <li>O seletor <b class="ui">Conversa</b> lista as conversas agrupadas por dia. As <b>ativas</b> (com o processo aberto) levam <b class="ui">· ativa</b> no fim; as demais aparecem em cinza (onde o navegador permite; no celular a cor não muda, vale o texto). Mandar mensagem numa conversa que não está ativa a reabre: confira antes de escolher.</li>
@@ -3301,6 +3303,10 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
   <section class="blk" id="erros-comuns" aria-labelledby="erros-comuns-t">
     <h3 id="erros-comuns-t">Erros comuns</h3>
     <ul class="fixes">
+      <li>
+        <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span>A caixa <b class="ui">Inbox</b> avisa que o quadro de tarefas foi recuperado</span></p>
+        <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>O arquivo do quadro ficou ilegível (por exemplo, queda de energia no meio de uma gravação). O Club voltou para a cópia boa mais nova (feita no máximo a cada 10 minutos) e guardou o arquivo estragado ao lado, em <code>.myco</code>. Confira as tarefas mexidas logo antes da queda.</span></p>
+      </li>
       <li>
         <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span><b class="ui">Mesclar em {base}</b> não aparece</span></p>
         <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>A tarefa não está numa worktree. Marque <b class="ui">Trabalhar numa worktree própria</b> na ficha de quem executa (o projeto precisa ser git).</span></p>

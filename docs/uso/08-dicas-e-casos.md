@@ -181,6 +181,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 
 | Problema | O que fazer |
 | --- | --- |
+| A caixa **Inbox** avisa que o quadro de tarefas foi recuperado | O arquivo do quadro ficou ilegível (por exemplo, queda de energia no meio de uma gravação). O Club voltou para a cópia boa mais nova (feita no máximo a cada 10 minutos) e guardou o arquivo estragado ao lado, em `.myco`. Confira as tarefas mexidas logo antes da queda. |
 | **Mesclar em {base}** não aparece | A tarefa não está numa worktree. Marque **Trabalhar numa worktree própria** na ficha de quem executa (o projeto precisa ser git). |
 | **Aprovar entrega** marcou **Finalizado**, mas o código não entrou na branch | Em card sem cópia própria, esse botão não roda testes nem mescla. Use **Mesclar em {base}**. Com a cópia do card ele pede a junção e só vai a **Finalizado** se ela entrar. |
 | A revisão automática parou | O limite são 3 revisões automáticas (o cartão mostra `n/3`). Use **Delegar revisão** para o resto. |
