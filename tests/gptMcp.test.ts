@@ -665,7 +665,9 @@ describe('encerramento do MCP e cancelamento', () => {
       expect(await p).toMatchObject({ aborted: true });
       expect(Date.now() - t0).toBeGreaterThanOrEqual(450); // esperou a carência antes do SIGKILL
       expect(await alive(pai)).toBe(false);
-      expect(await alive(neto)).toBe(false);
+      // O neto leva o SIGKILL do grupo, mas a morte dele não é síncrona com o fim do pai (e some entre o `kill(0)` e o /proc conta como vivo): espera, como no teste acima.
+      // Falhou assim no CI do PR 83.
+      await until(async () => !(await alive(neto)), 2_000);
     } finally {
       for (const [k, v] of Object.entries(old)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
