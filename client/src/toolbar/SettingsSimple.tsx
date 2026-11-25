@@ -31,6 +31,7 @@ export const simpleInfo = (group: SimpleGroupId, key: SimpleKey, wide = false): 
 /** Ordem dos itens dentro de cada cartão (a do menu avançado segue outra, por isso fica aqui). */
 export const SIMPLE_ORDER: readonly SimpleKey[] = [
   'uiLevel',
+  'profile',
   'theme',
   'language',
   'animations',

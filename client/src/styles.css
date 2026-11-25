@@ -1434,6 +1434,10 @@ textarea.q-field { resize: vertical; }
 }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
+/* Perfil de uso (toolbar/ProfilePicker.tsx): 4 botões que quebram linha no celular, e a frase do perfil ativo logo abaixo. */
+.profile-picker { display: grid; gap: 6px; min-width: 0; }
+.profile-options { flex-wrap: wrap; }
+.profile-desc { margin: 0; }
 /* Conversa: qual delas, lista de tarefas do funcionário, ajustes, menu de "/" e "@", anexos. */
 .chat-convos { display: flex; gap: 6px; align-items: center; margin: 0px 0; }
 /* Conversa sem processo aberto: apagada na lista (ainda dá para abrir; mandar mensagem nela a reativa). Em celular a cor da opção é ignorada: lá vale o "· ativa" do texto. */
