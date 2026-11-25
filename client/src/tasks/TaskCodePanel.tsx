@@ -7,6 +7,7 @@ import { t, locale } from '../i18n';
 import { BranchIcon } from '../icons';
 import { ReviewStatus } from './ReviewDelegate';
 import { askConfirm } from '../lib/dialogStore';
+import { DeployPanel } from './DeployPanel';
 
 // Código da tarefa, no cartão: o que mudou, testes, mesclar, status da revisão e pedir deploy.
 
@@ -227,26 +228,37 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
                 {t('tasks.openConversation')}
               </button>
             </span>
-          ) : infra.length ? (
-            <>
-              <select value={deployer} onChange={(e) => setDeployer(e.target.value)} aria-label={t('tasks.whoDeploys')}>
-                {infra.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} — {s.role}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="btn-secondary"
-                disabled={!!busy || !deployer || cancelled}
-                title={cancelled ? t('tasks.cancelledNoCode') : t('tasks.deployHint')}
-                onClick={() => void run('deploy', () => withUsageConfirm((force) => api.taskDeploy(projectId, task.id, deployer, force)))}
-              >
-                {t('tasks.askDeploy')}
-              </button>
-            </>
+          ) : cancelled ? (
+            <span className="muted small">{t('tasks.cancelledNoCode')}</span>
           ) : (
-            <span className="muted small">{t('tasks.noInfraStaff')}</span>
+            // Com `.github/workflows/deploy.yml` no projeto, o Club dispara o workflow (deploy como código); sem ele, a conversa SSH com o funcionário de infra, como sempre.
+            <DeployPanel
+              projectId={projectId}
+              taskId={task.id}
+              fallback={
+                infra.length ? (
+                  <>
+                    <select value={deployer} onChange={(e) => setDeployer(e.target.value)} aria-label={t('tasks.whoDeploys')}>
+                      {infra.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} — {s.role}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="btn-secondary"
+                      disabled={!!busy || !deployer || cancelled}
+                      title={cancelled ? t('tasks.cancelledNoCode') : t('tasks.deployHint')}
+                      onClick={() => void run('deploy', () => withUsageConfirm((force) => api.taskDeploy(projectId, task.id, deployer, force)))}
+                    >
+                      {t('tasks.askDeploy')}
+                    </button>
+                  </>
+                ) : (
+                  <span className="muted small">{t('tasks.noInfraStaff')}</span>
+                )
+              }
+            />
           )}
         </div>
       )}

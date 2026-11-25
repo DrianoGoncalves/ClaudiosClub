@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { resolveCaller, SessionTokens } from '../server/callers';
 import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
 import { TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
-import type { Engine, StaffProfile, StaffQueue } from '../shared/model';
+import type { Engine, StaffProfile, StaffQueue, Task } from '../shared/model';
 import { tempDirs } from './support/tmp';
 
 // t-795f8d: um escritor por vez no checkout principal (`.myco/board.json`, `singleWriter`). Com a opção ligada, só um card por vez segura a vaga de escrita do projeto (fazendo, revisão, Aguardar, ou
@@ -18,7 +19,10 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 const tmp = tempDirs();
 let root: string;
 beforeAll(async () => {
-  root = await tmp('myco-writer-');
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-writer-'));
+});
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 const PAST = '2020-01-01T00:00:00';
@@ -538,5 +542,56 @@ describe.each<[Engine, Engine]>([
     expect(out).toMatchObject({ status: 'doing' });
     expect(out!.resourceWait).toBeFalsy();
     expect(b.h.delivered.filter((d) => d.sessionId === plan.work).at(-1)!.text).toContain('O plano foi recusado por Gio');
+  });
+});
+
+// Aviso velho de espera pela vaga (`resourceWait.holder`) sai na rodada da fila (`TaskService.clearStaleSlotWaits`): o motivo só saía quando a tarefa começava, e quem espera a vez do próprio
+// funcionário ocupado nunca chegava lá (o caso real: 13 cartões de quem tem worktree, com a opção já desligada, mostrando "esperando a vez de editar" por dias). Funcionário ocupado nos testes
+// (`h.outside`): a fila não roda, então só a limpeza mexe no motivo.
+describe('aviso velho de espera pela vaga', () => {
+  const tasksFile = (dir: string) => path.join(dir, '.myco', 'tasks.json');
+  const patch = async (dir: string, fn: (all: Task[]) => Task[]) => fs.writeFile(tasksFile(dir), JSON.stringify(fn(JSON.parse(await fs.readFile(tasksFile(dir), 'utf8')) as Task[]), null, 2));
+
+  it('quem ainda segura a vaga: o aviso de quem espera por ele fica', async () => {
+    const b = await club('stale-segura');
+    const { wait } = await waiter(b);
+    expect((await b.get(wait.id)).resourceWait?.holder).toBeTruthy();
+    b.h.outside = true;
+    await b.svc.tick(new Date());
+    expect((await b.get(wait.id)).resourceWait?.holder).toBeTruthy();
+  });
+
+  it('opção desligada direto no board.json, com o funcionário ocupado: o aviso sai e a tarefa não começa por isso', async () => {
+    const b = await club('stale-desligada');
+    const { wait } = await waiter(b);
+    const board = path.join(b.dir, '.myco', 'board.json');
+    await fs.writeFile(board, JSON.stringify({ ...JSON.parse(await fs.readFile(board, 'utf8')), singleWriter: false }));
+    b.h.outside = true;
+    await b.svc.tick(new Date());
+    const after = await b.get(wait.id);
+    expect(after.resourceWait).toBeFalsy();
+    expect(after.sessionId).toBeFalsy();
+    expect(after.status).toBe('todo');
+  });
+
+  it('o card citado já não segura (cancelado): o aviso sai', async () => {
+    const b = await club('stale-cancelado');
+    const { hold, wait } = await waiter(b);
+    await patch(b.dir, (all) => all.map((t) => (t.id === hold.id ? { ...t, status: 'cancelled' } : t)));
+    b.h.outside = true;
+    await b.svc.tick(new Date());
+    expect((await b.get(wait.id)).resourceWait).toBeFalsy();
+  });
+
+  it('dono com worktree própria: o aviso sai, mesmo com a vaga ocupada; o do vizinho sem worktree fica', async () => {
+    const b = await club('stale-worktree');
+    const { hold, wait } = await waiter(b);
+    const wt = await b.create('wt-1', 'Na worktree');
+    const since = new Date().toISOString();
+    await patch(b.dir, (all) => all.map((t) => (t.id === wt ? { ...t, queuedAt: since, resourceWait: { reason: 'velho', since, holder: hold.id } } : t)));
+    b.h.outside = true;
+    await b.svc.tick(new Date());
+    expect((await b.get(wt)).resourceWait).toBeFalsy();
+    expect((await b.get(wait.id)).resourceWait?.holder).toBe(hold.id);
   });
 });

@@ -593,7 +593,7 @@ describe('a fiação do servidor (index.ts)', () => {
     expect(src).toContain('onCodexPasswordPolicyFailure: () => void codexPolicy.noteFailure(),');
     expect(src).toContain('resolver.codexSandbox(codexSandboxInboxItem(sandbox))');
     expect(src).toContain('codexPolicy.dismiss(b.id)');
-    expect(src).toMatch(/regex\(\/\^\(error\|cap\|commit\|guardoff\|codexsandbox\):/);
+    expect(src).toMatch(/regex\(\/\^\(error\|cap\|commit\|guardoff\|codexsandbox\|board\):/);
     // O Club nunca muda a política: nenhum arquivo do servidor roda o comando que ele sugere.
     for (const file of ['codexPasswordPolicy.ts', 'index.ts', path.join('chat', 'codexProcess.ts'), path.join('chat', 'manager.ts')]) {
       const text = await fs.readFile(path.join(__dirname, '..', 'server', file), 'utf8');

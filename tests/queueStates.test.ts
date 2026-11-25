@@ -31,7 +31,7 @@ function deferred<T = void>() {
 async function club(dirName: string, opts: { reviewer?: boolean } = {}) {
   const dir = path.join(root, dirName);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+  await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run' } }));
   // O arquivo que o card "alterou": as provas da entrega (testes relacionados) rodam sobre os arquivos alterados.
   await fs.mkdir(path.join(dir, 'src'), { recursive: true });
   await fs.writeFile(path.join(dir, 'src', 'feature.ts'), 'export const feature = 1;\n');

@@ -144,7 +144,7 @@ describe('i18n do interruptor e da espera', () => {
 });
 
 describe('o interruptor "Um card escrevendo por vez"', () => {
-  const review: BoardReviewState = { config: { autoReview: false, reviewerId: null }, missing: false, error: null, saving: false, save: async () => {} };
+  const review: BoardReviewState = { config: { autoReview: false, reviewerId: null }, missing: false, error: null, saving: false, save: async () => true };
   const writer = (singleWriter: boolean | null, extra: Partial<BoardWriterState> = {}): BoardWriterState => ({ config: singleWriter === null ? null : { singleWriter }, error: null, saving: false, save: async () => {}, ...extra });
   const render = (w?: BoardWriterState) => renderToStaticMarkup(createElement(BoardReview, { review, writer: w, staff: [] }));
 

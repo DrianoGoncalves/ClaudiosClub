@@ -154,7 +154,8 @@ export async function mergeCode(
     );
   const code = await readCode(projectPath, place, end);
   if (!code.canMerge || !code.base) throw new CodeError(code.whyNot ?? 'não dá para mesclar agora', code.base && (await dirtyCount(projectPath)) ? 'main-dirty' : null);
-  const test = code.test;
+  // Os testes ligados ao que a mescla traz (ver `scopedTestCommand`); a suíte inteira fica no CI do PR.
+  const test = code.test ? await scopedTestCommand(projectPath, code.files.map((f) => f.path)) : null;
   if (!test && !opts.skipTests) throw new CodeError('não achei testes neste projeto (npm test, composer test ou phpunit)', 'no-tests');
 
   if (code.uncommitted && !end) {
@@ -174,7 +175,8 @@ export async function mergeCode(
   }
   let tests: TestRun | null = null;
   if (test) {
-    tests = await runTests(projectPath, test, opts.testTimeoutMs);
+    // Na fila pesada como a suíte, mesmo escopado: um arquivo muito importado faz o `related` rodar quase tudo.
+    tests = await runTests(projectPath, test, opts.testTimeoutMs, 'npm test');
     if (!tests.ok) {
       await git(projectPath, ['merge', '--abort']).catch(() => {});
       if (tests.timedOut) throw new CodeError(`os testes passaram do tempo-limite de ${formatLimit(tests.limitMs ?? TEST_TIMEOUT_MS)} com a mescla: nada foi mesclado (não é falha de teste: confira se a máquina está cheia e tente de novo)`, 'tests-timeout', tests);
@@ -189,16 +191,17 @@ export async function mergeCode(
     }
   });
   const sha = (await git(projectPath, ['rev-parse', '--short', 'HEAD'])).trim();
-  await rememberSuite(projectPath, tests);
+  await rememberSuite(projectPath, tests, 'HEAD', code.test);
   return { sha, base: code.base, branch: place.branch, tests };
 }
 
 /**
  * Guarda a suíte completa da junção para o baseline das provas da entrega (ver proofBaseline.ts): a árvore testada é a do commit `rev` (o HEAD depois de a junção commitar). Nunca derruba a
- * junção: a memória é só ganho de tempo.
+ * junção: a memória é só ganho de tempo. Rodada escopada (`scopedTestCommand`: só os testes ligados ao que mudou) não é a suíte: o baseline completo diria "não falhava" de teste que nem rodou,
+ * então só vale a rodada do comando inteiro do projeto (`full`).
  */
-async function rememberSuite(projectPath: string, tests: TestRun | null, rev = 'HEAD'): Promise<void> {
-  if (!tests) return;
+async function rememberSuite(projectPath: string, tests: TestRun | null, rev: string, full: string | null): Promise<void> {
+  if (!tests || tests.command !== full) return;
   const sha = (await git(projectPath, ['rev-parse', '--verify', rev]).catch(() => '')).trim();
   if (sha) await recordSuite(projectPath, sha, tests).catch(() => {});
 }
@@ -290,7 +293,10 @@ async function mergeCard(
     }
 
     if (test) {
-      tests = await runTests(place.path, test, opts.testTimeoutMs);
+      // O que o ff leva ao principal, já com ele dentro do card: os testes ligados a isso (ver `scopedTestCommand`); a suíte inteira fica no CI do PR.
+      const brought = (await git(place.path, ['diff', '--name-only', '-z', mainHead, 'HEAD']).catch(() => '')).split('\0').filter(Boolean);
+      // Na fila pesada como a suíte, mesmo escopado: um arquivo muito importado faz o `related` rodar quase tudo.
+      tests = await runTests(place.path, (await scopedTestCommand(place.path, brought)) ?? test, opts.testTimeoutMs, 'npm test');
       if (!tests.ok) {
         if (tests.timedOut) throw new CodeError(`os testes passaram do tempo-limite de ${formatLimit(tests.limitMs ?? TEST_TIMEOUT_MS)} no worktree do card: nada foi mesclado (não é falha de teste: confira se a máquina está cheia e tente de novo)`, 'tests-timeout', tests);
         throw new CodeError('os testes falharam no worktree do card com o principal dentro: nada foi mesclado', 'tests-failed', tests);
@@ -309,7 +315,7 @@ async function mergeCard(
     // Já está no principal (nada a juntar): não há commit a criar.
     const inMain = await git(projectPath, ['merge-base', '--is-ancestor', tip, mainHead]).then(() => true, () => false);
     if (inMain) {
-      await rememberSuite(projectPath, tests, tip);
+      await rememberSuite(projectPath, tests, tip, test);
       return { sha: (await git(projectPath, ['rev-parse', '--short', mainHead])).trim(), base, branch, tests };
     }
     const tree = await parse(place.path, `${tip}^{tree}`);
@@ -327,7 +333,7 @@ async function mergeCard(
       throw new CodeError(`não deu para juntar o card no principal: ${firstLine(text)}`);
     }
     // A árvore do commit de junção é a da ponta do card (a que os testes viram).
-    await rememberSuite(projectPath, tests, joined);
+    await rememberSuite(projectPath, tests, joined, test);
     return { sha: (await git(projectPath, ['rev-parse', '--short', 'HEAD'])).trim(), base, branch, tests };
   }
   throw new CodeError('o principal andou durante os testes várias vezes seguidas: a junção tenta de novo');
@@ -358,6 +364,38 @@ export async function abortStaleMerge(projectPath: string, end: string): Promise
   await git(projectPath, ['merge', '--abort']);
   return true;
 }
+
+/** Nome de arquivo que vai na linha de comando sem nada para o shell interpretar (o `runTests` roda com shell). */
+const SAFE_TEST_ARG = /^[\w@./-]+$/;
+/** Teto da linha de comando dos testes relacionados (o cmd do Windows aceita ~8 mil caracteres): passou disso, a suíte do projeto. */
+export const RELATED_MAX_CHARS = 6_000;
+
+/**
+ * O comando de testes da entrega e da mescla. Com vitest e a lista dos arquivos mudados, só os testes ligados a eles (`vitest related`), com no máximo 2 processos de teste:
+ * a suíte inteira levava de 10 a 30 min nesta máquina (HDD, 4 núcleos, 8 GB) e roda em 3 min no CI do PR, que segue com ela (assim como o botão "rodar testes" do cartão).
+ * Sem vitest, sem lista, com nome estranho ou lista grande demais: o comando de testes do projeto, como antes. `MYCO_FULL_TESTS=1` força a suíte inteira (SPEC "Desempenho" 9).
+ */
+export async function scopedTestCommand(dir: string, files: readonly string[] | null | undefined): Promise<string | null> {
+  const full = await detectTest(dir);
+  if (full !== 'npm test' || !files?.length || process.env.MYCO_FULL_TESTS === '1') return full;
+  const pkg = await readJson(path.join(dir, 'package.json'));
+  const deps = { ...(pkg?.dependencies as Record<string, unknown> | undefined), ...(pkg?.devDependencies as Record<string, unknown> | undefined) };
+  if (!deps.vitest) return full;
+  const rel = [...new Set(files.map((f) => f.replaceAll('\\', '/')))];
+  if (!rel.every((f) => SAFE_TEST_ARG.test(f) && !f.startsWith('-') && !f.split('/').includes('..'))) return full;
+  // Mudança na configuração (dependências, tsconfig, config do vitest/vite, .env) mexe em todos os testes: a suíte inteira.
+  if (rel.some((f) => TEST_CONFIG_FILE.test(f))) return full;
+  // O `related` só acha teste pelo grafo de imports do código: sem nenhum arquivo de código que exista aqui (só docs/CSS, só remoções, caminho de outro pacote do
+  // monorepo), ele passaria sem rodar nada. Aí, a suíte inteira.
+  const code = rel.filter((f) => CODE_FILE.test(f));
+  const present = await Promise.all(code.map((f) => fs.access(path.join(dir, f)).then(() => true, () => false)));
+  if (!present.some(Boolean)) return full;
+  const command = `npx vitest related ${rel.join(' ')} --run --passWithNoTests --maxWorkers=2`;
+  return command.length > RELATED_MAX_CHARS ? full : command;
+}
+
+const TEST_CONFIG_FILE = /(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|tsconfig[^/]*\.json|(vite|vitest)\.config\.[cm]?[jt]s|\.env[^/]*)$/;
+const CODE_FILE = /\.([cm]?[jt]sx?|vue|svelte)$/;
 
 /** O comando de testes do projeto, se houver um claro. */
 export async function detectTest(dir: string): Promise<string | null> {

@@ -264,6 +264,12 @@ export default defineMessages({
     'tasks.boardReviewRule':
       'O responsável revisa o que outro funcionário fez. O que ele mesmo fez vai para você aprovar ou reprovar. O revisor apontado na tarefa tem prioridade. Vale também para os cards registrados automaticamente.',
     'tasks.boardReviewNobody': 'Precisa de pelo menos um funcionário no projeto',
+    'tasks.flowCompletion': 'Concluir sozinho quando o revisor aprovar',
+    'tasks.flowCompletionAi':
+      'Aprovada pelo revisor, a tarefa vai para Finalizado e a worktree é mesclada no projeto principal sem o seu clique. Vale para o projeto todo.',
+    'tasks.flowCompletionOwner': 'O revisor continua revisando, mas a tarefa aprovada espera a sua aprovação: nada é concluído nem mesclado sem você.',
+    'tasks.flowCompletionNoReviewer': 'Sem revisor (ligue a revisão acima, ou aponte um na tarefa), nada conclui sozinho: a tarefa espera você.',
+    'tasks.flowCompletionDefault': 'Valor padrão do projeto: você ainda não escolheu. Escolha aqui para valer como decisão sua.',
     'tasks.boardCommit': 'Commit automático',
     'tasks.boardCommitSummaryOn': 'commit automático ligado',
     'tasks.boardWriter': 'Um card escrevendo por vez',
@@ -791,6 +797,12 @@ export default defineMessages({
     'tasks.boardReviewRule':
       'The reviewer in charge reviews what another staff member did. What they did themselves goes to you to approve or reject. A reviewer set on the task takes priority. It also applies to automatically registered cards.',
     'tasks.boardReviewNobody': 'Needs at least one staff member on the project',
+    'tasks.flowCompletion': 'Finish on its own when the reviewer approves',
+    'tasks.flowCompletionAi':
+      'Once the reviewer approves, the task moves to Done and its worktree is merged into the main project without your click. Applies to the whole project.',
+    'tasks.flowCompletionOwner': 'The reviewer still reviews, but an approved task waits for your approval: nothing is finished or merged without you.',
+    'tasks.flowCompletionNoReviewer': 'Without a reviewer (turn on the review above, or set one on the task), nothing finishes on its own: the task waits for you.',
+    'tasks.flowCompletionDefault': 'Project default: you have not chosen yet. Pick here for it to count as your decision.',
     'tasks.boardCommit': 'Automatic commit',
     'tasks.boardCommitSummaryOn': 'automatic commit on',
     'tasks.boardWriter': 'One card writing at a time',
@@ -1318,6 +1330,12 @@ export default defineMessages({
     'tasks.boardReviewRule':
       'El responsable revisa lo que hizo otro empleado. Lo que hizo él mismo te llega a ti para aprobar o rechazar. El revisor indicado en la tarea tiene prioridad. También vale para las tarjetas registradas automáticamente.',
     'tasks.boardReviewNobody': 'Hace falta al menos un empleado en el proyecto',
+    'tasks.flowCompletion': 'Concluir sola cuando el revisor apruebe',
+    'tasks.flowCompletionAi':
+      'Aprobada por el revisor, la tarea pasa a Finalizado y el worktree se mezcla en el proyecto principal sin tu clic. Vale para todo el proyecto.',
+    'tasks.flowCompletionOwner': 'El revisor sigue revisando, pero la tarea aprobada espera tu aprobación: nada se concluye ni se mezcla sin ti.',
+    'tasks.flowCompletionNoReviewer': 'Sin revisor (activa la revisión de arriba, o indica uno en la tarea), nada se concluye solo: la tarea te espera.',
+    'tasks.flowCompletionDefault': 'Valor predeterminado del proyecto: aún no elegiste. Elige aquí para que cuente como decisión tuya.',
     'tasks.boardCommit': 'Commit automático',
     'tasks.boardCommitSummaryOn': 'commit automático activado',
     'tasks.boardWriter': 'Una tarjeta escribiendo a la vez',

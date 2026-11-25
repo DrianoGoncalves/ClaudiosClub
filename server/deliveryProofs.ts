@@ -6,7 +6,7 @@ import { linkDeps, unlinkAll } from './cardWorktree';
 import { HeavyAbortedError, type HeavyWaitFn } from './heavyQueue';
 import { fileKey, putBaseline, readBaseline, suiteKey, tscKey, type BaselineEntry, type BaselineStore } from './proofBaseline';
 import { gitReason, hasWorktree, runGit, type GitRun } from './staff/worktree';
-import { detectTest, formatLimit } from './taskCode';
+import { detectTest, formatLimit, scopedTestCommand } from './taskCode';
 import { IDS_MAX, ISOLATED_MAX, importGraph, isolateFailures, testFileOf } from './testFailures';
 
 // As provas que o Claudio’s Club gera na entrega de um card que editou código: a checagem de tipos e os testes RELACIONADOS aos arquivos alterados (nunca a suíte inteira: ela roda na junção), no mesmo checkout da
@@ -131,11 +131,12 @@ export async function testsPlan(cwd: string, changed: string[], cfg: ProofConfig
   const test = typeof script === 'string' ? script.trim() : '';
   let related: ((list: string) => string) | null = null;
   let only: ((files: string[]) => string) | null = null;
+  let vitest = false;
   if (custom) {
     related = (list) => custom.replace(/\{files\}/g, list);
     only = (files) => custom.replace(/\{files\}/g, files.join(' '));
   } else if (/^vitest(\s+run)?$/.test(test)) {
-    related = (list) => `npx vitest related --run --passWithNoTests ${list}`;
+    vitest = true;
     only = (files) => `npx vitest run ${files.join(' ')}`;
   } else if (/^jest$/.test(test)) {
     related = (list) => `npx jest --findRelatedTests --passWithNoTests ${list}`;
@@ -149,7 +150,14 @@ export async function testsPlan(cwd: string, changed: string[], cfg: ProofConfig
   for (const f of changed) if (CODE_FILE.test(f) && testFileOf(f) && (await isFile(path.join(cwd, f)))) files.push(f);
   if (!files.length) return na(changed.length ? 'nenhum arquivo de código existente foi alterado' : 'a tarefa não tem lista de arquivos alterados');
   if (files.length > RELATED_MAX) return { plan: { kind: 'unavailable', reason: `${files.length} arquivos alterados: lista grande demais para rodar só os relacionados (a suíte inteira não roda na entrega, só na junção da worktree, quando há)` }, onlyFiles: null };
-  return { plan: { kind: 'run', command: related(files.join(' ')) }, onlyFiles: only };
+  if (vitest) {
+    // O mesmo comando da mescla (`scopedTestCommand`): vitest related com no máximo 2 processos (SPEC "Desempenho" 9). Se ele cair para a suíte inteira (vitest fora das dependências, linha grande demais), ela
+    // não roda na entrega, só com `MYCO_FULL_TESTS=1`.
+    const command = await scopedTestCommand(cwd, files);
+    if (command && (command.startsWith('npx vitest related ') || process.env.MYCO_FULL_TESTS === '1')) return { plan: { kind: 'run', command }, onlyFiles: only };
+    return { plan: { kind: 'unavailable', reason: 'o `vitest related` não coube (o vitest não está nas dependências do projeto ou a lista de arquivos passa do que cabe na linha de comando): a suíte inteira não roda na entrega (só na junção da worktree, quando há)' }, onlyFiles: null };
+  }
+  return { plan: { kind: 'run', command: related!(files.join(' ')) }, onlyFiles: only };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------

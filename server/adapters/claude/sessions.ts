@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { LiveSession, Session } from '../../../shared/model';
@@ -117,6 +117,7 @@ export async function readProjectSessions(
 ): Promise<Session[]> {
   const cutoff = archiveCutoff(opts);
   const files = (await listDir(projectDir)).filter((e) => e.isFile() && e.name.endsWith('.jsonl'));
+  forgetGoneTranscripts(projectDir, new Set(files.map((e) => e.name)));
   const sessions = await Promise.all(
     files.map(async (e): Promise<Session | null> => {
       const id = path.basename(e.name, '.jsonl');
@@ -150,6 +151,66 @@ async function recentlyActive(projectDir: string, id: string, cutoff: number): P
   return last >= cutoff;
 }
 
+/** O que sai do começo e do fim de um transcript (só texto: o guardado é dividido entre leitores e nunca alterado). */
+interface TranscriptFacts {
+  entrypoint: string | null;
+  gitBranch: string | null;
+  version: string | null;
+  startedAt: string | null;
+  customTitle: string | null;
+  agentName: string | null;
+  topic: string | null;
+}
+
+/**
+ * Transcript mexido há menos que isso não é guardado: o mtime do Windows anda em degraus de ~15,6 ms, e duas gravações seguidas de mesmo tamanho
+ * dariam a mesma versão (a mesma regra do `tasks.json`, SPEC "Desempenho" 1).
+ */
+export const TRANSCRIPT_RACY_MS = 3_000;
+/** Arquivo do transcript → o que foi lido dele e a versão (mtime, ctime, tamanho, inode) em que foi lido. */
+const factsCache = new Map<string, { version: string; facts: TranscriptFacts }>();
+
+/** Quantos transcripts estão guardados (só os testes olham). */
+export const transcriptCacheSize = (): number => factsCache.size;
+
+const transcriptVersion = (st: Stats): string => `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
+
+/**
+ * Começo e fim do transcript, lidos uma vez por versão do arquivo (SPEC "Desempenho" 2): o `/api/board` passa por todo transcript recente, e
+ * reler 2 × 64 KB de cada um a cada montagem ocupava o HDD. O que muda sem mexer no transcript (ao vivo, `custom-title.json`, subagents)
+ * fica fora daqui e é lido a cada vez.
+ */
+async function transcriptFacts(file: string, st: Stats, now = Date.now()): Promise<TranscriptFacts> {
+  const version = transcriptVersion(st);
+  const hit = factsCache.get(file);
+  if (hit && hit.version === version) return hit.facts;
+  const { head, tail } = await readHeadTail(file);
+  const headLines = head.map(parseLine);
+  // Arquivo pequeno: head e tail são o mesmo array (não entra duas vezes no assunto).
+  const tailLines = head === tail ? headLines : tail.map(parseLine);
+  const newestFirst = [...tailLines].reverse();
+  const origin = headLines.find((l) => l.entrypoint);
+  const facts: TranscriptFacts = {
+    entrypoint: origin?.entrypoint ?? null,
+    gitBranch: origin?.gitBranch ?? null,
+    version: origin?.version ?? null,
+    startedAt: headLines.find((l) => l.timestamp)?.timestamp ?? null,
+    customTitle: newestFirst.find((l) => l.type === 'custom-title' && l.customTitle)?.customTitle ?? null,
+    agentName: newestFirst.find((l) => l.type === 'agent-name' && l.agentName)?.agentName ?? null,
+    topic: sessionTopic(headLines, head === tail ? [] : tailLines),
+  };
+  if (now - st.mtimeMs >= TRANSCRIPT_RACY_MS) factsCache.set(file, { version, facts });
+  else factsCache.delete(file);
+  return facts;
+}
+
+/** Esquece os transcripts que sumiram da pasta (apagados pela retenção ou à mão): o guardado não cresce sem fim. */
+function forgetGoneTranscripts(projectDir: string, present: ReadonlySet<string>): void {
+  for (const file of factsCache.keys()) {
+    if (path.dirname(file) === projectDir && !present.has(path.basename(file))) factsCache.delete(file);
+  }
+}
+
 async function readSession(
   projectDir: string,
   id: string,
@@ -157,34 +218,22 @@ async function readSession(
   club: boolean,
 ): Promise<Session> {
   const file = path.join(projectDir, `${id}.jsonl`);
-  const [stat, { head, tail }] = await Promise.all([fs.stat(file), readHeadTail(file)]);
+  const stat = await fs.stat(file);
+  const facts = await transcriptFacts(file, stat);
   // Do Club: o rastreador lê o transcript inteiro (incremental), então acha a virada mesmo no meio. Grande demais: head/tail.
   const tracked = club ? await claudeSubject(file) : null;
-  const headLines = head.map(parseLine);
-  const tailLines = tail.map(parseLine).reverse();
-
-  const origin = headLines.find((l) => l.entrypoint);
-  const started = headLines.find((l) => l.timestamp);
-  const titleLine = tailLines.find((l) => l.type === 'custom-title' && l.customTitle);
-  const agentLine = tailLines.find((l) => l.type === 'agent-name' && l.agentName);
   const liveInfo = live.get(id) ?? null;
 
   return {
     id,
-    title:
-      (await readCustomTitle(path.join(projectDir, id))) ??
-      titleLine?.customTitle ??
-      agentLine?.agentName ??
-      liveInfo?.name ??
-      null,
-    // Arquivo pequeno: head e tail são o mesmo array (não entra duas vezes).
-    topic: tracked ? tracked.topic : sessionTopic(headLines, head === tail ? [] : tail.map(parseLine)),
+    title: (await readCustomTitle(path.join(projectDir, id))) ?? facts.customTitle ?? facts.agentName ?? liveInfo?.name ?? null,
+    topic: tracked ? tracked.topic : facts.topic,
     // Conversa de revisão do Club (sem IA, sem texto traduzido: a tela compõe com o rótulo da coluna). Sem o rastreador, fica ausente.
     ...(tracked && { reviewTask: reviewTaskOf(tracked) }),
-    entrypoint: origin?.entrypoint ?? liveInfo?.entrypoint ?? null,
-    gitBranch: origin?.gitBranch ?? null,
-    version: origin?.version ?? null,
-    startedAt: started?.timestamp ?? null,
+    entrypoint: facts.entrypoint ?? liveInfo?.entrypoint ?? null,
+    gitBranch: facts.gitBranch,
+    version: facts.version,
+    startedAt: facts.startedAt,
     updatedAt: stat.mtime.toISOString(),
     sizeBytes: stat.size,
     subagentCount: await countSubagents(path.join(projectDir, id, 'subagents')),

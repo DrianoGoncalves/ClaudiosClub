@@ -354,7 +354,7 @@ describe('tarefa pedida por um gestor', () => {
   it('a entrega volta para a conversa em que o gestor pediu, já com os testes rodados pelo Claudio’s Club', async () => {
     const dir = path.join(root, 'gestor-testes');
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run' } }));
     const notified: Array<{ text: string; sessionId: string | null | undefined }> = [];
     const ran: string[] = [];
     const people: Record<string, StaffProfile> = {
@@ -384,7 +384,7 @@ describe('tarefa pedida por um gestor', () => {
     all.find((x) => x.id === t.id)!.changedFiles = ['src/botao.ts'];
     await fs.writeFile(file, JSON.stringify(all));
     await svc.onTurnDone('s-lu2');
-    const related = 'npx vitest related --run --passWithNoTests src/botao.ts';
+    const related = 'npx vitest related src/botao.ts --run --passWithNoTests --maxWorkers=2';
     expect(ran).toEqual([`${dir}|${related}`]);
     // A saída não é a do vitest (sem falha lida): a prova fica indisponível e diz por quê, em vez de inventar falha.
     expect(notified).toEqual([{ sessionId: 's-gio-pediu', text: expect.stringContaining('Testes relacionados aos arquivos alterados: INDISPONÍVEL') }]);
@@ -812,7 +812,7 @@ describe('conversa da tarefa que morreu no meio do turno', () => {
   it('morreu de novo, pedida por um gestor: ele é avisado da interrupção e a revisão automática abre, sem testes (t-2a8ee8)', async () => {
     const dir = path.join(root, 'orfa-gestor');
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run' } }));
     const sent: Array<{ staffId: string; text: string }> = [];
     const notified: Array<{ staffId: string; text: string }> = [];
     const ran: string[] = [];
@@ -1632,7 +1632,7 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
   async function selfFlow(dirName: string, opts: { failReview?: boolean } = {}) {
     const dir = path.join(root, dirName);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run' } }));
     const sent: Array<{ staffId: string; text: string; session: string }> = [];
     const notified: Array<{ staffId: string; text: string; sessionId: string | null | undefined }> = [];
     const texts = new Map<string, string>();
@@ -1689,7 +1689,7 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
     await svc.onTurnDone('s-1');
     expect(notified).toEqual([]);
     expect(sent.at(-1)).toMatchObject({ staffId: 'gio-1', session: 's-2' });
-    expect(sent.at(-1)!.text).toContain('(`npx vitest related --run --passWithNoTests src/botao.ts`, código de saída 0, 2 s)');
+    expect(sent.at(-1)!.text).toContain('(`npx vitest related src/botao.ts --run --passWithNoTests --maxWorkers=2`, código de saída 0, 2 s)');
     expect(await current()).toMatchObject({ status: 'review', tests: { ok: true }, review: { staffId: 'gio-1', sessionId: 's-2' } });
   });
 

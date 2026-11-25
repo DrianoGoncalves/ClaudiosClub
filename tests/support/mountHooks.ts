@@ -39,6 +39,7 @@ export function mountHooks<P extends object>(Comp: (p: P) => unknown, props: P) 
       useRef: (init: unknown) => (slots[i] ??= { current: init }, slots[i++]),
       useMemo: (fn: () => unknown) => (i++, fn()),
       useCallback: (fn: unknown) => (i++, fn),
+      useId: () => `:id${i++}:`,
       useEffect: (fn: () => unknown) => {
         i++;
         effects.push(fn);

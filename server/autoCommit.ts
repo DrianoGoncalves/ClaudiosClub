@@ -113,7 +113,7 @@ export function commitMessage(title: string, taskId: string): string {
  * Quantos dos arquivos da tarefa ainda têm mudança no git (só leitura: é como a caixa sabe que o aviso do commit já passou, ver `server/inboxResolved.ts`). null = não dá para dizer: sem lista,
  * lista no teto (pode estar cortada), caminho que não é do projeto, repositório fora de condição de commit (ver `inspectRepo`) ou git que falhou. Nunca lança.
  */
-export async function pendingChanges(dir: string, files: string[] | undefined): Promise<number | null> {
+export async function pendingChanges(dir: string, files: string[] | undefined, view = false): Promise<number | null> {
   const list = [...new Set(files ?? [])];
   if (!list.length || list.length >= CHANGED_FILES_MAX) return null;
   const rels: string[] = [];
@@ -123,12 +123,19 @@ export async function pendingChanges(dir: string, files: string[] | undefined): 
     rels.push(rel);
   }
   try {
+    if (view) {
+      const { status } = await repoAndStatusForView(dir, rels);
+      return status ? status.size : null;
+    }
     const repo = await inspectRepo(dir);
     return repo.ok ? (await statusOf(dir, repo.prefix, rels)).size : null;
   } catch {
     return null;
   }
 }
+
+/** O `pendingChanges` da caixa (`InboxResolver.commit`): o repositório e o status do projeto divididos com as outras leituras da tela (ver `viewProbe`). */
+export const pendingChangesForView = (dir: string, files: string[] | undefined): Promise<number | null> => pendingChanges(dir, files, true);
 
 /** Faz o commit dos arquivos da tarefa, ou diz por que não fez. Nunca lança: o motivo vai em `note`. */
 export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult> {
@@ -286,6 +293,74 @@ export async function statusOf(dir: string, prefix: string, rels: string[], git:
       const p = prefix && rel.startsWith(prefix) ? rel.slice(prefix.length) : rel;
       out.set(pathKey(p), { path: p, x: rec[0]!, y: rec[1]! });
     }
+  }
+  return out;
+}
+
+/**
+ * Leituras da tela (a caixa, o contador de commits pendentes, o aviso de commit parcial no quadro): o estado do repositório e o `git status` do projeto
+ * inteiro, UMA vez por projeto para todos que perguntam enquanto a leitura está em curso. Antes, cada aviso de commit rodava sozinho os 11 comandos do
+ * `inspectRepo` mais o `status`, todos em paralelo: com ~50 avisos eram ~540 processos git por leitura da caixa (e o contador e o quadro faziam o mesmo),
+ * e no Windows com HDD a máquina inteira parava por minutos. O status inteiro (sem caminhos) custa o mesmo que o de poucos arquivos. Nada fica guardado
+ * depois de pronto: a próxima leitura vê o git de agora (um commit à mão aparece na hora). O commit de verdade (`commitTaskFiles`) e o refazer não passam por aqui.
+ */
+type ViewProbe = { repo: Repo; status: Map<string, StatusEntry> | null };
+const viewProbes = new Map<string, Promise<ViewProbe>>();
+
+/** O repositório e o status inteiro (por `pathKey` do caminho a partir da raiz do repositório); em curso, quem chega espera a mesma leitura. */
+function viewProbe(dir: string): Promise<ViewProbe> {
+  const key = pathKey(path.resolve(dir));
+  const running = viewProbes.get(key);
+  if (running) return running;
+  const probe = (async (): Promise<ViewProbe> => {
+    const repo = await inspectRepo(dir);
+    if (!repo.ok) return { repo, status: null };
+    const raw = await git(dir, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all'], { env: LITERAL });
+    const status = new Map<string, StatusEntry>();
+    for (const rec of raw.split('\0')) if (rec.length >= 4) status.set(pathKey(rec.slice(3)), { path: rec.slice(3), x: rec[0]!, y: rec[1]! });
+    return { repo, status };
+  })();
+  viewProbes.set(key, probe);
+  const done = () => {
+    if (viewProbes.get(key) === probe) viewProbes.delete(key);
+  };
+  probe.then(done, done);
+  return probe;
+}
+
+/** O `inspectRepo` das leituras da tela (ver `viewProbe`). */
+export async function inspectRepoForView(dir: string): Promise<Repo> {
+  return (await viewProbe(dir)).repo;
+}
+
+/**
+ * O repositório e o `statusOf(rels)` da MESMA leitura da tela (ver `viewProbe`). Quem precisa dos dois usa este: chamar `inspectRepoForView` e depois
+ * `statusForView` faria duas leituras (a primeira já terminou quando a segunda pergunta). `status` null: repositório fora de condição de commit.
+ */
+export async function repoAndStatusForView(dir: string, rels: string[]): Promise<{ repo: Repo; status: Map<string, StatusEntry> | null }> {
+  const probe = await viewProbe(dir);
+  return { repo: probe.repo, status: probe.repo.ok && probe.status ? pickStatus(probe.status, probe.repo.prefix, rels) : null };
+}
+
+/**
+ * O `statusOf` das leituras da tela (ver `viewProbe`): o mesmo resultado (por `pathKey`, caminho a partir do projeto; um caminho pedido que é pasta cobre o que
+ * está dentro, como o pathspec), tirado do status inteiro. Lança se o repositório não está em condição (quem chama já trata, como no `statusOf`).
+ */
+export async function statusForView(dir: string, prefix: string, rels: string[]): Promise<Map<string, StatusEntry>> {
+  const { status } = await viewProbe(dir);
+  if (!status) throw new Error('o git status não está disponível');
+  return pickStatus(status, prefix, rels);
+}
+
+/** Do status inteiro (por `pathKey` a partir da raiz do repositório), o dos caminhos pedidos, como o `statusOf` os devolveria. */
+function pickStatus(status: Map<string, StatusEntry>, prefix: string, rels: string[]): Map<string, StatusEntry> {
+  const exact = new Set(rels.map((r) => pathKey(prefix + r)));
+  const dirs = [...exact].map((k) => (k.endsWith('/') ? k : `${k}/`));
+  const out = new Map<string, StatusEntry>();
+  for (const [k, e] of status) {
+    if (!exact.has(k) && !dirs.some((d) => k.startsWith(d))) continue;
+    const p = prefix && e.path.startsWith(prefix) ? e.path.slice(prefix.length) : e.path;
+    out.set(pathKey(p), { path: p, x: e.x, y: e.y });
   }
   return out;
 }

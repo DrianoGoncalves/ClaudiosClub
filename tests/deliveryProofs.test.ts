@@ -73,7 +73,7 @@ describe('descoberta: o que rodar em cada projeto', () => {
 
   it('tsc: o script do projeto (typecheck, type-check, tsc…) ou o tsconfig com o tsc instalado; só roda se a entrega alterou TypeScript', async () => {
     const dir = path.join(root, 'tipos');
-    await write(dir, 'package.json', JSON.stringify({ scripts: { 'type-check': 'tsc -p .', test: 'vitest run' } }));
+    await write(dir, 'package.json', JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { 'type-check': 'tsc -p .', test: 'vitest run' } }));
     expect(await typecheckPlan(dir, ['src/a.ts'], {})).toEqual({ kind: 'run', command: 'npm run type-check' });
     expect(await typecheckPlan(dir, ['src/a.tsx'], {})).toEqual({ kind: 'run', command: 'npm run type-check' });
     expect(await typecheckPlan(dir, ['src/a.js', 'README.md'], {})).toEqual({ kind: 'na', reason: 'nenhum arquivo TypeScript foi alterado' });
@@ -89,12 +89,12 @@ describe('descoberta: o que rodar em cada projeto', () => {
 
   it('testes: vitest e jest simples rodam só os relacionados; arquivo apagado ou que não é código fica fora; lista longa demais é "indisponível"', async () => {
     const dir = path.join(root, 'testes');
-    await write(dir, 'package.json', JSON.stringify({ scripts: { test: 'vitest run' } }));
+    await write(dir, 'package.json', JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run' } }));
     await write(dir, 'src/a.ts', 'export {};\n');
     await write(dir, 'src/b.ts', 'export {};\n');
     await write(dir, 'README.md', '# x\n');
     const plan = await testsPlan(dir, ['src/a.ts', 'src/b.ts', 'src/apagado.ts', 'README.md'], {});
-    expect(plan.plan).toEqual({ kind: 'run', command: 'npx vitest related --run --passWithNoTests src/a.ts src/b.ts' });
+    expect(plan.plan).toEqual({ kind: 'run', command: 'npx vitest related src/a.ts src/b.ts --run --passWithNoTests --maxWorkers=2' });
     expect(plan.onlyFiles!(['tests/x.test.ts'])).toBe('npx vitest run tests/x.test.ts');
 
     expect((await testsPlan(dir, ['README.md', 'src/apagado.ts'], {})).plan).toEqual({ kind: 'na', reason: 'nenhum arquivo de código existente foi alterado' });
@@ -113,6 +113,25 @@ describe('descoberta: o que rodar em cada projeto', () => {
     expect((big as { reason: string }).reason).toContain(`${RELATED_MAX + 1} arquivos alterados`);
   });
 
+  it('vitest sem estar nas dependências (o `scopedTestCommand` cairia na suíte inteira): "indisponível", salvo `MYCO_FULL_TESTS=1`, que força a suíte inteira como na mescla', async () => {
+    const dir = path.join(root, 'testes-sem-dep');
+    await write(dir, 'package.json', JSON.stringify({ scripts: { test: 'vitest run' } }));
+    await write(dir, 'src/a.ts', 'export {};\n');
+    const plan = (await testsPlan(dir, ['src/a.ts'], {})).plan;
+    expect(plan).toMatchObject({ kind: 'unavailable' });
+    expect((plan as { reason: string }).reason).toContain('a suíte inteira não roda na entrega');
+
+    const withDep = path.join(root, 'testes-full');
+    await write(withDep, 'package.json', JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run' } }));
+    await write(withDep, 'src/a.ts', 'export {};\n');
+    process.env.MYCO_FULL_TESTS = '1';
+    try {
+      expect((await testsPlan(withDep, ['src/a.ts'], {})).plan).toEqual({ kind: 'run', command: 'npm test' });
+    } finally {
+      delete process.env.MYCO_FULL_TESTS;
+    }
+  });
+
   it('o `test` do projeto que não é o vitest nem o jest simples (flag, `&&`) não vira "relacionados": "não se aplica" com o comando dito', async () => {
     const dir = path.join(root, 'testes-composto');
     await write(dir, 'package.json', JSON.stringify({ scripts: { test: 'vitest run && playwright test' } }));
@@ -129,7 +148,7 @@ describe('descoberta: o que rodar em cada projeto', () => {
 
   it('o override do projeto (`.myco/proofs.json`, do checkout principal): comando próprio com {files}, `false` desliga, o tempo; inválido é dito e nada roda', async () => {
     const dir = path.join(root, 'override');
-    await write(dir, 'package.json', JSON.stringify({ scripts: { test: 'vitest run', typecheck: 'tsc' } }));
+    await write(dir, 'package.json', JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run', typecheck: 'tsc' } }));
     await write(dir, 'src/a.ts', '');
     await write(dir, '.myco/proofs.json', JSON.stringify({ typecheck: false, tests: 'node meu-teste.js {files}', timeoutSec: 90 }));
     const cfg = await readProofConfig(dir);
@@ -216,7 +235,7 @@ async function repo(name: string) {
   git('config', 'user.email', 't@t');
   git('config', 'core.autocrlf', 'false');
   git('config', 'commit.gpgsign', 'false');
-  await write(dir, 'package.json', JSON.stringify({ scripts: { test: 'vitest run', typecheck: 'tsc --noEmit' } }));
+  await write(dir, 'package.json', JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run', typecheck: 'tsc --noEmit' } }));
   await write(dir, 'src/lib.ts', 'export const lib = 1;\n');
   await write(dir, 'tests/lib.test.ts', "import { lib } from '../src/lib';\n");
   await write(dir, 'tests/outro.test.ts', "export {};\n");
@@ -280,7 +299,7 @@ describe('baseline por falha: nova, já falhava na base', () => {
     expect(inBase.map((c) => c.command).sort()).toEqual(['npm run typecheck', 'npx vitest run tests/lib.test.ts']);
     expect(new Set(inBase.map((c) => c.cwd)).size).toBe(1);
     expect(inBase.every((c) => c.linked)).toBe(true);
-    expect(calls.find((c) => !c.inBase && c.command.startsWith('npx vitest related'))!.command).toBe('npx vitest related --run --passWithNoTests src/lib.ts');
+    expect(calls.find((c) => !c.inBase && c.command.startsWith('npx vitest related'))!.command).toBe('npx vitest related src/lib.ts --run --passWithNoTests --maxWorkers=2');
 
     // Saiu limpo: a pasta e a worktree da base sumiram, e o `node_modules` do projeto (que a junção apontava) segue inteiro.
     expect(await exists(path.join(r.dir, '.claude', 'worktrees', `myco-base-${r.base.slice(0, 12)}`))).toBe(false);
@@ -439,7 +458,7 @@ describe('tempo limitado e não bloqueante: indisponível, nunca reprovação', 
 
   async function ts(name: string) {
     const dir = path.join(root, name);
-    await write(dir, 'package.json', JSON.stringify({ scripts: { test: 'vitest run', typecheck: 'tsc --noEmit' } }));
+    await write(dir, 'package.json', JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run', typecheck: 'tsc --noEmit' } }));
     await write(dir, 'src/lib.ts', '');
     return dir;
   }
@@ -448,7 +467,7 @@ describe('tempo limitado e não bloqueante: indisponível, nunca reprovação', 
     const dir = await ts('tempo-corta');
     const run: RunFn = async (_c, command) => (command === 'npm run typecheck' ? tr({ ok: true, exitCode: 0 }) : tr({ timedOut: true, limitMs: 600_000, ms: 600_000, output: 'cortada' }));
     const { proofs, testRun } = await generateProofs(input(dir), { run });
-    expect(proofs.tests).toMatchObject({ status: 'unavailable', command: 'npx vitest related --run --passWithNoTests src/lib.ts', reason: 'tempo esgotado: cortado aos 10 min; não diz nada sobre o código' });
+    expect(proofs.tests).toMatchObject({ status: 'unavailable', command: 'npx vitest related src/lib.ts --run --passWithNoTests --maxWorkers=2', reason: 'tempo esgotado: cortado aos 10 min; não diz nada sobre o código' });
     expect(proofs.tests.failures).toBeUndefined();
     expect(proofs.typecheck).toMatchObject({ status: 'ran', exitCode: 0 });
     expect(testRun?.timedOut).toBe(true);
@@ -585,7 +604,7 @@ describe('o texto das provas no pedido de revisão', () => {
     typecheck: { status: 'ran', command: 'npm run typecheck', exitCode: 0, ms: 71_000 },
     tests: {
       status: 'ran',
-      command: 'npx vitest related --run --passWithNoTests src/a.ts',
+      command: 'npx vitest related src/a.ts --run --passWithNoTests --maxWorkers=2',
       exitCode: 1,
       ms: 38_000,
       counts: { passed: 120, failed: 5, total: 125 },
@@ -607,7 +626,7 @@ describe('o texto das provas no pedido de revisão', () => {
     expect(text).toContain('Provas geradas pelo Claudio’s Club para esta entrega');
     expect(text).toContain('só falha NOVA que toca os arquivos da tarefa conta contra a entrega, o resto é no máximo 🟡');
     expect(text).toContain('- Tipos (tsc) (`npm run typecheck`, código de saída 0, 71 s): limpo, sem erro.');
-    expect(text).toContain('- Testes relacionados aos arquivos alterados (`npx vitest related --run --passWithNoTests src/a.ts`, código de saída 1, 38 s): 120 passaram, 5 falharam (de 125). Contra a base (`abcdef0`, rodada nesse commit): ');
+    expect(text).toContain('- Testes relacionados aos arquivos alterados (`npx vitest related src/a.ts --run --passWithNoTests --maxWorkers=2`, código de saída 1, 38 s): 120 passaram, 5 falharam (de 125). Contra a base (`abcdef0`, rodada nesse commit): ');
     expect(text).toContain('Nova que toca a tarefa: 1 (conta contra a entrega); Nova fora dos arquivos da tarefa: 1 (no máximo 🟡); Já falhava na base: 1 (não conta); Passa sozinha (instável): 1 (não conta); Sem base para comparar: 1 (1 com ligação à tarefa: confira)');
     expect(text).toContain('- `tests/a.test.ts > nova`: NOVA, toca a entrega (importa `src/a.ts`, que é dela): conta contra a entrega');
     expect(text).toContain('- `tests/b.test.ts > fora`: nova, mas fora dos arquivos da tarefa: não reprova, no máximo 🟡');
@@ -658,7 +677,7 @@ describe('na entrega (TaskService): quem recebe prova, e a paridade entre os mot
    */
   async function club(name: string, engine: Engine, opts: { requested?: boolean; board?: boolean; reviewer?: boolean } = {}) {
     const dir = path.join(root, name);
-    await write(dir, 'package.json', JSON.stringify({ scripts: { test: 'vitest run', typecheck: 'tsc --noEmit' } }));
+    await write(dir, 'package.json', JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: { test: 'vitest run', typecheck: 'tsc --noEmit' } }));
     await write(dir, 'src/feature.ts', 'export const feature = 1;\n');
     await write(dir, 'tests/feature.test.ts', "import { feature } from '../src/feature';\n");
     if (opts.board) await write(dir, '.myco/board.json', JSON.stringify({ autoReview: true, reviewerId: 'rui-1' }));
@@ -715,12 +734,12 @@ describe('na entrega (TaskService): quem recebe prova, e a paridade entre os mot
     const c = await club(`gestor-${engine}`, engine, { requested: true, reviewer: true });
     const t = await c.deliver();
     expect(c.ran[0]).toBe('npm run typecheck'); // o tsc e os relacionados saem juntos; nunca a suíte inteira
-    expect(c.ran).toContain('npx vitest related --run --passWithNoTests src/feature.ts');
+    expect(c.ran).toContain('npx vitest related src/feature.ts --run --passWithNoTests --maxWorkers=2');
     expect(c.ran).not.toContain('npm test');
     const review = c.sent.at(-1)!;
     expect(review).toContain('[Revisão da tarefa "Corrigir o X"]');
     expect(review).toContain('- Tipos (tsc) (`npm run typecheck`, código de saída 2, 3 s): 1 erro de tipos.');
-    expect(review).toContain('- Testes relacionados aos arquivos alterados (`npx vitest related --run --passWithNoTests src/feature.ts`, código de saída 1, 2 s): 5 passaram, 1 falhou (de 6).');
+    expect(review).toContain('- Testes relacionados aos arquivos alterados (`npx vitest related src/feature.ts --run --passWithNoTests --maxWorkers=2`, código de saída 1, 2 s): 5 passaram, 1 falhou (de 6).');
     expect(review).toContain('`src/feature.ts: TS2322 tipo errado`');
     expect(review).toContain('`tests/feature.test.ts > soma`');
     expect(review).toContain('Prova marcada "indisponível" ou "não se aplica" não reprova e não consome rodada.'); // a rubrica nova, no pedido

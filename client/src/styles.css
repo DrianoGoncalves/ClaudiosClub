@@ -634,13 +634,62 @@ textarea.q-field { resize: vertical; }
 @media (max-width: 480px) { .tasks-head .project-pause-btn:not(.is-version) .project-pause-label { display: none; } }
 .badge.is-paused { color: var(--ink); border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 14%, transparent); font-weight: 600; }
 .badge.is-paused svg { vertical-align: -1px; }
-/* Pausa de versão: o controle (rótulo, prazo, ligar) abaixo do cabeçalho, só com o projeto rodando. Quebra em linhas no celular; alvos de toque de --btn-h. */
-.version-pause-control { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; padding: 6px 12px; border: 1px dashed var(--line); border-radius: 10px; color: var(--ink); }
-.version-pause-label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; margin-right: auto; }
-.version-pause-control select { min-height: var(--btn-h); }
-.version-pause-control .btn-secondary { min-height: var(--btn-h); }
-@media (max-width: 640px) { .version-pause-control select, .version-pause-control .btn-secondary { min-height: 36px; } }
-@media (max-width: 480px) { .version-pause-label { flex-basis: 100%; } .version-pause-control select { flex: 1 1 0; min-width: 0; } }
+/* Versão com escopo (ReleaseDialog): a faixa do quadro (mesmo azul da pausa, borda tracejada: é um estado seu) e a página por cima do quadro, em tela cheia. */
+.release-banner { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; padding: 6px 12px; border: 1px dashed var(--ink-blue); border-left: 4px solid var(--ink-blue); border-radius: 10px; background: color-mix(in srgb, var(--ink-blue) 8%, transparent); color: var(--ink); }
+.release-banner p { margin: 0 auto 0 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
+.release-banner .btn-secondary { min-height: var(--btn-h); }
+.release-modal .segmented { align-self: flex-start; }
+.release-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 16px; }
+.release-body { display: grid; gap: 10px; max-width: 760px; }
+.release-head { margin: 4px 0 0; font-size: var(--fs-lg, 15px); }
+.release-field { display: grid; gap: 4px; max-width: 360px; }
+.release-field input, .release-field select { min-height: 36px; }
+.release-field input[aria-invalid="true"] { border-color: var(--ink-red); }
+.release-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.release-item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); min-width: 0; }
+.release-pick { display: flex; align-items: flex-start; gap: 8px; min-width: 0; flex: 1 1 260px; cursor: pointer; }
+.release-pick input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; }
+.release-title { min-width: 0; flex: 1 1 200px; overflow-wrap: anywhere; }
+.release-meta { flex: 0 1 auto; }
+.release-chip { font-weight: 600; }
+.release-chip[data-state="done"] { color: var(--ink-green); }
+.release-chip[data-state="stuck"] { color: var(--ink-red); }
+.release-chip[data-state="cancelled"] { color: var(--muted); }
+.release-item[data-state="cancelled"] .release-title { text-decoration: line-through; color: var(--muted); }
+.release-remove { margin-left: auto; min-height: var(--btn-h); }
+.release-progress { width: 100%; height: 8px; accent-color: var(--ink-green); }
+.release-add summary, .release-history summary { cursor: pointer; padding: 4px 0; }
+.release-add { display: grid; gap: 8px; }
+.release-status { display: grid; gap: 8px; justify-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.release-status p { margin: 0; }
+.release-status a { overflow-wrap: anywhere; }
+.release-output { max-height: 240px; overflow: auto; white-space: pre-wrap; font-size: var(--fs-sm); }
+.release-foot { display: flex; flex-wrap: wrap; gap: 8px; }
+.release-foot .btn-primary, .release-foot .btn-secondary, .release-status > .btn-primary { min-height: 36px; }
+.release-history { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.release-subject { display: block; margin-top: 2px; overflow-wrap: anywhere; }
+.release-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+.release-history-tasks { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+.release-mode { display: grid; gap: 6px; justify-items: start; margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.release-mode legend { padding: 0 4px; font-weight: 600; }
+.release-mode .release-pick { flex: none; }
+.release-request { font-weight: 600; color: var(--ink-blue); }
+/* Status do CI (CiBadge): um ponto colorido e o estado em texto (a cor nunca é a única pista). */
+.ci-summary { display: grid; gap: 4px; }
+.ci-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: var(--fs-md); min-width: 0; }
+.ci-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.ci-line[data-state="success"] .ci-dot { background: var(--ink-green); }
+.ci-line[data-state="failure"] .ci-dot { background: var(--ink-red); }
+.ci-line[data-state="pending"] .ci-dot { background: var(--ink-blue); }
+.ci-checks { flex-basis: 100%; }
+.ci-checks ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+.ci-checks li[data-state="failure"] { color: var(--ink-red); }
+/* Deploy como código (DeployPanel): ambiente e botões numa linha que quebra no celular; os últimos deploys com o mesmo ponto do CI. */
+.deploy-panel { display: grid; gap: 6px; min-width: 0; }
+.deploy-panel select { min-height: 36px; }
+.deploy-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+/* Celular: o botão "Versão" do cabeçalho divide a linha com os outros sem empurrar o título. */
+@media (max-width: 480px) { .tasks-head .release-open-btn { padding-inline: 8px; } .release-remove { margin-left: 0; } }
 .bn-tag.is-paused.is-version, .badge.is-paused.is-version { white-space: nowrap; }
 /* Agendamentos do projeto: um cartão por despertador ou "continue" pendente. O texto é do funcionário: pre-wrap, nunca HTML. */
 .sched-intro, .sched-notice { margin: 0; font-size: var(--fs-md); }
@@ -2492,3 +2541,10 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 :is(.btn-primary, .btn-secondary):focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
 /* Tamanho único (o do "Salvar ficha"), em qualquer tela; a primária se destaca só pela cor de fundo. */
 :is(.btn-primary, .btn-secondary):not(.btn-icon, .chat-more-btn, .hr-more, .mcp-pair-remove, .json-more) { font-size: var(--btn-font); line-height: var(--btn-lh); padding: var(--btn-pad); min-height: var(--btn-h); box-sizing: border-box; }
+/* Ícones animados no hover/foco do botão pai (só transform, sem dependência). Respeita "animações off" e prefers-reduced-motion. */
+.ico-send, .ico-plus, .ico-trash { transition: transform 0.2s ease-out; transform-origin: center; }
+:is(button, a):is(:hover, :focus-visible) > .ico-send { transform: translate(2px, -2px); }
+:is(button, a):is(:hover, :focus-visible) > .ico-plus { transform: rotate(90deg); }
+:is(button, a):is(:hover, :focus-visible) > .ico-trash { transform: rotate(-8deg); }
+@media (prefers-reduced-motion: reduce) { :is(.ico-send, .ico-plus, .ico-trash) { transition: none; transform: none !important; } }
+.anim-off :is(.ico-send, .ico-plus, .ico-trash) { transition: none; transform: none !important; }

@@ -48,9 +48,14 @@ export function parseAuthStatus(stdout: string, checkedAt = new Date()): AuthSta
 }
 
 let cache: { at: number; status: Promise<AuthStatus> } | null = null;
+/**
+ * Quanto o status do login vale sem perguntar de novo. Cada pergunta sobe o CLI do `claude` inteiro (centenas de MB; no HDD, segundos), e o selo da
+ * barra relê a cada minuto por aba: com 20 s, era um `claude` novo por minuto à toa. O login muda raramente, e o fluxo de entrar pede `fresh`.
+ */
+const AUTH_TTL_MS = 5 * 60_000;
 
 export function getAuthStatus(opts: { fresh?: boolean } = {}): Promise<AuthStatus> {
-  if (!opts.fresh && cache && Date.now() - cache.at < 20_000) return cache.status;
+  if (!opts.fresh && cache && Date.now() - cache.at < AUTH_TTL_MS) return cache.status;
   const status = new Promise<AuthStatus>((resolve) => {
     // Deslogado, o CLI sai com código 1 mas ainda imprime o JSON: o stdout decide, não o código.
     // No Windows o `claude` do npm é um .cmd: sem shell o execFile não o acha (os argumentos são fixos, sem aspas).

@@ -730,7 +730,17 @@ export interface FlowGates {
   plan: 'owner' | 'ai';
   completion: 'ai' | 'owner';
   commit: boolean;
+  /**
+   * Quem publica a versão (push, PR e tag; ver server/release.ts): 'manual' só o dono; 'staff-pr' o funcionário com "Pode versionar e fazer deploy" abre o PR e a tag espera o dono;
+   * 'staff-all' ele publica o PR e a tag (a mescla do PR é sempre do dono). Ausente = 'manual': política gravada antes deste portão não ganha publicação por funcionário sem o dono escolher.
+   */
+  publish?: PublishGate;
 }
+
+export type PublishGate = 'manual' | 'staff-pr' | 'staff-all';
+
+/** O portão de publicação de cada preset (gravado ao escolher o preset). */
+export const PUBLISH_PRESETS: Record<'auto' | 'supervised' | 'manual', PublishGate> = { auto: 'staff-all', supervised: 'staff-pr', manual: 'manual' };
 
 /**
  * Os valores de cada preset, o ÚNICO lugar onde eles moram (servidor e tela leem daqui).

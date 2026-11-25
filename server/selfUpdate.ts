@@ -193,6 +193,10 @@ export class SelfUpdater {
     const guardado = this.status;
     // Com uma busca ou atualização em andamento, não espera por ela: vai o guardado.
     if (guardado && (!fresh || age < 60_000)) return this.running ? guardado : this.exclusive(async () => (await this.readLocal()) ?? guardado);
+    // Servidor recém-subido, sem status guardado e sem "procurar agora": responde com a parte local (sem rede) em vez de esperar o `git fetch` da subida (até 60 s;
+    // no log, GET /api/update em 30 s logo depois de cada reinício). A busca no remoto segue no `start`, e a leitura seguinte já vem com ela. `checkedAt` vazio:
+    // ainda não houve busca no remoto.
+    if (!guardado && !fresh) return { ...(await readUpdateStatus(this.root, { fetch: false })), checkedAt: null };
     return this.exclusive(async () => (this.status = await readUpdateStatus(this.root)));
   }
 

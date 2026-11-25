@@ -152,7 +152,7 @@ async function project(name: string, testScript: string | null = 'vitest run') {
     await fs.mkdir(path.dirname(path.join(dir, f)), { recursive: true });
     await fs.writeFile(path.join(dir, f), text);
   };
-  await write('package.json', JSON.stringify({ scripts: testScript ? { test: testScript } : {} }));
+  await write('package.json', JSON.stringify({ devDependencies: { vitest: '^5.1.0' }, scripts: testScript ? { test: testScript } : {} }));
   await write('tests/a.test.ts', "import { x } from '../server/x';\nimport { it } from 'vitest';\nit('a', () => x);\n");
   await write('tests/b.test.ts', "import { z } from '../server/z.js';\nit('b', () => z);\n");
   await write('tests/c.test.ts', "import { it } from 'vitest';\nit('c', () => {});\n");
@@ -382,7 +382,7 @@ describe('o pedido de revisão e o aviso ao gestor (TaskService)', () => {
     return { svc, sent, told, ran, id: t.id };
   }
 
-  const RELATED = 'npx vitest related --run --passWithNoTests server/y.ts';
+  const RELATED = 'npx vitest related server/y.ts --run --passWithNoTests --maxWorkers=2';
   const red = run({
     files: 5,
     output: 'fim da saída sem lista',

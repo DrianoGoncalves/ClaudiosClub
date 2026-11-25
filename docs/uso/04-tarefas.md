@@ -96,9 +96,38 @@ Fila grande e você quer o time parado para focar em outro projeto? **Pausar pro
 - **Só você**: só o navegador do Club pausa ou retoma. Funcionário e conversa de tarefa recebem recusa (403). A única exceção é a pausa de versão, abaixo.
 - **Se der erro** (sem conexão com o servidor, projeto que sumiu, falha ao gravar): o Club mostra um aviso no idioma da tela e o estado fica como estava.
 
-### Pausa de versão
+## Versão
 
-Variante com prazo, para montar uma versão sem que entre trabalho novo. No quadro, o controle **Pausa de versão** fica junto de **Pausar projeto**: escolha o prazo e use **Ligar pausa**. O padrão é 30 minutos e o máximo, 120.
+O botão **Versão**, no cabeçalho do quadro, abre a página da versão (tela cheia, por cima do quadro). Ela tem duas abas: **Versão** e **Histórico**.
+
+- **Abrir**: marque as tarefas pendentes (Aguardar, A fazer, Fazendo, Revisão) que entram. As bloqueadoras abertas de cada uma entram junto, marcadas como **dependência**. O número vem sugerido a partir da última tag (ex.: depois de `v1.5.1`, `1.5.2`); dá para trocar. Uma versão aberta por projeto, até 50 tarefas.
+- **Card de manual e doc**: marcado por padrão. Escolha quem cuida dele. Ele fica em **Aguardar** e entra na fila sozinho quando as outras tarefas da versão ficam prontas.
+- **Enquanto a versão está aberta**: só as tarefas dela saem da fila. As de fora esperam em **A fazer** com a nota "fora da versão". As que já estavam em **Fazendo** ou **Revisão** terminam, mas **a mescla delas espera**: o checkout é um só, e a mescla levaria código não marcado para a versão. O seu **Começar** continua valendo. Uma faixa no quadro mostra "Versão X aberta · N de M prontas".
+- **Atenção, funcionário sem worktree**: a tarefa de fora que já estava em **Fazendo** sem worktree muda o checkout direto, sem mescla para segurar. O que ela entregar antes da preparação entra na versão.
+- **Reprovada**: fica na versão e volta para ajuste, como sempre. A página mostra quantas vezes voltou e o botão **Tirar**.
+- **Cancelada**: sai da conta sozinha. Se outra tarefa da versão depende dela, essa fica **Travada** e a versão não fecha até você tirar a dependente ou resolver a dependência.
+- **Pôr e tirar**: até preparar, **Pôr mais tarefas na versão** e **Tirar** mudam o escopo. Tirar uma bloqueadora de que outra tarefa da versão ainda depende é recusado.
+- **Hotfix**: em **Pôr mais tarefas na versão**, **Furar como hotfix** deixa uma tarefa urgente começar e mesclar com a versão aberta, sem que a versão espere por ela. Se ficar pronta antes da preparação, entra no changelog marcada como `[hotfix]`.
+- **Preparar (sozinho)**: quando todas ficam em **Pronto** (com worktree, isso já inclui a mescla), o Club roda as provas, sobe o número no `package.json` e no `package-lock.json` e faz o commit local "Versão X" só desses dois arquivos. A partir daí a fila e as mesclas de fora voltam a andar. O build não roda aqui: ele mexeria no `dist/` e reiniciaria o servidor do `daily:start`.
+- **As provas**: a checagem de tipos do projeto (o script `typecheck`, ou o `tsc`) e, com vitest, só os testes relacionados aos arquivos de código mudados desde a última tag. Sem tag, com nomes de arquivo fora do comum ou com mais de 400 arquivos, roda a suíte inteira. A comparação com o baseline (falha antiga não contar) vem com a t-7b0e91.
+- **Se a preparação falhar** (tipos ou testes vermelhos, ou `package.json` mexido sem commit): nada é commitado, o motivo e a saída aparecem na página e num aviso da caixa, e o Club não tenta de novo sozinho. Use **Tentar de novo** ou **Preparar sem as provas** (fica registrado).
+- **Descartar a preparação**: antes de publicar, um commit novo volta só o número no `package.json` e no lock (o resto desses arquivos fica). A versão volta a ficar aberta, com a trava. Nada de reset nem de reescrever história; depois de publicada, não dá.
+- **Publicar (push e PR)**: com confirmação. Envia o commit da versão para a branch `release/X` no GitHub (nunca force, nunca a `main`) e abre o PR para a `main`, com os títulos das tarefas no corpo. Commits feitos depois da preparação não vão juntos. A mescla do PR é sempre sua.
+- **Criar tag vX**: depois de mesclar o PR no GitHub. O Club confere que o PR foi mesclado, cria a tag anotada no commit da mescla (com o changelog e quem publicou) e a envia. **É a tag que publica a versão**: as instalações do Club passam a ver a atualização. A versão fecha aqui.
+- **Quem publica** (no topo da página, vale para o projeto): é o portão `publish` da **política de fluxo** do projeto, gravado junto com os outros portões (fora do projeto, onde o agente não grava). **Só você** (o padrão, e o do preset Manual); **o funcionário abre o PR e a tag espera o seu ok** (preset Supervisionado); ou **ele publica o PR e a tag sozinho**, e você é avisado (preset Automático). Uma política escolhida antes deste portão vale como "só você" até você escolher de novo. Mudar o portão aqui deixa a política como "personalizada". O funcionário precisa da permissão **Pode versionar e fazer deploy** na ficha e de autonomia auto ou sem travas. Ele só pede pela API; quem roda o git é o servidor, com as mesmas travas do myco-git. **Desligar publicação por funcionários** volta ao "Só você" na hora e recusa um pedido de tag pendente.
+- **Pedido de tag**: no modo do meio, a tag pedida pelo funcionário aparece na página (**Aprovar e criar a tag** ou **Recusar pedido**) e na caixa.
+- **Rastro**: cada passo (abrir, escopo, hotfix, preparar, descartar, publicar, pedir e criar a tag) fica no **Registro** da versão, com quem fez. Publicações e preparações automáticas viram aviso na caixa por 7 dias. A tag guarda quem publicou.
+- **Cancelar versão**: a fila e as mesclas de fora voltam. Um commit de versão já feito fica (para desfazê-lo, descarte antes).
+- **Histórico**: a lista das versões publicadas (as tags `vX.Y.Z`), da mais nova para a mais velha, com data, commit e, ao abrir, o resumo e as tarefas que entraram. Versões de antes desta ferramenta aparecem sem a lista de tarefas.
+- **Só você**: abrir, mudar, hotfix, preparar, descartar, o modo e cancelar são só pelo navegador do Club. Funcionário recebe recusa (403); publicar e a tag seguem o modo acima.
+- **Status do CI**: com o PR publicado, a página mostra o CI do PR e, depois da mescla, o do commit da mescla, com as checagens. No **Histórico**, ao abrir uma versão, aparece o CI do commit dela. No detalhe do cartão com PR do repositório do projeto, também. O Club lê do GitHub só quando você abre a tela (e de minuto em minuto enquanto o CI roda), com o login do `gh` desta máquina. Sem login ou sem rede, aparece "status do CI indisponível".
+- **A tag espera o CI**: com o CI do commit da mescla vermelho ou rodando, a tag é recusada. Com o status indisponível, só você cria a tag, com **Criar a tag sem conferir o CI** (confira no GitHub antes).
+- **Deploy como código**: com `.github/workflows/deploy.yml` no projeto (contrato em `docs/deploy.md`) e o origin no GitHub, o **Pedir deploy** do cartão dispara esse workflow com o commit mesclado da tarefa, e a aba **Histórico** traz **Deploy de vX** (a tag mais nova) e **Voltar para vY (versão anterior)**, que dispara com a tag anterior. Escolha o ambiente: staging ou produção, e produção pede o seu ok. O Club acompanha a execução só enquanto ela roda e mostra o resultado (no ar, falhou) com o link do log, no cartão e na versão, e avisa na caixa quando termina. Usa o login do `gh` desta máquina (com a permissão "workflow"); o disparo vai uma vez só, e se a rede cair no meio, confira no GitHub antes de repetir. Sem o workflow, ou fora do GitHub, o **Pedir deploy** segue pela conversa com o funcionário de infra, como antes. Só você dispara.
+- **CI**: um PR por versão. O CI do repositório já cancela a rodada anterior da mesma branch e pula os passos pesados quando só muda documentação (sem `paths-ignore`, que travaria PR só de docs: a `main` exige o check "test").
+
+### Pausa de versão (pela API)
+
+A pausa com prazo continua existindo para o funcionário com a permissão **Pode versionar e fazer deploy**, pela API. Ela não aparece mais como controle no quadro; quando alguém a liga, a faixa e o selo abaixo aparecem e o botão **Encerrar pausa** a desliga.
 
 - **O que barra**: o mesmo que a pausa comum: nada novo começa (fila, início de tarefa, rotinas, despertadores, troca de motor).
 - **O que deixa terminar**: o turno em andamento, a revisão da entrega e o ajuste de um cartão em **Fazendo**, **Planejando** ou **Revisão**, como numa reprovação.
@@ -185,6 +214,17 @@ Quem revisa cada tarefa em **Revisão**:
 4. Com o quadro desligado e sem revisor na tarefa, nada muda: ninguém revisa sozinho, e você decide (ou usa **Delegar revisão**).
 
 O limite de **3** revisões automáticas por tarefa vale também aqui; passando dele, o que sobrar fica com você (mesmo selo).
+
+#### Concluir sozinho quando o revisor aprovar
+
+Logo abaixo do revisor, no mesmo painel, a linha **Concluir sozinho quando o revisor aprovar** é o portão **conclusão** da **política de fluxo** do projeto (a mesma do **Quem publica** da página de versões; fica gravada fora do projeto, onde o agente não grava, e só muda por esta tela).
+
+- **Ligada**: aprovada pelo revisor, a tarefa vai para **Finalizado** e a worktree é mesclada no projeto principal **sem o seu clique**. Sem isto, todo aprovado com worktree fica em **Revisão** com "falta mesclar".
+- **Desligada**: o revisor continua revisando, mas a tarefa aprovada espera a sua aprovação. Nada é concluído nem mesclado sem você.
+- **Ao ligar a revisão automática ou escolher o revisor**, a linha vem **ligada por padrão**, mas só se você ainda não tinha escolhido: uma escolha sua já gravada (inclusive desligada) nunca é sobrescrita. Se a gravação falhar, o revisor fica gravado e a linha mostra o erro e o valor real.
+- **Valor padrão do projeto**: enquanto você não escolhe, a linha aparece **desligada** e avisa "você ainda não escolheu", porque nesse estado o Club não mescla sozinho. Um clique em **Ligada** grava a sua escolha e liga de fato; escolher aqui passa a valer como decisão sua.
+- **Sem revisor** (revisão do quadro desligada e nenhum revisor apontado na tarefa), nada conclui sozinho: a tarefa espera você, mesmo com a linha ligada.
+- Os **presets** (Manual, Supervisionado, Automático) e os portões de **plano** e **commit** ainda não têm tela própria; o commit automático é o botão do mesmo painel.
 
 ### Card registrado automaticamente
 

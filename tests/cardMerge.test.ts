@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { FlowPolicies } from '../server/flowPolicy';
+import { readBaseline } from '../server/proofBaseline';
 import { TaskService, readTasks } from '../server/tasks';
 import type { StaffProfile, Task } from '../shared/model';
 import { removeTemp } from './support/tmp';
@@ -40,12 +41,20 @@ const until = async (fn: () => Promise<unknown>, ms = 240_000) => {
 const LINES = Array.from({ length: 10 }, (_, i) => `l${i + 1}`);
 const body = (edits: Record<number, string> = {}) => `${LINES.map((l, i) => edits[i + 1] ?? l).join('\n')}\n`;
 
-async function proj(name: string, opts: { policy?: 'auto' } = {}) {
+async function proj(name: string, opts: { policy?: 'auto'; vitest?: boolean } = {}) {
   const dir = path.join(root, name);
   await fs.mkdir(path.join(dir, '.myco'), { recursive: true });
   const test = "node -e \"process.exit(require('fs').readFileSync('ok.txt','utf8').trim()==='sim'?0:1)\"";
   await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test } }));
   await fs.writeFile(path.join(dir, 'ok.txt'), 'sim');
+  if (opts.vitest) {
+    // Projeto com vitest: o `vitest` do projeto (versionado, para a worktree do card tê-lo) passa sem fazer nada; o teste lê o comando que a junção rodou em `Task.tests`.
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: 'vitest run' }, devDependencies: { vitest: '^5.1.0' } }));
+    await fs.mkdir(path.join(dir, 'node_modules', '.bin'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'node_modules', '.bin', 'vitest'), '#!/usr/bin/env node\n');
+    await fs.writeFile(path.join(dir, 'node_modules', '.bin', 'vitest.cmd'), '@node "%~dp0vitest" %*\r\n');
+    await fs.writeFile(path.join(dir, 'src.ts'), 'export const x = 1;\n');
+  }
   await fs.writeFile(path.join(dir, 'app.txt'), body());
   await fs.writeFile(path.join(dir, '.gitignore'), '.claude/\n');
   git(dir, 'init', '-q', '-b', 'main');
@@ -312,6 +321,31 @@ describe('a aprovação do revisor (conclusão por IA)', () => {
     expect(done.merged).toBeTruthy();
     expect(await fs.readFile(path.join(p.dir, 'a.txt'), 'utf8')).toBe('do A\n');
     await until(async () => !existsSync(ra.codeAt!.path!));
+  });
+});
+
+// SPEC "Desempenho" 9: a junção testa só o que o card traz (`scopedTestCommand`), na fila pesada; a rodada escopada não é a suíte, então não vira baseline dela (`suite:<sha>`).
+describe('testes escopados na junção do card', () => {
+  const suites = async (dir: string) => Object.keys(await readBaseline(dir)).filter((k) => k.startsWith('suite:'));
+
+  it('com vitest e um arquivo de código no card: só os testes ligados a ele, com 2 processos, e nada de baseline da suíte', async () => {
+    const p = await proj('escopado', { vitest: true });
+    const a = await p.start('ana-1', 'A');
+    const ra = await p.deliver(a, { 'src.ts': 'export const x = 2;\n' });
+
+    expect((await p.svc.update('p', ra.id, { status: 'done' }, true))?.status).toBe('done');
+    expect((await p.get(ra.id)).tests).toMatchObject({ ok: true, command: 'npx vitest related src.ts --run --passWithNoTests --maxWorkers=2' });
+    expect(await suites(p.dir)).toEqual([]);
+  });
+
+  it('o card só mexe em texto (nada para o `related` achar): a suíte inteira, e ela vira o baseline', async () => {
+    const p = await proj('inteira', { vitest: true });
+    const a = await p.start('ana-1', 'A');
+    const ra = await p.deliver(a, { 'app.txt': body({ 1: 'do A' }) });
+
+    expect((await p.svc.update('p', ra.id, { status: 'done' }, true))?.status).toBe('done');
+    expect((await p.get(ra.id)).tests).toMatchObject({ ok: true, command: 'npm test' });
+    expect(await suites(p.dir)).toHaveLength(1);
   });
 });
 

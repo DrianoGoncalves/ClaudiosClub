@@ -381,4 +381,10 @@ describe('rotas: só a tela', () => {
     expect(sandboxVerdict('GET', path1, 'p')).toMatchObject({ status: 403 });
     expect(sandboxVerdict('GET', '/api/inbox/commit-waiting', 'p')).toMatchObject({ status: 403 });
   });
+
+  it('o GET do preview confere o cookie do pareamento (o navegador não manda Origin num GET); o POST do commit segue exigindo fromBrowser', async () => {
+    const src = await fs.readFile(path.join(__dirname, '..', 'server', 'index.ts'), 'utf8');
+    expect(src).toContain("({ params: [id, taskId], paired }) => tasks.previewLeftovers(id!, taskId!, paired)");
+    expect(src).toContain("({ params: [id, taskId], body, fromBrowser }) => tasks.redoLeftovers(id!, taskId!, body, fromBrowser)");
+  });
 });
