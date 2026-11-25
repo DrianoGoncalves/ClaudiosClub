@@ -79,7 +79,7 @@ Na aba **Ficha**:
 - **Modelo** e **Esforço**: começam do cargo. Se o motor recusar o modelo da ficha (ele deixou de existir), a conversa segue no modelo padrão, o cartão no quadro ganha o selo **Modelo obsoleto** e o painel e a ficha mostram o aviso; trocar o modelo e salvar tira a marca.
 - **Roteiro**: **Nenhum (trabalha do jeito dele)**, **Planeja grande, executa pequeno**, **Reconhece, depois constrói** ou **Portão de revisão**. Com um roteiro escolhido, a lista **Quem ajuda neste roteiro** mostra cada agent dele com o papel e o modelo (o que falta no projeto aparece como "criado ao abrir a conversa"). No Codex a lista mostra "modelo da conversa" e o esforço. No nível simples, a explicação do roteiro aparece embaixo do resumo do cargo.
 - **Autonomia** (tabela abaixo).
-- **Trabalhar numa worktree própria**: cópia git só dele, num branch próprio. O projeto precisa ser repositório git. Sem ela, o funcionário edita direto no projeto; com a opção "um escritor por vez" ligada no projeto, ele espera o card de outro funcionário que está editando fechar, e a ficha mostra um aviso disso embaixo da opção. Com ela, trabalha em paralelo sem esperar. Veja "Um card escrevendo por vez" em `04-tarefas.md`.
+- **Trabalhar numa worktree própria**: cópia git só dele, num branch próprio, que serve a todos os cards dele. O projeto precisa ser repositório git. Hoje cada card que edita código já ganha por padrão a **sua própria** cópia (e o Club a junta no projeto quando a entrega é aprovada), então esta opção da ficha pesa menos: veja "Cada card na sua cópia" em `04-tarefas.md`. Sem a cópia do card (projeto sem git, opção do projeto desligada, falha ao criar) e sem esta opção, o funcionário edita direto no projeto; com a opção "um escritor por vez" ligada no projeto, ele espera o card de outro funcionário que está editando fechar, e a ficha mostra um aviso disso embaixo da opção. Com a worktree da ficha, trabalha em paralelo sem esperar. Veja "Um card escrevendo por vez" em `04-tarefas.md`.
 - **Pode contratar subfuncionários**: os contratados entram como temporários, com no máximo a autonomia dele.
 - **Motor** e **Motor secundário** aparecem só com o Codex ligado. Ver `06-consumo-e-motores.md`.
 
@@ -232,7 +232,7 @@ Sem selo (leve, ou sem medida: o que não foi medido fica sem número):
 | Motor **Codex (GPT)** | Cada mensagem abre um processo que termina junto com a resposta; não fica programa parado. Peso não medido, e o navegador do GPT também não. |
 | **Motor secundário** | Não sobe nada extra: só quando o principal bate o limite a tarefa segue em conversa nova no outro motor. |
 | Skills, agents, regras, conhecimento, estilo de comunicação, memória pessoal e roteiro | São texto que entra no prompt da conversa. Sem medida de quanto pesa. |
-| **Trabalhar numa worktree própria** | Uma cópia git no disco; pesa disco, não memória. |
+| **Trabalhar numa worktree própria** | Uma cópia git no disco; pesa disco, não memória. A cópia de cada card (opção do projeto) também: uma por card aberto, apagada quando ele fecha. |
 | Autonomia e **Pode contratar subfuncionários** | Não sobem nada. |
 
 ## Skills e agents
