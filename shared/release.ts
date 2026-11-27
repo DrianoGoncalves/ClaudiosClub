@@ -46,7 +46,7 @@ export interface ReleaseView {
   preparing: boolean;
 }
 
-/** Uma versão fechada, lida da tag anotada `vX.Y.Z`. Tag antiga (de antes da ferramenta) vem sem tarefas. */
+/** Uma versão fechada, lida da tag `vX.Y.Z`. As tarefas vêm do bloco "Tarefas:" da mensagem; sem ele, dos commits "(t-xxxxxx)" desde a tag anterior (a 1ª tag vem sem). */
 export interface ReleaseHistoryEntry {
   tag: string;
   version: string;
@@ -136,6 +136,31 @@ const TASK_LINE = /^- (t-[0-9a-z]{4,20}) (.+)$/;
 /** O corpo da tag: o resumo e uma linha por tarefa. */
 export function releaseBody(summary: string, tasks: Array<{ id: string; title: string }>): string {
   return [summary.trim(), tasks.length ? ['Tarefas:', ...tasks.map(taskLine)].join('\n') : ''].filter(Boolean).join('\n\n');
+}
+
+/** A mensagem da tag tem o bloco "Tarefas:"? Com ele (mesmo que as linhas não leiam), a lista da tag é a dele; sem ele, o histórico completa pelos commits. */
+export function hasTasksBlock(body: string): boolean {
+  return /^\s*Tarefas:\s*$/m.test(body) || body.split(/\r?\n/).some((l) => TASK_LINE.test(l.trim()));
+}
+
+const COMMIT_TASK = /\((t-[0-9a-z]{4,20})\)/g;
+
+/**
+ * Os cards de uma versão lidos dos títulos dos commits ("... (t-abc123)"), do mais antigo ao mais novo; o id repetido vale uma vez (o 1º commit). Título do card:
+ * `titleOf` (o do quadro) ou, sem ele, o título do commit sem o "(t-...)". Só o título do commit é lido, nunca o corpo.
+ */
+export function tasksFromSubjects(subjects: string[], titleOf: (id: string) => string | undefined = () => undefined): Array<{ id: string; title: string }> {
+  const out = new Map<string, string>();
+  for (const subject of subjects) {
+    const ids = [...subject.matchAll(COMMIT_TASK)].map((m) => m[1]!);
+    if (!ids.length) continue;
+    const own = subject.replace(COMMIT_TASK, ' ').replace(/\s+/g, ' ').trim();
+    for (const id of ids) {
+      if (out.has(id)) continue;
+      out.set(id, (titleOf(id) ?? '').replace(/\s+/g, ' ').trim() || own || id);
+    }
+  }
+  return [...out].map(([id, title]) => ({ id, title }));
 }
 
 /** O contrário de `releaseBody`: as linhas de tarefa e o resto como resumo. */

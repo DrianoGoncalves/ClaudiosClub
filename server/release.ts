@@ -3,13 +3,16 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { Task, TestRun } from '../shared/model';
 import {
+  compareVersions,
   expandScope,
+  hasTasksBlock,
   nextVersion,
   parseReleaseBody,
   parseVersion,
   releaseBody,
   releaseProgress,
   RELEASE_MAX_TASKS,
+  tasksFromSubjects,
   type ReleaseHistory,
   type ReleaseHistoryEntry,
   type ReleaseState,
@@ -432,7 +435,10 @@ export class ReleaseService {
     return this.view(projectId);
   }
 
-  /** As versões fechadas (tags `vX.Y.Z`, mais nova primeiro) e o número sugerido para a próxima. Um processo git por pedido; a tela só pede ao abrir. */
+  /**
+   * As versões fechadas (tags `vX.Y.Z`, mais nova primeiro) e o número sugerido para a próxima. A tela só pede ao abrir. Um `for-each-ref` e, só se alguma
+   * tag mostrada não tem o bloco "Tarefas:" (tag criada à mão), mais um `git log` para todas juntas (nunca um por tag).
+   */
   async history(projectId: string): Promise<ReleaseHistory | null> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return null;
@@ -440,17 +446,70 @@ export class ReleaseService {
       .git(dir, ['for-each-ref', 'refs/tags', '--sort=-creatordate', '--count=200', '--format=%(refname:short)%00%(creatordate:iso-strict)%00%(objectname)%00%(*objectname)%00%(contents:subject)%00%(contents:body)%1e'])
       .catch(() => '');
     const entries: ReleaseHistoryEntry[] = [];
+    const bare = new Set<string>(); // as tags sem o bloco "Tarefas:"
+    const tips = new Map<string, string>(); // versão → commit, de todas as tags lidas (a tag anterior pode estar além das mostradas)
     for (const rec of raw.split('\x1e')) {
       const [tag, date, obj, commit, subject, body] = rec.replace(/^\s+/, '').split('\0');
       if (!tag || !/^v\d+\.\d+\.\d+$/.test(tag)) continue;
+      const sha = (commit || obj || '').trim();
+      tips.set(tag.slice(1), sha);
+      if (entries.length >= 60) continue;
       const parsed = parseReleaseBody(body ?? '');
-      entries.push({ tag, version: tag.slice(1), date: date ?? '', sha: (commit || obj || '').trim(), subject: (subject ?? '').trim(), summary: parsed.summary.slice(0, 2000), tasks: parsed.tasks });
-      if (entries.length >= 60) break;
+      if (!hasTasksBlock(body ?? '')) bare.add(tag);
+      entries.push({ tag, version: tag.slice(1), date: date ?? '', sha, subject: (subject ?? '').trim(), summary: parsed.summary.slice(0, 2000), tasks: parsed.tasks });
     }
+    await this.fillFromCommits(dir, entries, bare, tips);
     const pkg = await fs
       .readFile(path.join(dir, 'package.json'), 'utf8')
       .then((t) => (JSON.parse(t.replace(/^\uFEFF/, '')) as { version?: string }).version ?? '', () => '');
     return { entries, suggested: nextVersion([...entries.map((e) => e.version), pkg]) };
+  }
+
+  /**
+   * Tag sem o bloco "Tarefas:" (criada à mão): os cards vêm dos títulos "(t-xxxxxx)" dos commits entre a tag anterior (na ordem de versão) e ela; título do
+   * quadro quando o card existe. Um só `git log` para todas as tags (os commits de cada uma saem do grafo, na memória). A 1ª tag não tem anterior: fica como está.
+   * Falha do git ou do quadro não derruba o histórico: a tag só fica sem a lista.
+   */
+  private async fillFromCommits(dir: string, entries: ReleaseHistoryEntry[], bare: Set<string>, tips: Map<string, string>): Promise<void> {
+    const sorted = [...tips.keys()].sort(compareVersions);
+    const jobs = entries.flatMap((e) => {
+      const prev = sorted[sorted.indexOf(e.version) - 1];
+      const to = tips.get(e.version);
+      const from = prev ? tips.get(prev) : undefined;
+      return bare.has(e.tag) && to && from && to !== from ? [{ entry: e, to, from, prev: prev! }] : [];
+    });
+    if (!jobs.length) return;
+    const floor = jobs.reduce((lo, j) => (compareVersions(j.prev, lo.prev) < 0 ? j : lo)).from; // a tag anterior mais velha: o git não anda além dela
+    const log = await this.deps.tools
+      .git(dir, ['log', '--topo-order', '--max-count=20000', '--format=%H%x00%P%x00%s', ...new Set(jobs.flatMap((j) => [j.to, j.from])), '--not', floor, '--'], { timeoutMs: 30_000 })
+      .catch(() => '');
+    const graph = new Map<string, { parents: string[]; subject: string; at: number }>();
+    for (const line of log.split('\n')) {
+      const [sha, parents, ...subject] = line.split('\0');
+      if (sha && /^[0-9a-f]{40,64}$/.test(sha)) graph.set(sha, { parents: (parents ?? '').split(' ').filter(Boolean), subject: subject.join('\0'), at: graph.size });
+    }
+    if (!graph.size) return;
+    const reach = new Map<string, Set<string>>();
+    const reachOf = (tip: string, skip?: Set<string>): Set<string> => {
+      const seen = new Set<string>();
+      const stack = [tip];
+      while (stack.length) {
+        const sha = stack.pop()!;
+        const c = graph.get(sha);
+        if (!c || seen.has(sha) || skip?.has(sha)) continue;
+        seen.add(sha);
+        stack.push(...c.parents);
+      }
+      return seen;
+    };
+    const found = jobs.map((j) => {
+      if (!reach.has(j.from)) reach.set(j.from, reachOf(j.from));
+      const own = [...reachOf(j.to, reach.get(j.from))].sort((a, b) => graph.get(b)!.at - graph.get(a)!.at); // do mais antigo ao mais novo
+      return { entry: j.entry, subjects: own.map((sha) => graph.get(sha)!.subject) };
+    });
+    if (!found.some((f) => tasksFromSubjects(f.subjects).length)) return;
+    const board = new Map((await this.deps.readTasks(dir).catch(() => [] as Task[])).map((t) => [t.id, t.title]));
+    for (const f of found) f.entry.tasks = tasksFromSubjects(f.subjects, (id) => board.get(id));
   }
 
   /**

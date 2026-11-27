@@ -112,7 +112,7 @@ O botão **Versão**, no cabeçalho do quadro, abre a página da versão (tela c
 - **Publicar (push e PR)**: botão seu, com confirmação. Envia o commit da versão para a branch `release/X` no GitHub (nunca force) e abre o PR para a branch padrão. Commits feitos depois da preparação não vão juntos.
 - **Criar tag vX**: depois de mesclar o PR no GitHub. O Club confere que o PR foi mesclado, cria a tag anotada no commit da mescla (com o resumo e a lista das tarefas) e a envia. **É a tag que publica a versão**: as instalações do Club passam a ver a atualização. A versão fecha aqui.
 - **Cancelar versão**: a fila e as mesclas de fora voltam. Um commit de versão já feito fica (é local).
-- **Histórico**: a lista das versões publicadas (as tags `vX.Y.Z`), da mais nova para a mais velha, com data, commit e, ao abrir, o resumo e as tarefas que entraram. Versões de antes desta ferramenta aparecem sem a lista de tarefas.
+- **Histórico**: a lista das versões publicadas (as tags `vX.Y.Z`), da mais nova para a mais velha, com data, commit e, ao abrir, o resumo e as tarefas que entraram. A lista de tarefas vem do bloco "Tarefas:" da mensagem da tag (que o fluxo **Versão** grava); numa tag criada à mão, sem esse bloco, vem dos títulos dos commits com "(t-xxxxxx)" desde a tag anterior (o título é o do quadro, quando o cartão existe). A primeira tag, sem anterior, aparece sem a lista.
 - **Só você**: abrir, mudar, preparar, publicar, criar a tag e cancelar são só pelo navegador do Club. Funcionário recebe recusa (403).
 
 ### Pausa de versão (pela API)
