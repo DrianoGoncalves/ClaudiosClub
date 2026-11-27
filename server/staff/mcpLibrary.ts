@@ -506,7 +506,7 @@ export function createMcpLibrary(o: McpLibraryOptions) {
    * no registro; http/sse sem cabeçalho vai como `{type, url}`. Entrada que o usuário escreveu (valores no próprio arquivo) vira "do Club" ao
    * salvar: o que o pedido manda manter (`null`) só vale para valores que já estão no cofre, os do arquivo têm de ser digitados de novo.
    */
-  async function saveGlobal(input: SaveBody): Promise<void> {
+  async function saveGlobal(input: SaveBody): Promise<string | undefined> {
     const oldName = input.originalName;
     // ~/.claude.json estragado: recusa antes de gravar qualquer valor no cofre ou no registro (editFile também recusaria, mas só no fim).
     const rawDoc = await readText(o.claudeConfigFile);
@@ -537,6 +537,8 @@ export function createMcpLibrary(o: McpLibraryOptions) {
       ? { type: 'stdio', command, ...(args && args.length > 0 ? { args } : {}), env: envM.keys, headers: [] }
       : { type: input.type, url, env: [], headers: hdrM.keys };
     const needsDef = isStdio || hdrM.keys.length > 0;
+    /** O aviso de que o chaveiro do sistema não serviu e o valor foi para arquivo (ver secretVault.ts). */
+    let vaultWarning: string | undefined;
     // Antes de gravar qualquer valor: se a entrada não dá para montar, nada é mexido.
     const entry = clubEntry(input.name, def, { clubFile, vaultDir: vault?.dir ?? DEFAULT_SECRETS_DIR });
     if (!entry) throw new McpError('o caminho do lançador tem aspas, % ou $: não dá para gravar a entrada');
@@ -551,8 +553,8 @@ export function createMcpLibrary(o: McpLibraryOptions) {
           for (const k of envM.keys) if (!has(envM.set, k) && oldEnv.includes(k)) await moveSecret(clubSecretId(oldDefName!, 'env', k), clubSecretId(input.name, 'env', k), vault);
           for (const k of hdrM.keys) if (!has(hdrM.set, k) && oldHdr.includes(k)) await moveSecret(clubSecretId(oldDefName!, 'header', k), clubSecretId(input.name, 'header', k), vault);
         }
-        for (const [k, v] of Object.entries(envM.set)) await setSecret(clubSecretId(input.name, 'env', k), v, vault);
-        for (const [k, v] of Object.entries(hdrM.set)) await setSecret(clubSecretId(input.name, 'header', k), v, vault);
+        for (const [k, v] of Object.entries(envM.set)) vaultWarning ??= (await setSecret(clubSecretId(input.name, 'env', k), v, vault)).warning;
+        for (const [k, v] of Object.entries(hdrM.set)) vaultWarning ??= (await setSecret(clubSecretId(input.name, 'header', k), v, vault)).warning;
       } catch (err) {
         throw new McpError(`não deu para guardar o valor no cofre: ${err instanceof VaultError ? err.message : 'erro ao gravar'}`);
       }
@@ -578,6 +580,7 @@ export function createMcpLibrary(o: McpLibraryOptions) {
         for (const k of oldHdr) if (renamed || !hdrM.keys.includes(k)) await deleteSecret(clubSecretId(oldDefName, 'header', k), vault);
       }
     }
+    return vaultWarning;
   }
 
   /** Projeto: onde o MCP já está (local ou .mcp.json); MCP novo vai para o .mcp.json. Valor novo com segredo literal é recusado nos dois. */
@@ -596,16 +599,17 @@ export function createMcpLibrary(o: McpLibraryOptions) {
     });
   }
 
-  async function save(body: unknown, fromBrowser: boolean): Promise<{ server: McpServerView }> {
+  async function save(body: unknown, fromBrowser: boolean): Promise<{ server: McpServerView; vaultWarning?: string }> {
     requireBrowser(fromBrowser);
     const input = parseInput(SaveInput, body);
     checkShape(input);
-    if (input.scope === 'global') await saveGlobal(input);
+    let vaultWarning: string | undefined;
+    if (input.scope === 'global') vaultWarning = await saveGlobal(input);
     else await saveProject(input, await projectDir(input.projectId));
     const { servers } = await list(input.scope === 'project' ? input.projectId : undefined);
     const saved = servers.find((s) => s.scope === input.scope && s.name === input.name);
     if (!saved) throw new McpError('gravado, mas não consegui ler de volta');
-    return { server: saved };
+    return vaultWarning ? { server: saved, vaultWarning } : { server: saved };
   }
 
   async function remove(body: unknown, fromBrowser: boolean): Promise<{ ok: true }> {

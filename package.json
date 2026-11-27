@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,client -c blue,green \"tsx watch server/index.ts\" \"vite\"",
+    "preview:ui": "vite --config vite.preview.config.ts",
     "build": "tsc --noEmit && vite build && tsx scripts/bundle.ts",
     "start": "tsx scripts/bundle.ts && node dist/server.mjs",
     "test": "vitest run",

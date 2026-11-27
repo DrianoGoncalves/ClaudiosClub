@@ -1349,7 +1349,7 @@ export function RankingPanel({
   onOpenTask?: (projectId: string, taskId: string) => void;
 }) {
   const [limit, setLimit] = useState(10);
-  const [period, setPeriod] = useState('90');
+  const [period, setPeriod] = useState('1');
   const [report, setReport] = useState<SavingsReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Carrega ao abrir e ao trocar o período, e rebusca: a cada 5 s enquanto os transcripts são lidos,

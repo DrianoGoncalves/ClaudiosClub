@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   CHROME_EXTENSION_URL,
   type Autonomy,
@@ -49,6 +49,7 @@ import { MCP_SCOPE_LABEL, mcpsToSave, normalizeMcps, toggleMcp } from './mcpRefs
 import { normalizeSkills, parseSkillRef, skillCatalog, SKILL_SCOPE_LABEL, templateSkills } from './skillRefs';
 import { PERSONALITIES, type Personality } from '../../../shared/personality';
 import type { RoleEntry } from '../../../shared/roles';
+import { firstSentence, RolesScreen } from '../toolbar/RolesEditor';
 import {
   type CodexCatalog,
   canWriteSsh,
@@ -368,6 +369,39 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   // Contratando no simples: o recomendado para sair funcionando, sem perguntar.
   const simpleHire = !full && !editing && !adopting;
   const template = roles?.find((r) => r.id === roleId) ?? null;
+  const [pickingRole, setPickingRole] = useState(false);
+  const closePicker = useCallback(() => setPickingRole(false), []);
+  // O cargo escolhido em card (nome, missão, modelo); "Trocar cargo" abre a tela de cargos em modo de escolher.
+  const roleCard = (
+    <div className="hire-role-card">
+      {template ? (
+        <div className="hire-role-info">
+          <b>{template.label}</b>
+          <span className="muted small">{firstSentence(template.mission)}</span>
+          <span className="muted small">
+            {modelLabel(template.model)}
+            {template.isDefault ? ` · ${t('staff.defaultTag')}` : ''}
+          </span>
+        </div>
+      ) : (
+        <p className="muted small hire-role-info">{t('staff.noRole')}</p>
+      )}
+      <button type="button" className="btn-secondary" aria-haspopup="dialog" onClick={() => setPickingRole(true)}>
+        {template ? t('staff.changeRole') : t('staff.pickRole')}
+      </button>
+      {pickingRole && roles && (
+        <RolesScreen
+          roles={roles}
+          selectedId={roleId}
+          onClose={closePicker}
+          onPick={(r) => {
+            applyTemplate(r);
+            setPickingRole(false);
+          }}
+        />
+      )}
+    </div>
+  );
   const autoWorktree =
     template?.worktree ??
     (editsCode(autonomy) && !!git?.[projectId] && colleagues.some((c) => editsCode(c.autonomy) && !c.temporary));
@@ -518,20 +552,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
               <fieldset>
                 <legend>{t('staff.roleLegend')}</legend>
                 {!roles && <p className="muted small">{t('staff.rolesLoading')}</p>}
-                <div className="templates">
-                  {roles?.map((tpl) => (
-                    <button
-                      type="button"
-                      key={tpl.id}
-                      className={`btn-secondary ${roleId === tpl.id ? 'is-on' : ''}`}
-                      aria-pressed={roleId === tpl.id}
-                      title={tpl.mission}
-                      onClick={() => applyTemplate(tpl)}
-                    >
-                      {tpl.label}
-                    </button>
-                  ))}
-                </div>
+                {roles && roleCard}
               </fieldset>
             )}
             <div className="grid2">
@@ -612,25 +633,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
         {/* ---- Ficha: quem é e como trabalha ---- */}
         <div {...panel('sheet')}>
-        {!editing && roles && roles.length > 0 && (
-          <div className="templates">
-            <span className="muted small" title={t('staff.cargosTitle')}>
-              {t('staff.cargosLabel')}
-            </span>
-            {roles.map((tpl) => (
-              <button
-                type="button"
-                key={tpl.id}
-                className={`btn-secondary ${roleId === tpl.id ? 'is-on' : ''}`}
-                aria-pressed={roleId === tpl.id}
-                title={`${tpl.role} · ${modelLabel(tpl.model)}${tpl.isDefault ? ` · ${t('staff.defaultTag')}` : ''}`}
-                onClick={() => applyTemplate(tpl)}
-              >
-                {tpl.label}
-              </button>
-            ))}
-          </div>
-        )}
+        {!editing && roles && roles.length > 0 && <fieldset className="hire-role"><legend>{t('staff.cargosLabel')}</legend>{roleCard}</fieldset>}
 
         <div className="grid2">
           <label>

@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { Client, FileType, type FileInfo } from 'basic-ftp';
 import { z } from 'zod';
-import type { FtpConnection, ServerInfo } from '../../shared/model';
+import type { FtpConnection, FtpConnectionSaved, ServerInfo } from '../../shared/model';
 import { pathKey } from '../adapters/claude/paths';
 import { tryJson } from '../adapters/claude/fsutil';
 import { deleteSecret, getSecret, hasSecret, moveSecret, setSecret, VaultError, type VaultOptions } from '../secretVault';
@@ -79,7 +79,7 @@ export async function listFtpServers(projectPath: string, vault?: VaultOptions):
 }
 
 /** Cria ou edita (`originalName` no corpo: a editada; renomear leva a senha). Senha ausente na edição = mantém. */
-export async function saveFtpConnection(projectPath: string, body: unknown, vault?: VaultOptions): Promise<FtpConnection> {
+export async function saveFtpConnection(projectPath: string, body: unknown, vault?: VaultOptions): Promise<FtpConnectionSaved> {
   const original = (body as { originalName?: unknown } | null)?.originalName;
   const originalName = typeof original === 'string' && original ? original : undefined;
   const parsed = FtpInput.safeParse(body);
@@ -98,8 +98,9 @@ export async function saveFtpConnection(projectPath: string, body: unknown, vaul
   if (!c.password && !(await hasSecret(oldId, vault))) throw new StaffError('informe a senha');
 
   // A senha antes do arquivo: se o cofre falhar, nada muda.
+  let vaultWarning: string | undefined;
   try {
-    if (c.password) await setSecret(id, c.password, vault);
+    if (c.password) vaultWarning = (await setSecret(id, c.password, vault)).warning;
     else if (oldId !== id) await moveSecret(oldId, id, vault);
   } catch (err) {
     throw new StaffError(`não deu para guardar a senha no cofre: ${err instanceof VaultError ? err.message : 'erro ao gravar'}`);
@@ -110,7 +111,8 @@ export async function saveFtpConnection(projectPath: string, body: unknown, vaul
   await ensureVpsGitignore(projectPath);
   await writeAtomic(ftpFile(projectPath), JSON.stringify({ ...file, connections: conns }, null, 2) + '\n');
   if (c.password && oldId !== id) await deleteSecret(oldId, vault);
-  return (await readFtpConnections(projectPath, vault)).find((x) => x.name === c.name)!;
+  const saved = (await readFtpConnections(projectPath, vault)).find((x) => x.name === c.name)!;
+  return vaultWarning ? { ...saved, vaultWarning } : saved;
 }
 
 /** Apaga a conexão e a senha dela no cofre. */

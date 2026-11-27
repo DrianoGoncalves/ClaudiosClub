@@ -126,7 +126,8 @@ import { deliverToAsker } from './consult/deliver';
 import { ConsultLinks } from './consult/links';
 import { ConsultError, ConsultService } from './consult/service';
 import { ConsultStore } from './consult/store';
-import { RoutineScheduler, routineKey, type RoutineOutcome } from './routines';
+import { NotOwnerError, ProjectOwnership, assertOwner, assertProjectRoute, claimKnownProjects, installOwnership, ownedByOther, ownsProject } from './projectOwner';
+import { RoutineScheduler, ownedRoutineStaff, routineKey, type RoutineOutcome } from './routines';
 import { buildSchedules, routineSchedule, ScheduleWindowError, scheduleWindow } from './scheduleView';
 import type { AppServerInfo, EngineOverride, Routine, SchedulesResponse, StaffProfile, SystemStats } from '../shared/model';
 import { systemStats } from './systemStats';
@@ -158,8 +159,10 @@ import { ROOT } from './root';
 import { cleanRunDir } from './runCleanup';
 import { SelfUpdater, UpdateError } from './selfUpdate';
 import { pendingRestartCheck } from './pendingRestart';
-import { CLUB_PORT } from './clubAddress';
+import { conversationScopes, reapChatScopes } from './scopeCommand';
+import { CLUB_PORT, registerClubServer } from './clubAddress';
 import { Pairing } from './pairing';
+import { vaultBoot } from './secretVault';
 import type { LimitHit } from './chat/usageLimit';
 import { collectGit } from './fallbackHandoff';
 import { DirectFallback, ownerMaySwitch, restoreDirectFallbacks } from './directFallback';
@@ -167,7 +170,19 @@ import { DirectFallback, ownerMaySwitch, restoreDirectFallbacks } from './direct
 const PORT = CLUB_PORT;
 /** Rodando pelo vigia (scripts/daemon.ts): ele religa o servidor quando este sai. */
 const UNDER_DAEMON = process.env.MYCO_DAEMON === '1';
+// Com escopo no systemd, o vigia recebe o stderr deste processo por um pipe (scripts/daemon.ts). Se o vigia morrer, a próxima escrita daria EPIPE e, sem ouvinte, derrubaria o servidor,
+// que antes (stderr herdado) seguia no ar.
+process.stderr.on('error', () => {});
 const STARTED_AT = new Date().toISOString();
+/**
+ * Quem manda em cada projeto (ver server/projectOwner.ts): só o servidor com a posse grava cards e equipe, roda a fila, a recuperação de reinício e as
+ * varreduras e abre conversas. Instalada já aqui, antes de qualquer vigia: até o `listen` dar certo (`ownership.open()`) ela recusa tudo, então o que
+ * começa antes da porta (o observador de turnos) não mexe em nada. A instância de teste (outro MYCO_HOME) fica só lendo.
+ */
+const ownership = new ProjectOwnership({ home: MYCO_HOME, adopt: process.env.MYCO_ADOPT_PROJECTS === '1' });
+installOwnership(ownership);
+// Saindo, a posse fica "velha" de propósito: o servidor que sobe no lugar (o vigia religando) retoma sem esperar o prazo do batimento.
+process.once('exit', () => ownership.releaseSync());
 /** Código no disco mais novo que o no ar (marco: o pacote carregado agora, ou a subida pelo tsx). */
 const pendingRestart = pendingRestartCheck({ entry: import.meta.filename, startedAt: Date.parse(STARTED_AT) });
 /** Novidades do próprio Claudio’s Club no remoto (GitHub). */
@@ -209,6 +224,18 @@ async function buildBeforeRestart(): Promise<void> {
   }
 }
 
+/**
+ * Fecha as conversas, a vitrine e os títulos e, no fim, encerra os escopos de conversa do systemd que ainda existirem (cada conversa roda no seu; ver
+ * server/scopeCommand.ts): o que o fechamento normal não alcançou não pode ficar vivo e sem dono, nem em Parar nem em reinício.
+ */
+async function closeAll(): Promise<void> {
+  await Promise.all([chats.stopAll(), showcases.stopAll(), titles.stopAll()]);
+  // Só quem ficou com a porta: um segundo servidor que falhou ao subir não encerra as conversas do que está no ar.
+  if (listening) await reapChatScopes({ graceMs: 2000, log: (line) => console.log(`[chat] ${line}`) });
+}
+
+/** Este servidor ficou com a porta (`listen` deu certo). */
+let listening = false;
 let leaving = false;
 /** Pedido de retomada das conversas em turno: gravado ao reiniciar, apagado por Parar e pelo boot (ver server/chat/resume.ts). */
 const resumeFile = new ResumeFile(path.join(MYCO_HOME, 'run', 'resume.json'));
@@ -247,7 +274,7 @@ async function shutdown(stop: boolean, userAgent = '') {
       console.error('[servidor] não consegui gravar as conversas em turno:', err);
     }
   }
-  await Promise.race([Promise.all([chats.stopAll(), showcases.stopAll(), titles.stopAll()]), new Promise((r) => setTimeout(r, 5000))]);
+  await Promise.race([closeAll(), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(0);
 }
 // Parado por sinal (npm run daily:stop, o vigia religando, tsx watch): as conversas são líderes do próprio
@@ -255,7 +282,7 @@ async function shutdown(stop: boolean, userAgent = '') {
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
   process.once(signal, () => {
     console.log(`[servidor] ${signal}: fechando as conversas`);
-    void Promise.race([Promise.all([chats.stopAll(), showcases.stopAll(), titles.stopAll()]), new Promise((r) => setTimeout(r, 5000))]).then(() => process.exit(0));
+    void Promise.race([closeAll(), new Promise((r) => setTimeout(r, 5000))]).then(() => process.exit(0));
   });
 }
 // Só local: o Claudio’s Club lê transcripts e configurações do usuário.
@@ -487,6 +514,11 @@ const turnRetries = new AutoContinue({
 const turnLedger = new TurnRetryLedger(path.join(MYCO_HOME, 'turn-retry.json'));
 
 const chats: ChatManager = new ChatManager({
+  // Abrir (ou reabrir) um processo de conversa é do servidor que manda no projeto: a instância que só lê recusa (NotOwnerError, 423 na rota).
+  assertOwner: async (projectId) => {
+    const dir = await projectPathOf(projectId);
+    if (dir) await assertOwner(dir);
+  },
   // O aviso de segredo achar o arquivo que um comando leu (vários no mesmo comando): precisa da raiz do projeto para nada fora dela ser aberto.
   projectDirOf: (projectId) => projectPathOf(projectId),
   // Falta memória (livre abaixo do `minFreeRamGb` da config, o mesmo mínimo da fila): a conversa parada há mais tempo fecha sem esperar os 15 min (ver
@@ -571,6 +603,11 @@ turns.start();
 // Tarefas por projeto (`.myco/tasks.json`): começam numa conversa nova e andam sozinhas com ela.
 // Sem o resumo do `listProjects` (stat de todo transcript): quase toda leitura e gravação de tarefa passa por aqui.
 const projectPathOf = (projectId: string) => adapter.projectPath(projectId);
+/** Este servidor manda no projeto (toma a posse se ninguém tem)? Projeto que não existe mais: não há o que proteger, e quem usa o id falha do seu jeito. */
+const ownsProjectId = async (projectId: string): Promise<boolean> => {
+  const dir = await projectPathOf(projectId);
+  return !dir || (await ownsProject(dir));
+};
 /** Fontes do custo por tarefa (ver server/taskCost.ts): transcripts do Claude, o registro do Club (threadId) e o uso do Codex. */
 async function taskCostSources(files: TranscriptCost[]): Promise<CostSources> {
   const registry = await readSessionRegistry().catch((): Map<string, { threadId?: string }> => new Map());
@@ -743,6 +780,7 @@ const releases: ReleaseService = new ReleaseService({
   projectPath: projectPathOf,
   projectIds: () => adapter.boardProjectIds(),
   readTasks,
+  owns: ownsProjectId,
   createTask: async (projectId, body) => tasks.create(projectId, body),
   startTask: (projectId, taskId) => tasks.start(projectId, taskId),
   runTests: async (dir) => {
@@ -872,7 +910,8 @@ watchWakeups(
 // Rotinas: no horário, a mensagem vai ao funcionário pelo mesmo caminho do chat do painel.
 const routines = new RoutineScheduler({
   file: path.join(MYCO_HOME, 'routines.json'),
-  listStaff: () => scheduledStaff(),
+  // Só as rotinas de projeto que este servidor possui: de outro, quem as dispara é o dono (ver server/projectOwner.ts).
+  listStaff: async () => ownedRoutineStaff(await scheduledStaff(), ownsProjectId),
   run: runRoutine,
   paused: projectPaused,
 });
@@ -2873,6 +2912,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
       try {
         // Qualquer escrita (ficha, tarefa, projeto, conversa aberta/encerrada pelo Club) invalida o /api/board, no início e no fim.
         if (method !== 'GET') boardCache.invalidate();
+        // Escrita num projeto que este servidor não possui (instância de teste, ou o dono é outro): 423 antes de ler o corpo (ver server/projectOwner.ts).
+        if (method !== 'GET') await assertProjectRoute(url.pathname, projectPathOf);
         // O envio de anexo manda os bytes do arquivo (até 10 MB) em vez de JSON.
         const body = method !== 'GET' ? (ATTACHMENT_UPLOAD.test(url.pathname) ? await readRaw(req, MAX_ATTACHMENT_BYTES) : await readJson(req)) : undefined;
         const userAgent = (req.headers['user-agent'] ?? '').replace(/[^\x20-\x7e]/g, '').slice(0, 80);
@@ -2938,6 +2979,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof StaffSendLimitError) return send(res, 429, { error: err.message }, { 'retry-after': String(err.retryAfter) });
         // Reiniciando: a entrega é recusada e a conversa não abre (tentar de novo em instantes).
         if (err instanceof ChatClosingError) return send(res, 503, { error: err.message });
+        // Esta instância só lê o projeto (o dono é outro servidor): nada foi gravado nem aberto.
+        if (err instanceof NotOwnerError) return send(res, 423, { error: err.message, code: err.code });
         // Fechar (ou arquivar) uma conversa que trabalha: 409 com `code` (`working`: falta `confirm`; `uncertain`: efeito fora do projeto, com a `action`). Nada foi fechado.
         if (err instanceof CloseRefusedError) return send(res, 409, { error: err.message, code: err.code, ...(err.action && { action: err.action }) });
         if (
@@ -3431,6 +3474,13 @@ function send(res: http.ServerResponse, status: number, body: unknown, headers: 
  * Migração das skills (ver skillMigration.ts): a biblioteca do Club vai para a Global (uma vez) e os nomes antigos das fichas viram refs.
  * O log diz o que mudou e o que ficou (conflitos e fichas de projeto que não deu para ler).
  */
+/** Tira os projetos que são de outro servidor: as migrações da subida gravam nas fichas e nos agents do projeto, e a instância que só lê não as faz (ver server/projectOwner.ts). */
+async function notOwnedByOther<T extends { path: string }>(list: T[]): Promise<T[]> {
+  const out: T[] = [];
+  for (const p of list) if (!(await ownedByOther(p.path))) out.push(p);
+  return out;
+}
+
 async function migrateSkillsAtBoot(): Promise<void> {
   const lib = await migrateLibraryToGlobal({
     libraryDir: LIBRARY_DIR,
@@ -3441,7 +3491,7 @@ async function migrateSkillsAtBoot(): Promise<void> {
     console.log(`[skills] biblioteca → Global: ${lib.moved.length} movida(s)${lib.moved.length ? ` (${lib.moved.join(', ')})` : ''}`);
     if (lib.conflicts.length) console.log(`[skills] biblioteca: ${lib.conflicts.length} não movida(s), nada foi sobrescrito: ${lib.conflicts.join('; ')}`);
   }
-  const projects = (await adapter.listProjects()).filter((p) => p.exists);
+  const projects = await notOwnedByOther((await adapter.listProjects()).filter((p) => p.exists));
   const conv = await convertStaffSkills({
     projects,
     known: async (p) => {
@@ -3461,7 +3511,7 @@ async function migrateSkillsAtBoot(): Promise<void> {
  * backup e o que ficou (conflitos de nome e valores que faltam no cofre).
  */
 async function migrateMcpsAtBoot(): Promise<void> {
-  const projects = (await adapter.listProjects()).filter((p) => p.exists);
+  const projects = await notOwnedByOther((await adapter.listProjects()).filter((p) => p.exists));
   const r = await runMcpMigration({
     clubFile: CLUB_MCP_FILE,
     claudeConfigFile: defaultLocations().configFile,
@@ -3485,12 +3535,17 @@ async function migrateMcpsAtBoot(): Promise<void> {
   if (r.fichas.skipped.length) console.warn(`[mcp] projetos não lidos na conversão das fichas: ${r.fichas.skipped.join(', ')}`);
 }
 
+/** Cofre de segredos (ver secretVault.ts `vaultBoot`): onde os segredos ficam, o aviso sem chaveiro e a migração para o chaveiro do sistema (Linux). */
+async function migrateVaultAtBoot(): Promise<void> {
+  await vaultBoot();
+}
+
 /**
  * Migração dos agents prontos (ver staff/presetMigration.ts): o executor do projeto que ainda é o Haiku antigo passa para o Sonnet; o que
  * alguém editou fica e vai no log, com o que difere.
  */
 async function migrateAgentPresetsAtBoot(): Promise<void> {
-  const projects = (await adapter.listProjects()).filter((p) => p.exists);
+  const projects = await notOwnedByOther((await adapter.listProjects()).filter((p) => p.exists));
   const done = await migrateProjectAgents({
     projects,
     recordFile: path.join(MYCO_HOME, 'agents-migracao.json'),
@@ -3502,14 +3557,32 @@ async function migrateAgentPresetsAtBoot(): Promise<void> {
   }
 }
 
+/** Quanto a subida espera o servidor ANTIGO (da mesma casa) largar a posse, quando o novo sobe com ele ainda saindo. */
+const OWNER_WAIT_MS = 8_000;
+
+/** Registro da subida (ver `claimKnownProjects` em server/projectOwner.ts): só a casa padrão registra projeto sem dono; a instância de teste não cria nada e só lê. */
+async function claimKnown(): Promise<void> {
+  const projects = (await adapter.listProjects()).filter((x) => x.exists && !x.worktreeOf);
+  const hasData = async (dir: string) => (await fs.stat(path.join(dir, '.myco', 'tasks.json')).then(() => true, () => false)) || (await hasStaffFiles(dir));
+  const { mine, other } = await claimKnownProjects(ownership, projects, hasData, OWNER_WAIT_MS);
+  console.log(`[posse] ${mine.length} projeto(s) com este servidor${other.length ? `; ${other.length} só para leitura (de outra instância, ou sem dono e esta não registra): ${other.slice(0, 5).join(', ')}${other.length > 5 ? '…' : ''}` : ''}`);
+}
+
 server.listen(PORT, HOST, () => {
   console.log(`Claudio’s Club em http://claudio.localhost:${PORT} (adaptador: ${adapter.id})`);
+  // A origem que serve a tela vai para o registro que o bloqueio do navegador dos funcionários lê (ver server/clubAddress.ts). Só quem ficou com a porta.
+  if (!registerClubServer()) console.warn('[servidor] não consegui gravar a origem no registro (<MYCO_HOME>/run/origins): o bloqueio do navegador segue pela porta do servidor');
   // Só quem ficou com a porta confere as abas (um segundo servidor que falhou não pode parar o do outro).
   tabs.start();
+  // Só com a porta na mão a instância pode tomar projetos (ver server/projectOwner.ts); o registro vem antes de tudo que age sobre eles.
+  ownership.open();
+  listening = true;
+  const registered = claimKnown().catch((err: unknown) => console.error('[posse] não consegui registrar os projetos:', err));
   // Migração das skills (uma vez): depois da porta, sem segurar a subida.
   void migrateSkillsAtBoot().catch((err: unknown) => console.warn('[skills] migração não concluída:', err));
   void migrateMcpsAtBoot().catch((err: unknown) => console.warn('[mcp] migração não concluída:', err));
   void migrateAgentPresetsAtBoot().catch((err: unknown) => console.warn('[agents] migração dos prontos não concluída:', err));
+  void migrateVaultAtBoot().catch((err: unknown) => console.warn('[cofre] migração não concluída:', err));
   // Só depois de ficar com a porta: o segundo endereço é o da sandbox do Codex. Se não abrir (no macOS o 127.0.0.2 pode faltar), quem roda no
   // Codex fica sem rede e a conversa avisa (ver `codexRunEnv`); o resto do app segue igual.
   sandboxServer.once('error', (err: NodeJS.ErrnoException) => {
@@ -3523,12 +3596,14 @@ server.listen(PORT, HOST, () => {
   });
   // Só quem conseguiu a porta limpa: um segundo servidor que falhou não mexe nos processos do outro.
   chats.cleanOrphans().catch((err) => console.error('[chat] limpeza de órfãos falhou:', err));
+  // Escopo por conversa (Linux, com o vigia): a primeira sonda roda agora e se repete a cada 5 min; até ela responder as conversas abrem sem escopo.
+  conversationScopes.start();
   // Só o servidor que ficou com a porta agenda: um segundo que falhou não dispara rotinas em dobro.
   routines.start();
   // Tarefas que trocaram de motor voltam ao secundário ANTES do "continue", do despertador e da fila: o override vive só na
   // memória, e sem ele a conversa cairia no motor da ficha. Se falhar, o erro vai para o log e o resto sobe igual.
-  void tasks
-    .restoreFallbacks()
+  void registered
+    .then(() => tasks.restoreFallbacks())
     .catch((err) => console.error('[tarefas] motor secundário não reaberto:', err))
     // As conversas diretas trocadas voltam ao secundário da ficha atual (ver directFallback.ts), antes do continue.
     .then(() =>
@@ -3544,7 +3619,7 @@ server.listen(PORT, HOST, () => {
       // Quem estava em turno volta antes de tudo (ver server/chat/resume.ts). Só depois ligam o "continue", o despertador
       // e a fila: eles mandam mensagem, e não podem mandar de novo numa conversa que a retomada ainda está abrindo.
       // Tarefa que estava no motor secundário, com o principal liberado: o resume dela vai numa conversa nova no principal (ver TaskService.resumeOnPrimary).
-      void bootResume({ file: resumeFile.file, stopHit: usageStopHit, paused: projectPaused, send: (entry) => chats.resumeChat(entry), hold: (entry) => void chats.holdCut(entry.sessionId, entry.cut), redirect: (entry) => tasks.resumeOnPrimary(entry.projectId, entry.sessionId, resumeText(entry.hadPending)) }, () => {
+      void bootResume({ file: resumeFile.file, beforeResume: () => reapChatScopes({ olderThan: Date.parse(STARTED_AT), log: (line) => console.log(`[chat] ${line}`) }), stopHit: usageStopHit, paused: projectPaused, owns: ownsProjectId, send: (entry) => chats.resumeChat(entry), hold: (entry) => void chats.holdCut(entry.sessionId, entry.cut), redirect: (entry) => tasks.resumeOnPrimary(entry.projectId, entry.sessionId, resumeText(entry.hadPending)) }, () => {
         autoContinue.start();
         wakeups.start();
         turnRetries.start();

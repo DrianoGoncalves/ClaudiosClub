@@ -2245,6 +2245,11 @@ export interface FtpConnection {
   hasPassword: boolean;
 }
 
+/** Resposta de `POST /api/projects/:id/connections/ftp`: a conexão e, se o chaveiro do sistema não serviu e a senha foi para arquivo, o aviso em texto. */
+export interface FtpConnectionSaved extends FtpConnection {
+  vaultWarning?: string;
+}
+
 /** Nome do MCP de FTP na sessão do funcionário: as ferramentas aparecem como `mcp__myco-ftp__ftp_*`. */
 export const FTP_MCP_NAME = 'myco-ftp';
 

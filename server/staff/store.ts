@@ -9,6 +9,7 @@ import { PERSONALITIES } from '../../shared/personality';
 import { listDir, tryJson } from '../adapters/claude/fsutil';
 import { writeAtomic } from '../atomicWrite';
 import { ensureMycoGitignore } from '../mycoGitignore';
+import { assertOwner } from '../projectOwner';
 import { codexProfileError } from '../chat/codexArgs';
 import { slugify } from './ficha';
 import { readMcpAccess } from './mcpAccess';
@@ -381,6 +382,8 @@ export async function dropStaffSessions(projectPath: string, staffId: string, id
 }
 
 export async function saveProfile(projectPath: string, p: StaffProfile): Promise<void> {
+  // Equipe é dado do projeto: só a instância que manda nele grava (ver server/projectOwner.ts).
+  await assertOwner(projectPath);
   await writeAtomic(profileFile(projectPath, p.id), JSON.stringify(p, null, 2) + '\n');
 }
 
@@ -443,6 +446,7 @@ export async function createProfile(
   now = new Date(),
   sessions: StaffProfile['sessions'] = [],
 ): Promise<StaffProfile> {
+  await assertOwner(projectPath); // antes do retrato: sem a posse, nada é gravado
   const id = `${slugify(input.name)}-${randomBytes(2).toString('hex')}`;
   // Os legados não vão para a ficha nova: quem chama já os converteu em `mcpAccess` (ver mcpAccessOfInput).
   const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, roleId: _role, fallback, mcpPolicy: _mp, mcpWrite: _mw, ...fields } = input;
@@ -468,6 +472,7 @@ async function savePortrait(projectPath: string, id: string, dataUrl: string): P
   if (!m) throw new StaffError('retrato inválido: use PNG, JPEG ou WebP');
   const bytes = Buffer.from(m[2]!, 'base64');
   if (bytes.length > 2 * 1024 * 1024) throw new StaffError('retrato grande demais (máx. 2 MB)');
+  await assertOwner(projectPath);
   const name = `${id}.${PORTRAIT_TYPES[m[1]!]}`;
   await fs.mkdir(staffDir(projectPath), { recursive: true });
   await ensureMycoGitignore(projectPath);
@@ -489,6 +494,7 @@ export async function replacePortrait(projectPath: string, p: StaffProfile, data
 }
 
 export async function removePortrait(projectPath: string, p: StaffProfile): Promise<null> {
+  await assertOwner(projectPath);
   if (p.portrait && /^[a-z0-9-]+\.(png|jpg|webp)$/.test(p.portrait)) {
     await fs.rm(path.join(staffDir(projectPath), p.portrait), { force: true });
   }
@@ -501,6 +507,7 @@ export const historyDir = (projectPath: string, id: string) => path.join(staffDi
 const SAFE_VERSION = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
 
 export async function archiveVersion(projectPath: string, p: StaffProfile): Promise<string> {
+  await assertOwner(projectPath);
   const version = new Date().toISOString().replace(/[:.]/g, '-');
   await writeAtomic(path.join(historyDir(projectPath, p.id), `${version}.json`), JSON.stringify(p, null, 2) + '\n');
   return version;
@@ -527,6 +534,7 @@ export async function readVersion(projectPath: string, id: string, version: stri
 
 /** Cria a memória com um cabeçalho, se ainda não existir; nunca sobrescreve. */
 export async function ensureMemory(projectPath: string, p: StaffProfile): Promise<void> {
+  await assertOwner(projectPath);
   const file = memoryFile(projectPath, p.id);
   const header = `# Memória de ${p.name} — ${p.role}\n\nNotas curtas que ${p.name} acumula entre sessões (decisões, convenções, pendências).\n`;
   await fs.mkdir(path.dirname(file), { recursive: true });

@@ -107,6 +107,11 @@ export interface ChatManagerOptions {
    */
   codexLimits?: () => Promise<CodexUsage | null>;
   listLive: () => Promise<LiveSession[]>;
+  /**
+   * Esta instância manda no projeto (ver server/projectOwner.ts)? Abrir um processo de conversa (nova ou retomada) é ação do dono: uma instância que só lê não
+   * abre (lança `NotOwnerError`). Sem a opção, vale (testes).
+   */
+  assertOwner?: (projectId: string) => Promise<void>;
   /** Monta a linha de comando (ficha, autonomia, MCPs) de quem vai conversar. */
   /** `forkFrom`: sessão nova que começa como cópia desta (duplicar a conversa). */
   resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly?: boolean, consult?: ConsultStamp) => Promise<ChatSpawn | null>;
@@ -1689,6 +1694,8 @@ export class ChatManager {
     if (existing?.running && existing.isClosing) await existing.stopAndWait();
     // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
     if (existing?.running && !(existing.stale && !existing.working)) return existing;
+    // Daqui para baixo abre (ou reabre) um processo: só o servidor que manda no projeto faz isso.
+    await this.opts.assertOwner?.(projectId);
     if (existing?.running) await existing.stopAndWait(); // reabre com a ficha nova
     if (sessionId) {
       const other = await this.elsewhere(sessionId);
@@ -1774,6 +1781,10 @@ export class ChatManager {
         this.log(`${spawn.sessionId} saiu (pid ${pid})${error ? `: ${error.slice(0, 200)}` : ''}`);
         if (error) this.errorAt.set(spawn.sessionId, new Date().toISOString());
         if (pid !== null) void this.opts.registry?.remove(spawn.sessionId, pid).catch(() => {});
+      },
+      // Abriu de novo sem o escopo do systemd (o systemd-run falhou): o registro de órfãos passa a guardar o pid de agora.
+      onRelaunch: (pid) => {
+        if (pid !== null) void this.opts.registry?.add({ sessionId: spawn.sessionId, pid, server: process.pid, startedAt: this.chats.get(spawn.sessionId)?.startedAt ?? new Date().toISOString() }).catch(() => {});
       },
       spawnImpl: this.opts.spawnImpl,
       stopGraceMs: this.opts.stopGraceMs,

@@ -22,6 +22,7 @@ import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfir
 import { ANIMATIONS_KEY, animationsOn, readAnimationsChoice, systemReducesMotion } from './animations';
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground } from './board/colors';
+import { ServerStoppedBanner } from './lib/ServerStoppedBanner';
 import { LazyScreen } from './LazyScreen';
 import { startPresence } from './presence';
 import { useTheme } from './theme';
@@ -495,6 +496,7 @@ export function App() {
 
   return (
     <div className={`app ${animations ? 'anim-on' : 'anim-off'}`}>
+      <ServerStoppedBanner />
       {!board && <div className="center">{error ? <p className="error">{error}</p> : <Skeleton label={t('app.loadingBoard')} variant="columns" />}</div>}
       {board && (
         <ReactFlowProvider>

@@ -2534,3 +2534,32 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 :is(button, a):is(:hover, :focus-visible) > .ico-trash { transform: rotate(-8deg); }
 @media (prefers-reduced-motion: reduce) { :is(.ico-send, .ico-plus, .ico-trash) { transition: none; transform: none !important; } }
 .anim-off :is(.ico-send, .ico-plus, .ico-trash) { transition: none; transform: none !important; }
+
+/* Tela cheia "Ver cargos" (config → Cargos): 100% da largura, por cima do app; um card por cargo. */
+.roles-current { margin: 0; }
+.roles-screen { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; gap: 10px; padding: 12px; box-sizing: border-box; background: var(--card); color: var(--ink); height: 100dvh; }
+.roles-screen-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.roles-screen-head h2 { margin: 0; font-size: var(--fs-lg); flex: 1 1 auto; min-width: 0; }
+.roles-filters { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; flex: none; }
+.roles-filter { flex: none; background: none; color: var(--ink); font: inherit; font-size: var(--fs-md); cursor: pointer; white-space: nowrap; }
+.roles-filter.is-on { border-color: var(--ink-blue); box-shadow: 0 0 0 1px var(--ink-blue) inset; }
+.roles-screen-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: grid; gap: 10px; align-content: start; }
+.roles-cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.roles-card { display: grid; gap: 6px; align-content: space-between; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.roles-card:hover { border-color: var(--ink-blue); }
+.roles-card-open { display: grid; gap: 3px; text-align: left; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; min-width: 0; }
+.roles-card-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; }
+@media (min-width: 640px) { .roles-screen { padding: 16px 24px; } .roles-cards { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); } }
+.roles-edit-backdrop { position: absolute; inset: 0; display: grid; place-items: center; background: var(--scrim); padding: 8px; }
+.roles-edit { width: min(640px, 100%); max-height: 100%; overflow-y: auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+.role-niches { border: 1px solid var(--line); border-radius: 8px; margin: 0; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--fs-md); }
+.role-niches legend { padding: 0 4px; }
+.hire-role { border: 0; padding: 0; margin: 0; min-width: 0; }
+.hire-role-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.hire-role-info { display: grid; gap: 3px; min-width: 0; flex: 1 1 200px; margin: 0; }
+.roles-card.is-on { border-color: var(--ink-blue); box-shadow: 0 0 0 1px var(--ink-blue) inset; }
+
+/* Aviso fixo de que o Claudio’s Club parou (client/src/lib/ServerStoppedBanner.tsx): acima de tudo, com o botão em destaque. */
+.server-stopped { position: fixed; inset: 0 0 auto 0; z-index: 1000; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 16px; background: var(--danger-soft); color: var(--ink); border-bottom: 2px solid var(--danger); }
+.server-stopped-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 240px; min-width: 0; }
+.server-stopped .btn-primary { flex: 0 0 auto; min-height: 40px; }

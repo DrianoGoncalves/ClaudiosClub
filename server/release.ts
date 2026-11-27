@@ -16,6 +16,7 @@ import {
   type ReleaseView,
 } from '../shared/release';
 import { writeAtomic } from './atomicWrite';
+import { assertOwner } from './projectOwner';
 import type { GitRun } from './autoCommit';
 import { assertSafeConfig, githubRepoOf, validBranchName, withNetworkRetry } from './staff/gitSafe';
 
@@ -72,6 +73,11 @@ export interface ReleaseDeps {
   runTests: (dir: string) => Promise<TestRun | null>;
   /** O git e o gh sem hooks e com ambiente controlado (ver gitSafe.ts). */
   tools: { git: GitRun; gh: (args: string[], input?: string) => Promise<string> };
+  /**
+   * Este servidor manda no projeto (ver server/projectOwner.ts)? A rodada automática (`sweep`) não põe card na fila nem prepara a versão de projeto que é de outro servidor.
+   * Sem a opção, vale (testes).
+   */
+  owns?: (projectId: string) => Promise<boolean>;
   /** O escopo saiu da frente (preparada ou cancelada): a fila do projeto anda já, sem esperar a rodada. */
   onScopeLifted?: (projectId: string) => void;
   log?: (line: string) => void;
@@ -141,7 +147,9 @@ export class ReleaseService {
   }
 
   private async save(projectId: string, next: ReleaseState | null): Promise<void> {
-    const file = path.join(await this.dir(projectId), RELEASE_FILE);
+    const dir = await this.dir(projectId);
+    await assertOwner(dir); // o estado da versão é dado do projeto: só o servidor que manda nele grava
+    const file = path.join(dir, RELEASE_FILE);
     if (next) {
       await fs.mkdir(path.dirname(file), { recursive: true });
       await writeAtomic(file, JSON.stringify(next, null, 2) + '\n');
@@ -458,6 +466,8 @@ export class ReleaseService {
         if (!st || st.prepared || st.prepareError || this.preparing.has(projectId)) continue;
         const dir = await this.deps.projectPath(projectId);
         if (!dir) continue;
+        // Versão aberta de projeto que é de outro servidor: quem a põe na fila e a prepara é o dono.
+        if (this.deps.owns && !(await this.deps.owns(projectId).catch(() => false))) continue;
         const tasks = await this.deps.readTasks(dir).catch(() => null);
         if (!tasks) continue;
         const docs = st.docsTaskId ? tasks.find((t) => t.id === st.docsTaskId) : undefined;

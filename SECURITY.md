@@ -42,13 +42,16 @@ Este documento diz o que o Club protege, de quem, onde cada proteção mora e o 
 
 **Hooks** (`scripts/hooks/`, lista em `server/staff/launch.ts`)
 - `remote-guard.mjs`, `git-guard.mjs`, `mcp-write-guard.mjs`, `memory-guard.mjs`, `club-guard.mjs`.
+- `club-guard.mjs` barra a porta do servidor, `claudio.localhost` e as origens registradas em `<MYCO_HOME>/run/origins` (o Vite do dev, 5173; `scripts/hooks/club-origins.mjs`). Não vê redirecionamento feito pela página.
 
 **Servidor remoto**
 - Só pelos MCPs `myco-ssh` e `myco-ftp`, e só nas conexões marcadas na ficha.
 - Escrita exige permissão de escrita e autonomia (`server/staff/launch.ts`, `server/staff/sshMcp.ts`, `server/staff/ftpMcp.ts`).
 
 **Cofre de segredos** (`~/.myco/secrets`, `server/secretVault.ts`)
-- DPAPI no Windows, permissões 0600/0700 no Linux e macOS. O valor entra só por stdin.
+- DPAPI no Windows. No Linux, o chaveiro do sistema (Secret Service, pelo `secret-tool`; `server/secretKeyring.ts`): o arquivo do cofre guarda só o marcador `v1:keyring:<id>`. Sem chaveiro (servidor sem sessão gráfica, `secret-tool` ausente, bloqueado), cai para arquivo 0600/0700 sem cifra, com aviso no log e na resposta de salvar. macOS: só o arquivo. O valor entra só por stdin (em base64).
+- Segredos antigos em arquivo (`v1:file:`) seguem lidos e migram para o chaveiro na subida do servidor, cada um conferido por leitura antes de o arquivo virar marcador; falha deixa o arquivo como estava. `MYCO_VAULT_KEYRING=off` desliga; só a casa padrão `~/.myco` usa o chaveiro (`=on` liga com `MYCO_HOME` personalizado).
+- A ficha dos funcionários nega `Bash(secret-tool:*)` (o chaveiro destravado lista tudo). Terminal ainda fura (lacuna 1).
 - MCPs da biblioteca: env e cabeçalhos saem do cofre na subida (`server/staff/mcpLaunch.ts`).
 - Segredo na saída de comando: a origem é rastreada por HMAC, sem expor o valor (`server/chat/secretOrigin.ts`).
 

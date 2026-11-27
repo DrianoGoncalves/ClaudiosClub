@@ -250,7 +250,7 @@ describe('a conversa: cópia dos hooks, política no run dir e nada por ferramen
     const sessionDir = path.join(home, 'run', sid);
 
     // Os hooks de guarda são cópias na pasta da conversa, idênticas aos do programa.
-    for (const f of ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs']) {
+    for (const f of ['club-guard.mjs', 'club-origins.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs']) {
       expect(await fs.readFile(path.join(sessionDir, 'hooks', f), 'utf8')).toBe(await fs.readFile(path.join(ROOT_HOOKS, f), 'utf8'));
     }
 

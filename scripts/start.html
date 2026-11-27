@@ -32,6 +32,10 @@
         .start:has(#down:not([hidden])) .start-details { border-left: 1px solid var(--line); padding-left: 32px; }
       }
       .start .btn-primary { justify-self: start; font-size: 14px; padding: 8px 16px; }
+      /* Por que parou: a saída anterior não foi limpa (o vigia anota na subida seguinte; server/exitReason.ts). Ícone + texto, não só cor. */
+      .last-exit { display: grid; gap: 4px; border: 1px solid var(--danger); border-radius: 8px; padding: 8px 10px; background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+      .last-exit strong { color: var(--danger); }
+      .last-exit p { margin: 0; overflow-wrap: anywhere; }
       .start .btn-primary:disabled { opacity: 0.6; cursor: default; }
       .start code { font: 12px ui-monospace, Consolas, monospace; background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 0 3px; border-radius: 3px; }
       [hidden] { display: none !important; }
@@ -94,16 +98,24 @@
         </header>
         <p id="checking">Procurando o Claudio’s Club…</p>
         <div class="start-action" id="down-main" hidden>
-          <p>O Claudio’s Club está parado.</p>
-          <p class="muted small">Ele sobe em segundo plano, sem janela, e volta sozinho se cair.</p>
-          <button id="start" class="btn-primary" type="button">Iniciar o Claudio’s Club</button>
-          <p class="muted small" id="hint">
-            Com tudo pronto, sobe em segundo plano, sem janela. Se faltar algo (dependências, Claude Code, login), abre
-            um terminal que resolve, sobe o Claudio’s Club e fecha sozinho. Na primeira vez, o navegador pergunta se pode
-            abrir o Claudio’s Club (no Linux, como “Abrir xdg-open?”): marque <strong>“sempre permitir”</strong> e confirme. Se o Windows
-            oferecer a Microsoft Store, o link deste botão ainda não está registrado: rode <code>npm run daily:start</code>
-            uma vez na pasta do Claudio’s Club. Ele registra o link (sem atalho) e, daí em diante, se refaz a cada subida.
-          </p>
+          <p id="down-title">O Claudio’s Club está parado.</p>
+          <div class="last-exit" id="last-exit" role="status" hidden>
+            <strong>✗ Por que parou</strong>
+            <p id="last-exit-text"></p>
+            <p class="muted small" id="last-exit-hint"></p>
+          </div>
+          <div class="start-action" id="start-controls">
+            <p class="muted small">Ele sobe em segundo plano, sem janela, e volta sozinho se cair.</p>
+            <button id="start" class="btn-primary" type="button">Iniciar o Claudio’s Club</button>
+            <p class="muted small" id="hint">
+              Com tudo pronto, sobe em segundo plano, sem janela. Se faltar algo (dependências, Claude Code, login), abre
+              um terminal que resolve, sobe o Claudio’s Club e fecha sozinho. Na primeira vez, o navegador pergunta se pode
+              abrir o Claudio’s Club (no Linux, como “Abrir xdg-open?”): marque <strong>“sempre permitir”</strong> e confirme. Se o Windows
+              oferecer a Microsoft Store, o link deste botão ainda não está registrado: rode <code>npm run daily:start</code>
+              uma vez na pasta do Claudio’s Club. Ele registra o link (sem atalho) e, daí em diante, se refaz a cada subida.
+            </p>
+          </div>
+          <button id="open-app" class="btn-primary" type="button" hidden>Abrir o Claudio’s Club</button>
         </div>
         <p id="starting" hidden>Iniciando… (o primeiro build leva uns segundos)</p>
       </div>
@@ -220,6 +232,32 @@
           : '';
         const box = el('log-box');
         box.scrollTop = box.scrollHeight;
+      }
+
+      // O aviso de saída anterior não limpa (o vigia o anota na subida seguinte; vem junto do log, em `log.exit`). Falta de memória: o que fazer é diferente.
+      const EXIT_HINT = {
+        oom: 'O sistema encerrou o Claudio’s Club por falta de memória. Feche programas pesados antes de seguir. A conversa que estava no meio de um turno foi interrompida: abra-a e peça para continuar.',
+        'memory-low': 'A memória estava no fim. Feche programas pesados antes de seguir. A conversa que estava no meio de um turno pode ter sido interrompida: abra-a e peça para continuar.',
+        unknown: 'A conversa que estava no meio de um turno pode ter sido interrompida: abra-a e peça para continuar.',
+      };
+      // O aviso vale por 30 min e uma vez: o relatório nasce na subida que traz o Claudio’s Club de volta, e o service worker guarda a cópia do log.js de uma
+      // visita anterior (ela não sabe que o usuário parou o Club depois). `Abrir` marca o aviso como visto neste navegador; um aviso visto ou velho não volta.
+      const EXIT_SHOW_MS = 30 * 60 * 1000;
+      const EXIT_SEEN_KEY = 'claudioExitSeen';
+      const seenExit = () => { try { return localStorage.getItem(EXIT_SEEN_KEY); } catch (e) { return null; } };
+      const markExitSeen = (exit) => { try { localStorage.setItem(EXIT_SEEN_KEY, exit.detectedAt); } catch (e) { /* sem armazenamento: o aviso só volta em 30 min */ } };
+      function freshExit(exit) {
+        if (!exit || typeof exit.message !== 'string' || !exit.message) return null;
+        const at = Date.parse(exit.detectedAt);
+        if (isNaN(at) || Date.now() - at > EXIT_SHOW_MS || seenExit() === exit.detectedAt) return null;
+        return exit;
+      }
+      function renderExit(exit) {
+        const shown = freshExit(exit);
+        el('last-exit').hidden = !shown;
+        if (!shown) return;
+        el('last-exit-text').textContent = shown.message.charAt(0).toUpperCase() + shown.message.slice(1) + '.';
+        el('last-exit-hint').textContent = EXIT_HINT[shown.cause] || EXIT_HINT.unknown;
       }
 
       // Fechado, a tabela não tem altura: ao abrir, desce até a linha mais nova.
@@ -463,12 +501,40 @@
         const [st, buildOk, log] = await Promise.all([loadStatus(), buildProbe, loadLog()]);
         render(st, buildOk, up);
         renderLog(log);
+        renderExit(log && log.exit);
         el('recheck').disabled = false;
+      }
+
+      // O Claudio’s Club respondeu. Se ele acabou de voltar de uma saída que não foi limpa (o relatório nasce na subida, então só agora dá para mostrá-lo a quem acabou de
+      // clicar Iniciar), a página fica com o motivo e um botão para abrir; sem aviso, entra direto. `opened`: o Iniciar já abriu o app numa aba nova (aberta como arquivo).
+      async function enterApp(opened) {
+        const log = await loadLog();
+        const exit = freshExit(log && log.exit);
+        if (!exit) {
+          if (!opened) return location.replace(app);
+          el('down').hidden = true;
+          el('down-main').hidden = true;
+          el('starting').hidden = false;
+          el('starting').textContent = 'Pronto: o Claudio’s Club abriu numa aba nova, já pareado. Pode fechar esta.';
+          return;
+        }
+        el('checking').hidden = true;
+        el('down').hidden = true;
+        el('starting').hidden = true;
+        el('down-main').hidden = false;
+        el('start-controls').hidden = true;
+        el('down-title').textContent = opened ? 'Pronto: o Claudio’s Club abriu numa aba nova, já pareado. Pode fechar esta.' : 'O Claudio’s Club está no ar de novo.';
+        renderExit(exit);
+        el('open-app').hidden = opened;
+        el('open-app').onclick = () => {
+          markExitSeen(exit);
+          location.replace(app);
+        };
       }
 
       async function check() {
         const up = await isUp();
-        if (up) return location.replace(app);
+        if (up) return enterApp(false);
         el('checking').hidden = true;
         el('down-main').hidden = false;
         el('down').hidden = false;
@@ -491,13 +557,7 @@
         for (let i = 0; i < WAIT_MINUTES * 30; i++) {
           await new Promise((r) => setTimeout(r, 2000));
           const up = await isUp();
-          if (up && !viaFile) return location.replace(app);
-          if (up) {
-            el('down').hidden = true;
-            el('down-main').hidden = true;
-            el('starting').textContent = 'Pronto: o Claudio’s Club abriu numa aba nova, já pareado. Pode fechar esta.';
-            return;
-          }
+          if (up) return enterApp(viaFile);
           await refresh(up);
         }
         el('starting').textContent = `Não subiu em ${WAIT_MINUTES} minutos. Veja o log.`;
@@ -507,7 +567,7 @@
 
       el('recheck').addEventListener('click', async () => {
         const up = await isUp();
-        if (up) return location.replace(app);
+        if (up) return enterApp(false);
         await refresh(up);
       });
 

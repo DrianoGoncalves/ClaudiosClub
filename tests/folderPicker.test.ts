@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -11,7 +12,9 @@ import {
   PICK_TIMEOUT_MS,
   PickerBusyError,
   pickFolder,
+  portalScript,
   readLinux,
+  readPortal,
   readMac,
   readWindows,
   runTool,
@@ -121,19 +124,22 @@ describe('macOS (osascript)', () => {
   });
 });
 
-describe('Linux (zenity ou kdialog)', () => {
+describe('Linux (zenity, kdialog ou o portal do sistema)', () => {
   it('sem tela (nem DISPLAY nem WAYLAND_DISPLAY) não há o que abrir', () => {
     expect(toolsFor('linux', {})).toEqual([]);
     expect(toolsFor('linux', { DISPLAY: '' })).toEqual([]);
   });
 
-  it('com tela: zenity e depois kdialog, só com argumentos fixos', () => {
+  it('com tela: zenity, kdialog e por último o portal (python3), só com argumentos fixos', () => {
     for (const env of [{ DISPLAY: ':0' }, { WAYLAND_DISPLAY: 'wayland-0' }]) {
       const tools = toolsFor('linux', env);
-      expect(tools.map((t) => t.cmd)).toEqual(['zenity', 'kdialog']);
+      expect(tools.map((t) => t.cmd)).toEqual(['zenity', 'kdialog', 'python3']);
       expect(tools[0]!.args).toEqual(['--file-selection', '--directory', '--title=Escolha a pasta do projeto']);
       expect(tools[1]!.args).toEqual(['--getexistingdirectory', '--title', 'Escolha a pasta do projeto']);
+      // Modo isolado (-I), o script constante em -c e o título como argv[1]: nada do ambiente nem do pedido vira código.
+      expect(tools[2]!.args).toEqual(['-I', '-c', portalScript(), 'Escolha a pasta do projeto']);
     }
+    expect(toolsFor('linux', { DISPLAY: ':0', PYTHONPATH: '/tmp/x', PYTHONSTARTUP: '/tmp/y.py' })[2]!.args).toEqual(toolsFor('linux', { DISPLAY: ':1' })[2]!.args);
     expect(toolsFor('linux', { DISPLAY: ':0', HOME: "x'; rm -rf /; '" })[0]!.args).toEqual(toolsFor('linux', { DISPLAY: ':1' })[0]!.args);
   });
 
@@ -149,6 +155,105 @@ describe('Linux (zenity ou kdialog)', () => {
     expect(readLinux(run({ code: 1, stderr: 'Gtk-WARNING **: cannot open display: \n' }))).toBeNull();
     expect(readLinux(run({ code: 255, stderr: 'erro' }))).toBeNull();
     expect(readLinux(run({ code: 1, stdout: '/algo\n' }))).toBeNull();
+  });
+});
+
+describe('Linux: portal do sistema (python3 + Gio)', () => {
+  it('o script é constante, com o título só como argumento e o sinal assinado ANTES de abrir o pedido', () => {
+    const s = portalScript();
+    expect(portalScript()).toBe(s);
+    expect(s).not.toContain('Escolha a pasta'); // o título vai em argv[1], nunca dentro do código
+    expect(s).not.toContain('${'); // template literal: nada interpolado
+    expect(s).not.toContain('\\'); // nem barra invertida (viraria outro caractere no Python)
+    expect(s).toContain('"directory": GLib.Variant("b", True)');
+    expect(s).toContain('"multiple": GLib.Variant("b", False)');
+    expect(s.indexOf('subscribe(predicted)')).toBeGreaterThan(0);
+    expect(s.indexOf('subscribe(predicted)')).toBeLessThan(s.indexOf('"OpenFile"'));
+  });
+
+  it('lê OK:<base64> (acento, espaço, nº) e CANCEL; barra final sai', () => {
+    const p = '/home/ana/Área João/Obra nº 1';
+    expect(readPortal(run({ stdout: `OK:${b64(p)}\n` }))).toEqual({ path: p });
+    expect(readPortal(run({ stdout: `aviso\nOK:${b64(`${p}/`)}\n` }))).toEqual({ path: p });
+    expect(readPortal(run({ stdout: 'CANCEL\n' }))).toEqual({ cancelled: true });
+  });
+
+  it('falha: código diferente de 0, saída vazia, lixo, base64 inválido, caminho relativo, controle ou bytes que não são UTF-8', () => {
+    expect(readPortal(run({ code: 2, stderr: 'portal FileChooser: x' }))).toBeNull();
+    expect(readPortal(run({ code: 1, stdout: `OK:${b64('/a')}` }))).toBeNull();
+    expect(readPortal(run({ code: 1, stdout: 'CANCEL\n' }))).toBeNull(); // só vale com código 0
+    expect(readPortal(run({ stdout: '' }))).toBeNull();
+    expect(readPortal(run({ stdout: '/home/ana/loja\n' }))).toBeNull(); // o caminho cru (como o do zenity) não é o formato do portal
+    expect(readPortal(run({ stdout: 'OK:@@@@' }))).toBeNull();
+    expect(readPortal(run({ stdout: `OK:${b64('relativo/pasta')}` }))).toBeNull();
+    expect(readPortal(run({ stdout: `OK:${b64('/a\nb')}` }))).toBeNull();
+    expect(readPortal(run({ stdout: `OK:${b64('')}` }))).toBeNull();
+    expect(readPortal(run({ stdout: `OK:${Buffer.from([0x2f, 0x61, 0xff, 0xfe]).toString('base64')}` }))).toBeNull();
+  });
+
+  it('a ordem: zenity, kdialog, portal; quem já abre hoje não passa pelo portal', async () => {
+    const env = { WAYLAND_DISPLAY: 'wayland-1' };
+    const portal = run({ stdout: `OK:${b64('/home/ana/Área de Trabalho/loja')}\n` });
+    // Só o portal existe (o Omarchy): zenity e kdialog dão ENOENT e o portal abre.
+    const only = fake({ python3: portal });
+    expect(await pickFolder({ platform: 'linux', env, runner: only.runner })).toEqual({ path: '/home/ana/Área de Trabalho/loja' });
+    expect(only.calls.map((c) => c.cmd)).toEqual(['zenity', 'kdialog', 'python3']);
+    expect(only.calls[2]!.args.slice(0, 2)).toEqual(['-I', '-c']);
+    // zenity abriu e escolheram: o portal nem roda.
+    const zen = fake({ zenity: run({ stdout: '/home/ana/a\n' }), python3: portal });
+    expect(await pickFolder({ platform: 'linux', env, runner: zen.runner })).toEqual({ path: '/home/ana/a' });
+    expect(zen.calls.map((c) => c.cmd)).toEqual(['zenity']);
+    // zenity cancelado: é cancelado, não tenta o portal (senão abriria uma segunda janela depois do "cancelar").
+    const zenCancel = fake({ zenity: run({ code: 1 }), python3: portal });
+    expect(await pickFolder({ platform: 'linux', env, runner: zenCancel.runner })).toEqual({ cancelled: true });
+    expect(zenCancel.calls.map((c) => c.cmd)).toEqual(['zenity']);
+  });
+
+  it('janela do portal fechada: { cancelled: true }; prazo: o runner mata o python3 e é cancelado, sem ler a saída', async () => {
+    const env = { DISPLAY: ':0' };
+    expect(await pickFolder({ platform: 'linux', env, runner: fake({ python3: run({ stdout: 'CANCEL\n' }) }).runner })).toEqual({ cancelled: true });
+    const late = fake({ python3: run({ code: null, timedOut: true, stdout: `OK:${b64('/nao/vale')}` }) });
+    expect(await pickFolder({ platform: 'linux', env, runner: late.runner, timeoutMs: 777 })).toEqual({ cancelled: true });
+    expect(late.calls[0]!.timeoutMs).toBe(777);
+  });
+
+  it('portal que falha (sem gi, sem sessão D-Bus, sem portal, v2): vai ao log e vira unsupported; python3 ausente também', async () => {
+    const log: string[] = [];
+    const broken = fake({ python3: run({ code: 2, stderr: 'portal FileChooser: sem python3-gi (No module named gi)\nsegunda linha /home/ana\n' }) });
+    expect(await pickFolder({ platform: 'linux', env: { DISPLAY: ':0' }, runner: broken.runner, log: (l) => log.push(l) })).toEqual({ unsupported: true });
+    expect(log).toHaveLength(1);
+    expect(log[0]).toContain('python3 falhou (código 2): portal FileChooser: sem python3-gi');
+    expect(log[0]).not.toContain('segunda linha');
+    expect(await pickFolder({ platform: 'linux', env: { DISPLAY: ':0' }, runner: fake({}).runner })).toEqual({ unsupported: true });
+  });
+
+  it('zenity e kdialog que falham passam ao portal', async () => {
+    const { runner, calls } = fake({
+      zenity: run({ code: 1, stderr: 'Gtk-WARNING **: cannot open display: :0\n' }),
+      kdialog: run({ code: 255, stderr: 'erro' }),
+      python3: run({ stdout: `OK:${b64('/home/ana/loja')}\n` }),
+    });
+    expect(await pickFolder({ platform: 'linux', env: { DISPLAY: ':0' }, runner })).toEqual({ path: '/home/ana/loja' });
+    expect(calls.map((c) => c.cmd)).toEqual(['zenity', 'kdialog', 'python3']);
+  });
+});
+
+// O script roda de verdade em um python3 (sem abrir janela nem falar com o portal): confere a sintaxe e o contrato de falha.
+const hasPython = spawnSync('python3', ['-I', '-c', 'pass']).status === 0;
+describe.skipIf(!hasPython)('Linux: o script do portal em um python3 de verdade (sem janela)', () => {
+  it('é Python válido', async () => {
+    const r = await runTool('python3', ['-I', '-c', 'import ast, sys; ast.parse(sys.argv[1])', portalScript()], 20_000);
+    expect(r).toMatchObject({ code: 0, missing: false, timedOut: false });
+  });
+
+  it('sem o módulo gi: sai com 2, nada no stdout e a causa numa linha do stderr (não 1, que seria lido como cancelar)', async () => {
+    const harness = "import sys; s = sys.argv[1]; sys.argv[1:] = ['titulo']; sys.modules['gi'] = None; exec(s)";
+    const r = await runTool('python3', ['-I', '-c', harness, portalScript()], 20_000);
+    expect(r.code).toBe(2);
+    expect(r.stdout).toBe('');
+    expect(r.stderr.trim().split(/\r?\n/)).toHaveLength(1);
+    expect(r.stderr).toContain('portal FileChooser: sem python3-gi');
+    expect(readPortal(r)).toBeNull();
   });
 });
 
@@ -186,12 +291,12 @@ describe('pickFolder', () => {
     expect(await pickFolder({ platform: 'win32', env: {}, runner })).toEqual({ cancelled: true });
   });
 
-  it('sem ferramenta: { unsupported: true } (Linux sem tela, sem zenity nem kdialog, sistema que não conhecemos), sem rodar nada quando não há o que rodar', async () => {
+  it('sem ferramenta: { unsupported: true } (Linux sem tela, sem zenity, kdialog nem python3, sistema que não conhecemos), sem rodar nada quando não há o que rodar', async () => {
     const none = fake({});
     expect(await pickFolder({ platform: 'linux', env: {}, runner: none.runner })).toEqual({ unsupported: true });
     expect(none.calls).toEqual([]); // sem tela, nem tenta
     expect(await pickFolder({ platform: 'linux', env: { DISPLAY: ':0' }, runner: none.runner })).toEqual({ unsupported: true });
-    expect(none.calls.map((c) => c.cmd)).toEqual(['zenity', 'kdialog']);
+    expect(none.calls.map((c) => c.cmd)).toEqual(['zenity', 'kdialog', 'python3']);
     const freebsd = fake({});
     expect(await pickFolder({ platform: 'freebsd', env: { DISPLAY: ':0' }, runner: freebsd.runner })).toEqual({ unsupported: true });
     expect(freebsd.calls).toEqual([]);

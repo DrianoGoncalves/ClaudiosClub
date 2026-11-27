@@ -10,6 +10,7 @@ import type {
   ConsultStamp,
   EngineOverride,
   FtpConnection,
+  FtpConnectionSaved,
   LaunchResult,
   McpServerInfo,
   Project,
@@ -52,8 +53,10 @@ import type { CodexModelsResult } from '../codexModels';
 import { readCodexThread } from '../chat/codexProcess';
 import { buildClaudeArgs, buildClaudeConsultArgs, capAutonomy } from './ficha';
 import { mcpAccessOfInput, mergeMcpAccess } from './mcpAccess';
+import { registeredClubPorts } from '../clubAddress';
 import { greeting, prepareCodexRun, prepareConsultRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { attachThreadId, recordSession, type NewRegisteredSession } from '../sessionsRegistry';
+import { ownsProject } from '../projectOwner';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { convertMcps, duplicateMcpNames, isMcpRef } from '../mcpAccessRefs';
 import { knownMcpNames, listMcpServers } from './mcp';
@@ -335,7 +338,7 @@ export class StaffService {
   }
 
   /** FTP: criar ou editar (senha ausente na edição = mantém a do cofre). Nunca devolve a senha. */
-  async saveFtpConnection(projectId: string, body: unknown): Promise<FtpConnection | null> {
+  async saveFtpConnection(projectId: string, body: unknown): Promise<FtpConnectionSaved | null> {
     const project = await this.project(projectId);
     if (!project) return null;
     const original = (body as { originalName?: unknown } | null)?.originalName;
@@ -1038,7 +1041,8 @@ export class StaffService {
     const out: StaffProfile[] = [];
     for (const project of (await this.adapter.listProjects()).filter((p) => p.exists)) {
       const temps = (await listProjectStaff(project.path, project.id)).filter((s) => s.temporary);
-      if (!temps.length) continue;
+      // Arquivar é gravar na equipe: só o servidor que manda no projeto varre (ver server/projectOwner.ts).
+      if (!temps.length || !(await ownsProject(project.path))) continue;
       // A data real de cada uma (inclusive as antigas): a limpeza de temporários não depende da retenção.
       const sessions = (await this.adapter.getProjectSessions(project.id, { includeOld: true }).catch(() => null)) ?? [];
       const touched = new Map(sessions.map((s) => [s.id, s.updatedAt]));
@@ -1655,6 +1659,8 @@ export class StaffService {
       codexBrowser: config.codexBrowser,
       // O navegador do funcionário não abre a tela do Club (hook e --blocked-origins); lida ao abrir a conversa.
       clubGuard: config.clubGuard,
+      // As origens registradas que servem a tela do Club (o Vite do dev): entram no --blocked-origins do Codex e do navegador limpo (o hook do Claude relê a cada chamada).
+      clubPorts: registeredClubPorts(),
       // Claude contratado por gestor no Codex (selo `claude`) e ainda no "Pede tudo": a ficha conta o porquê.
       lockedByCodexManager: profile.autonomy === 'manual' && profile.engine !== 'codex' && (await readSeal(this.opts.runDir, project.path, profile.id))?.engine === 'claude',
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha

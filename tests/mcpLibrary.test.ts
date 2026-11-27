@@ -2,10 +2,11 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { hasSecret, getSecret } from '../server/secretVault';
+import { hasSecret, getSecret, secretFile } from '../server/secretVault';
 import { buildMcpConfig, clubSecretId, listMcpServers, McpError } from '../server/staff/mcp';
 import { mcpLaunchCommand, parseLauncherEntry } from '../server/staff/mcpLaunch';
 import { createMcpLibrary, MASK, maskArgs, maskUrl } from '../server/staff/mcpLibrary';
+import { fakeKeyring } from './support/fakeKeyring';
 import { removeTemp } from './support/tmp';
 
 // Tudo em pastas temporárias: nunca o ~/.claude.json real. O cofre usa o modo arquivo (platform linux).
@@ -116,6 +117,25 @@ describe('biblioteca de MCP: lista sem valor', () => {
 });
 
 describe('biblioteca de MCP: Global do Club (cofre, lançador)', () => {
+  it('o chaveiro do sistema guarda o valor; sem ele o valor vai para arquivo e a resposta traz o aviso', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const kr = fakeKeyring();
+    const env = await setup();
+    const kvault = { ...env.vault, keyring: kr };
+    const lib = createMcpLibrary({ claudeConfigFile: env.claude, clubFile: env.club, backupDir: env.backups, resolveProject: async () => env.proj, vault: kvault });
+    const first = await lib.save({ scope: 'global', name: 'fs', type: 'stdio', command: 'node', args: ['srv.js'], env: { FS_TOKEN: 'valor-no-chaveiro-1' } }, true);
+    expect(first.vaultWarning).toBeUndefined();
+    expect([...kr.items.values()]).toEqual(['valor-no-chaveiro-1']);
+    expect(await fs.readFile(secretFile(clubSecretId('fs', 'env', 'FS_TOKEN'), kvault), 'utf8')).not.toContain('valor-no-chaveiro');
+    expect(await getSecret(clubSecretId('fs', 'env', 'FS_TOKEN'), kvault)).toBe('valor-no-chaveiro-1');
+
+    kr.down = 'no-service';
+    const second = await lib.save({ scope: 'global', originalName: 'fs', name: 'fs', type: 'stdio', command: 'node', args: ['srv.js'], env: { FS_TOKEN: 'valor-em-arquivo-2' } }, true);
+    expect(second.vaultWarning).toMatch(/Sem chaveiro do sistema \(.*nenhum chaveiro.*\)/);
+    expect(JSON.stringify(second)).not.toContain('valor-em-arquivo-2');
+    expect(await getSecret(clubSecretId('fs', 'env', 'FS_TOKEN'), kvault)).toBe('valor-em-arquivo-2');
+  });
+
   it('grava o segredo no cofre, o lançador no ~/.claude.json e a definição no registro; null mantém; removeKeys apaga', async () => {
     const env = await setup();
     const { server } = await env.lib.save({ scope: 'global', name: 'fs', type: 'stdio', command: 'node', args: ['srv.js'], env: { FS_TOKEN: 'valor-do-cofre-999' } }, true);

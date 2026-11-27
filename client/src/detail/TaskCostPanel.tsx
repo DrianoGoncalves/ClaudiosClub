@@ -235,7 +235,7 @@ export function TaskCostView({
 /** A aba Tarefas: lê o custo do período escolhido e rebusca enquanto os transcripts são lidos. */
 export function TaskCostPanel({ staff, onOpenTask, onOpenPerson }: { staff: StaffIndex; onOpenTask: (projectId: string, taskId: string) => void; onOpenPerson: (person: Person) => void }) {
   const [limit, setLimit] = useState(10);
-  const [period, setPeriod] = useState('90');
+  const [period, setPeriod] = useState('1');
   const days = RANKING_PERIODS.find(([k]) => k === period)?.[1] ?? null;
   const { data, error } = useScanPoll(() => api.taskCosts(days), period);
   return (

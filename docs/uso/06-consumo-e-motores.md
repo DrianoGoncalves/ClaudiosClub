@@ -124,7 +124,7 @@ Sinais na tela:
 - O botão **RH e ranking** (ícone de pessoas) no topo do quadro abre o painel lateral, com as abas **RH**, **Gastos** e **Economia**.
 - Aba **Gastos** ("Quem mais gasta"): a parte de cada um no consumo total. Serve para comparar; as sessões rodam pela assinatura.
 - Aba **Economia** ("Quem mais economiza"): estimativa, comparada com o chefe fazendo tudo no modelo dele.
-- **Período**: **Hoje**, **7 dias**, **1 mês**, **Últimos 3 meses** (padrão) ou **Tudo**.
+- **Período**: **Hoje** (padrão), **7 dias**, **1 mês**, **Últimos 3 meses** ou **Tudo**.
 - Enquanto os transcripts são lidos, aparece "Ainda lendo os transcripts: os números vão crescer."
 - Na aba **Gastos**, a linha de quem tem ficha tem um botão de lupa, **Analisar o custo de {nome}**. Conversa sem ficha (**Freela**) só leva ao nó no quadro.
 

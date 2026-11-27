@@ -116,7 +116,7 @@ Com conexões marcadas na ficha, o funcionário trabalha no servidor (por exempl
 - **Envio de arquivo**: só arquivo do projeto, até 10 MB, para dentro da **Pasta do projeto no servidor** (sem ela, não envia). Não cria pastas e só troca um arquivo que já existe se o funcionário pedir. Não envia `.env`, chaves nem `.git`, e não escreve em `.ssh`, `.git` nem `authorized_keys`.
 - **Limites**: 60 segundos por comando, um comando por vez em cada conexão, e pausa de 30 segundos depois de 3 falhas seguidas de conexão. Todo comando fica no registro `~/.myco/logs/ssh-comandos.jsonl`. O `ssh` precisa estar instalado no seu computador (no Windows, o recurso opcional **Cliente OpenSSH**; no Linux, o pacote `openssh`: `sudo pacman -S openssh` no Arch, `sudo apt install openssh-client` no Debian/Ubuntu).
 - **No projeto do próprio Claudio’s Club** o acesso a servidor fica desligado nos dois motores.
-- **FTP só no Claude**, pelas ferramentas `ftp_*`, presas à pasta da conexão (a senha fica no cofre do sistema). Com conexão FTP marcada, não dá para escolher o Codex.
+- **FTP só no Claude**, pelas ferramentas `ftp_*`, presas à pasta da conexão (a senha fica no cofre do sistema: no Linux, no chaveiro do sistema quando existe; ver `07-configuracoes-e-atualizacao.md`, "Problemas comuns"). Com conexão FTP marcada, não dá para escolher o Codex.
 
 O que não funciona:
 

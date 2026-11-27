@@ -14,7 +14,7 @@ import {
   tomlString,
 } from '../server/chat/codexArgs';
 import { buildClaudeArgs, renderFicha } from '../server/staff/ficha';
-import { cleanBrowserChannel, cleanBrowserOf, NAVEGADOR_CACHE_DIR, prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
+import { cleanBrowserChannel, cleanBrowserOf, findCleanBrowser, isExecutableFile, NAVEGADOR_CACHE_DIR, prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
 import { removeTemp } from './support/tmp';
 
 // O navegador limpo (MCP `myco-navegador`): um Playwright MCP com perfil em memória, sem logins, para os dois motores. Quando entra,
@@ -150,6 +150,16 @@ describe('cleanBrowserOf: o navegador limpo entra sem motivo, com perfil isolado
     expect(cleanBrowserOf(true, ok({ cleanBrowserChannel: 'msedge' }), false, dir()).mcp?.args).toContain('msedge');
   });
 
+  it('com um executável de pacote (Chromium/Brave do Linux): --executable-path logo depois do canal', () => {
+    const args = cleanBrowserOf(true, ok({ cleanBrowserExecutable: '/usr/bin/chromium' }), false, dir()).mcp?.args ?? [];
+    expect(args.slice(args.indexOf('--browser'), args.indexOf('--browser') + 4)).toEqual(['--browser', 'chrome', '--executable-path', '/usr/bin/chromium']);
+    expect(args).toContain('--no-webmcp');
+  });
+
+  it('sem executável (Chrome no lugar do canal, Windows, macOS): nenhum --executable-path', () => {
+    expect(cleanBrowserOf(true, ok(), false, dir()).mcp?.args).not.toContain('--executable-path');
+  });
+
   it('com o bloqueio do Club desligado (clubGuard: false): sem --blocked-origins', () => {
     const args = cleanBrowserOf(true, ok({ clubGuard: false }), false, dir()).mcp?.args ?? [];
     expect(args).not.toContain('--blocked-origins');
@@ -214,6 +224,102 @@ describe('cleanBrowserChannel: o Chrome instalado, senão o Edge', () => {
   it('nada instalado → null; sistema sem caminho conhecido → null', async () => {
     expect(cleanBrowserChannel('win32', { LOCALAPPDATA: await vazio('win-nada'), PROGRAMFILES: await vazio('win-nada-2') })).toBeNull();
     expect(cleanBrowserChannel('freebsd' as NodeJS.Platform, {})).toBeNull();
+  });
+});
+
+describe('findCleanBrowser (Linux): Chrome, Edge, Chromium e Brave, nos caminhos fixos e no PATH', () => {
+  /** Só existem os arquivos listados (o teste não depende do que a máquina tem instalado). */
+  const com = (...files: string[]) => (f: string) => files.includes(f);
+  const find = (env: NodeJS.ProcessEnv, ...files: string[]) => findCleanBrowser('linux', env, com(...files));
+
+  it('Chrome do pacote oficial: canal chrome, sem --executable-path (o Playwright acha sozinho, como antes)', () => {
+    expect(find({}, '/opt/google/chrome/chrome')).toEqual({ channel: 'chrome' });
+  });
+
+  it('Edge do pacote oficial: canal msedge, sem caminho', () => {
+    expect(find({}, '/opt/microsoft/msedge/msedge')).toEqual({ channel: 'msedge' });
+  });
+
+  it('Chromium pelo caminho fixo da distribuição (/usr/bin/chromium) → canal chrome com o caminho', () => {
+    expect(find({}, '/usr/bin/chromium')).toEqual({ channel: 'chrome', executablePath: '/usr/bin/chromium' });
+    expect(find({}, '/usr/bin/chromium-browser')).toEqual({ channel: 'chrome', executablePath: '/usr/bin/chromium-browser' });
+  });
+
+  it('Chromium só no PATH (fora de /usr/bin) → o caminho achado no PATH', () => {
+    expect(find({ PATH: '/x/vazio:/home/u/.local/bin:/usr/bin' }, '/home/u/.local/bin/chromium')).toEqual({ channel: 'chrome', executablePath: '/home/u/.local/bin/chromium' });
+  });
+
+  it('Chrome por pacote de distribuição (google-chrome-stable no PATH) → canal chrome com o caminho', () => {
+    expect(find({ PATH: '/opt/bin' }, '/opt/bin/google-chrome-stable')).toEqual({ channel: 'chrome', executablePath: '/opt/bin/google-chrome-stable' });
+    expect(find({ PATH: '/opt/bin' }, '/opt/bin/google-chrome')).toEqual({ channel: 'chrome', executablePath: '/opt/bin/google-chrome' });
+  });
+
+  it('Edge por pacote (microsoft-edge-stable no PATH) → canal msedge com o caminho', () => {
+    expect(find({ PATH: '/opt/bin' }, '/opt/bin/microsoft-edge-stable')).toEqual({ channel: 'msedge', executablePath: '/opt/bin/microsoft-edge-stable' });
+  });
+
+  it('Brave (brave-browser no PATH, /usr/bin/brave fixo, pacote oficial) → canal chrome com o caminho', () => {
+    expect(find({ PATH: '/opt/bin' }, '/opt/bin/brave-browser')).toEqual({ channel: 'chrome', executablePath: '/opt/bin/brave-browser' });
+    expect(find({}, '/usr/bin/brave')).toEqual({ channel: 'chrome', executablePath: '/usr/bin/brave' });
+    expect(find({}, '/opt/brave.com/brave/brave')).toEqual({ channel: 'chrome', executablePath: '/opt/brave.com/brave/brave' });
+  });
+
+  it('ordem: Chrome > Edge > Chromium > Brave', () => {
+    const tudo = ['/opt/google/chrome/chrome', '/opt/microsoft/msedge/msedge', '/usr/bin/chromium', '/usr/bin/brave'];
+    expect(find({}, ...tudo)).toEqual({ channel: 'chrome' });
+    expect(find({}, ...tudo.slice(1))).toEqual({ channel: 'msedge' });
+    expect(find({}, ...tudo.slice(2))).toEqual({ channel: 'chrome', executablePath: '/usr/bin/chromium' });
+    expect(find({}, ...tudo.slice(3))).toEqual({ channel: 'chrome', executablePath: '/usr/bin/brave' });
+    // Chrome de pacote de distribuição ganha do Chromium; o do pacote oficial (/opt) ganha de tudo.
+    expect(find({ PATH: '/b' }, '/b/google-chrome-stable', '/usr/bin/chromium')).toEqual({ channel: 'chrome', executablePath: '/b/google-chrome-stable' });
+  });
+
+  it('o primeiro nome do PATH que existe vence, na ordem do PATH', () => {
+    expect(find({ PATH: '/a:/b' }, '/a/chromium', '/b/chromium')).toEqual({ channel: 'chrome', executablePath: '/a/chromium' });
+  });
+
+  it('PATH vazio, ausente ou com entrada relativa: não pega um chromium plantado na pasta atual', () => {
+    expect(find({ PATH: '' }, 'chromium', './chromium', '/chromium')).toBeNull();
+    expect(find({}, 'chromium')).toBeNull();
+    expect(find({ PATH: ':bin:./' }, 'chromium', 'bin/chromium', 'chromium')).toBeNull();
+  });
+
+  it('nada instalado → null', () => {
+    expect(find({ PATH: '/usr/bin:/bin' })).toBeNull();
+  });
+
+  describe('com arquivos de verdade (isExecutableFile: arquivo comum e executável)', () => {
+    const mk = async (n: string, name: string, mode: number) => {
+      const d = path.join(root, `linux-${n}`);
+      await fs.mkdir(d, { recursive: true });
+      const f = path.join(d, name);
+      await fs.writeFile(f, '#!/bin/sh\n');
+      await fs.chmod(f, mode);
+      return { d, f };
+    };
+    // O Windows não tem bit de execução.
+    const naoWin = process.platform === 'win32' ? it.skip : it;
+    /** Só olha dentro da pasta do teste: o resultado não depende do que a máquina tem instalado. */
+    const so = (d: string) => (f: string) => f.startsWith(d + '/') && isExecutableFile(f);
+
+    naoWin('acha o chromium executável no PATH', async () => {
+      const { d, f } = await mk('exec', 'chromium', 0o755);
+      expect(findCleanBrowser('linux', { PATH: `/nao/existe:${d}` }, so(d))).toEqual({ channel: 'chrome', executablePath: f });
+    });
+
+    naoWin('arquivo sem permissão de execução não conta', async () => {
+      const { d } = await mk('semexec', 'chromium', 0o644);
+      expect(isExecutableFile(path.join(d, 'chromium'))).toBe(false);
+      expect(findCleanBrowser('linux', { PATH: d }, so(d))).toBeNull();
+    });
+
+    naoWin('pasta com o nome do navegador e arquivo que não existe não contam', async () => {
+      const d = path.join(root, 'linux-pasta');
+      await fs.mkdir(path.join(d, 'chromium'), { recursive: true });
+      expect(isExecutableFile(path.join(d, 'chromium'))).toBe(false);
+      expect(isExecutableFile(path.join(d, 'brave'))).toBe(false);
+      expect(findCleanBrowser('linux', { PATH: d }, so(d))).toBeNull();
+    });
   });
 });
 

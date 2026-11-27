@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { FTP_MCP_NAME, type FtpConnection } from '../../shared/model';
 import { isSecretFileRel } from '../projectFiles';
 import { ROOT } from '../root';
-import { DEFAULT_SECRETS_DIR, getSecret, type VaultOptions } from '../secretVault';
+import { DEFAULT_SECRETS_DIR, getSecret, VaultError, type VaultOptions } from '../secretVault';
 import {
   basicFtpConnector,
   connectWithRetry,
@@ -247,7 +247,11 @@ export function createFtpMcp(opts: FtpMcpOptions) {
     if (now && !now.includes(name)) throw new FtpError(`a conexão ${name} saiu da sua ficha: não use mais`);
     const conn = (await readFtpConnections(opts.projectPath, opts.vault)).find((c) => c.name === name);
     if (!conn) throw new FtpError(`a conexão ${name} não existe mais no projeto: avise o usuário`);
-    const password = await getSecret(ftpSecretId(opts.projectPath, name), opts.vault).catch(() => null);
+    // Cofre que não abre (chaveiro do sistema bloqueado ou fora) não é "sem senha": o motivo vai para quem usa a ferramenta.
+    const password = await getSecret(ftpSecretId(opts.projectPath, name), opts.vault).catch((err: unknown) => {
+      if (err instanceof VaultError) throw new FtpError(`a conexão ${name}: ${err.message} (avise o usuário; não peça a senha)`);
+      return null;
+    });
     if (!password) throw new FtpError(`a conexão ${name} está sem senha no cofre: avise o usuário (não peça a senha)`);
     return { conn, password };
   }
