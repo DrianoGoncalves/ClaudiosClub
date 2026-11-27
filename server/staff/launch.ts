@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, statSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
@@ -81,12 +81,16 @@ export interface LaunchContext {
   codexBrowser?: boolean;
   /** "Bloquear a tela do Claudio’s Club no navegador dos funcionários" (`clubGuard`). Só `false` desliga: ausente, bloqueia. */
   clubGuard?: boolean;
+  /** As portas, fora a do servidor, de origens registradas que servem a tela do Club (o Vite do dev): vão no `--blocked-origins` do Codex e do navegador limpo (ver `registeredClubPorts`). Ausente = nenhuma. */
+  clubPorts?: number[];
   /** CLI do Playwright MCP (os testes trocam; padrão CHROME_MCP_CLI). Sem ele, o Chrome não entra e a ficha diz "indisponível". */
   chromeMcpCli?: string;
   /** "Navegador" pedido na ficha, para o navegador limpo (ver cleanBrowserOf). Ausente = `profile.browser`. Não depende da extensão do Chrome. */
   cleanBrowser?: boolean;
-  /** Canal do navegador limpo (os testes trocam). Ausente = detecta (ver cleanBrowserChannel); `null` = nenhum Chrome nem Edge. */
+  /** Canal do navegador limpo (os testes trocam). Ausente = detecta (ver findCleanBrowser); `null` = nenhum navegador achado. */
   cleanBrowserChannel?: 'chrome' | 'msedge' | null;
+  /** Executável do navegador limpo (os testes trocam), junto de `cleanBrowserChannel`: o Chromium/Brave de pacote do Linux, que não é um canal do Playwright. Ausente = o canal acha o dele. */
+  cleanBrowserExecutable?: string;
 }
 
 /** Onde o proxy do navegador limpo guarda o `initialize` e o `tools/list` do Playwright (ver navegadorMcp.ts): na pasta do Club, nunca no projeto. */
@@ -308,7 +312,7 @@ export interface PreparedCodexRun {
  */
 export function codexChromeOf(
   profile: Pick<StaffProfile, 'browser' | 'mcpAccess'>,
-  ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli' | 'clubGuard'>,
+  ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli' | 'clubGuard' | 'clubPorts'>,
   sshAttached: boolean,
   chromeDir: string,
 ): { mcp: CodexMcpServer | null; info?: CodexChromeInfo } {
@@ -329,7 +333,7 @@ export function codexChromeOf(
     // Sem ele só com o bloqueio desligado nas Configurações (`clubGuard: false`).
     mcp: {
       command: process.execPath,
-      args: [cli, '--extension', '--output-dir', chromeDir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins()])],
+      args: [cli, '--extension', '--output-dir', chromeDir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins(undefined, ctx.clubPorts)])],
       cwd: chromeDir,
       ...(access.enabledTools ? { enabledTools: access.enabledTools } : {}),
     },
@@ -337,11 +341,57 @@ export function codexChromeOf(
   };
 }
 
+/** O navegador que o limpo vai usar: o canal do Playwright e, quando ele não acha o executável sozinho (pacote do Linux), o caminho dele. */
+export interface CleanBrowserFound {
+  channel: 'chrome' | 'msedge';
+  /** Só quando o navegador não está no lugar que o canal conhece: vai em `--executable-path`. */
+  executablePath?: string;
+}
+
+/** Linux, em ordem de preferência. `native` é onde o Playwright acha o canal sozinho (sem `--executable-path`); `fixed` e `names` (PATH) são o resto. */
+const LINUX_BROWSERS: { channel: CleanBrowserFound['channel']; native?: string; fixed: string[]; names: string[] }[] = [
+  { channel: 'chrome', native: '/opt/google/chrome/chrome', fixed: ['/usr/bin/google-chrome-stable', '/usr/bin/google-chrome'], names: ['google-chrome-stable', 'google-chrome'] },
+  { channel: 'msedge', native: '/opt/microsoft/msedge/msedge', fixed: ['/usr/bin/microsoft-edge-stable', '/usr/bin/microsoft-edge'], names: ['microsoft-edge-stable', 'microsoft-edge'] },
+  // Chromium e Brave não são canais do Playwright: vão pelo canal `chrome` (mesmo motor) com o executável explícito.
+  { channel: 'chrome', fixed: ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'], names: ['chromium', 'chromium-browser'] },
+  { channel: 'chrome', fixed: ['/opt/brave.com/brave/brave', '/usr/bin/brave-browser', '/usr/bin/brave'], names: ['brave-browser', 'brave-browser-stable', 'brave'] },
+];
+
+/** Arquivo comum e executável (segue link simbólico): é o que o Linux consegue lançar. */
+export function isExecutableFile(file: string): boolean {
+  try {
+    if (!statSync(file).isFile()) return false;
+    accessSync(file, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Onde cada nome do PATH existe. Só pasta absoluta: entrada vazia ou relativa seria a pasta atual, e um `chromium` plantado ali não pode ser lançado. */
+function pathCandidates(names: string[], envPath: string | undefined): string[] {
+  const dirs = (envPath ?? '').split(':').filter((d) => d.startsWith('/'));
+  return names.flatMap((n) => dirs.map((d) => path.posix.join(d, n)));
+}
+
 /**
- * O navegador limpo usa o Chrome já instalado e, se não houver, o Edge: nada se baixa. Procura nos lugares onde o Playwright procura.
- * `null` = nenhum dos dois.
+ * O navegador limpo usa um navegador já instalado: nada se baixa. Windows e macOS: Chrome, senão Edge, nos lugares onde o Playwright procura.
+ * Linux: Chrome, Edge, Chromium e Brave, nessa ordem, no caminho do pacote oficial, nos caminhos fixos das distribuições e no PATH.
+ * `probe` diz se o arquivo existe (os testes trocam). `null` = nenhum.
  */
-export function cleanBrowserChannel(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): 'chrome' | 'msedge' | null {
+export function findCleanBrowser(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  probe: (file: string) => boolean = platform === 'linux' ? isExecutableFile : existsSync,
+): CleanBrowserFound | null {
+  if (platform === 'linux') {
+    for (const b of LINUX_BROWSERS) {
+      if (b.native && probe(b.native)) return { channel: b.channel };
+      const found = [...b.fixed, ...pathCandidates(b.names, env.PATH)].find((p) => probe(p));
+      if (found) return { channel: b.channel, executablePath: found };
+    }
+    return null;
+  }
   let chrome: string[] = [];
   let edge: string[] = [];
   if (platform === 'win32') {
@@ -351,13 +401,15 @@ export function cleanBrowserChannel(platform: NodeJS.Platform = process.platform
   } else if (platform === 'darwin') {
     chrome = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
     edge = ['/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'];
-  } else if (platform === 'linux') {
-    chrome = ['/opt/google/chrome/chrome'];
-    edge = ['/opt/microsoft/msedge/msedge'];
   }
-  if (chrome.some((p) => existsSync(p))) return 'chrome';
-  if (edge.some((p) => existsSync(p))) return 'msedge';
+  if (chrome.some((p) => probe(p))) return { channel: 'chrome' };
+  if (edge.some((p) => probe(p))) return { channel: 'msedge' };
   return null;
+}
+
+/** Só o canal de `findCleanBrowser` (Chrome ou Edge); `null` = nenhum navegador achado. */
+export function cleanBrowserChannel(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): 'chrome' | 'msedge' | null {
+  return findCleanBrowser(platform, env)?.channel ?? null;
 }
 
 /**
@@ -368,13 +420,19 @@ export function cleanBrowserChannel(platform: NodeJS.Platform = process.platform
  */
 export function cleanBrowserOf(
   wanted: boolean,
-  ctx: Pick<LaunchContext, 'internetAccess' | 'chromeMcpCli' | 'clubGuard' | 'cleanBrowserChannel'>,
+  ctx: Pick<LaunchContext, 'internetAccess' | 'chromeMcpCli' | 'clubGuard' | 'clubPorts' | 'cleanBrowserChannel' | 'cleanBrowserExecutable'>,
   sshAttached: boolean,
   dir: string,
 ): { mcp: CodexMcpServer | null; info?: CleanBrowserInfo } {
   if (!wanted) return { mcp: null };
   const cli = ctx.chromeMcpCli ?? CHROME_MCP_CLI;
-  const channel = ctx.cleanBrowserChannel === undefined ? cleanBrowserChannel() : ctx.cleanBrowserChannel;
+  const found: CleanBrowserFound | null =
+    ctx.cleanBrowserChannel === undefined
+      ? findCleanBrowser()
+      : ctx.cleanBrowserChannel
+        ? { channel: ctx.cleanBrowserChannel, ...(ctx.cleanBrowserExecutable ? { executablePath: ctx.cleanBrowserExecutable } : {}) }
+        : null;
+  const channel = found?.channel ?? null;
   const motivos: CleanBrowserInfo['motivos'] = [];
   if (ctx.internetAccess === false) motivos.push('internet');
   if (sshAttached) motivos.push('ssh');
@@ -383,8 +441,8 @@ export function cleanBrowserOf(
   if (!channel || motivos.length) return { mcp: null, info: { mcp: false, motivos } };
   return {
     // --isolated: perfil em memória, apagado ao fechar (nada no disco, nenhum cookie nem login do dono). --headless: sem janela, não rouba o foco
-    // do dono e deixa vários funcionários rodarem juntos; a captura de tela e o snapshot saem iguais. --browser: o Chrome ou o Edge já instalados,
-    // sem baixar um do Playwright. --no-webmcp: o que a página registra seria ferramenta de terceiros (injeção). --blocked-origins: a tela do Club
+    // do dono e deixa vários funcionários rodarem juntos; a captura de tela e o snapshot saem iguais. --browser: o Chrome ou o Edge já instalados
+    // (no Linux, Chromium e Brave de pacote vão pelo canal `chrome` com --executable-path), sem baixar um do Playwright. --no-webmcp: o que a página registra seria ferramenta de terceiros (injeção). --blocked-origins: a tela do Club
     // (ver clubBlockedOrigins). Não é barreira (diz o README do Playwright); no Claude a barreira é o hook club-guard, que também pega
     // `mcp__.*__browser_.*`. Sem trava por isClaudeRoot: o que vale para um motor no projeto do Club vale para o outro.
     // Esses argumentos são os do Playwright de verdade; quem sobe na conversa é o proxy preguiçoso (navegadorMcp.ts), que responde `initialize` e
@@ -393,7 +451,7 @@ export function cleanBrowserOf(
       ...lazyNavegadorCommand(
         {
           command: process.execPath,
-          args: [cli, '--isolated', '--headless', '--browser', channel, '--no-webmcp', '--output-dir', dir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins()])],
+          args: [cli, '--isolated', '--headless', '--browser', channel, ...(found?.executablePath ? ['--executable-path', found.executablePath] : []), '--no-webmcp', '--output-dir', dir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins(undefined, ctx.clubPorts)])],
         },
         NAVEGADOR_CACHE_DIR,
       ),
@@ -655,7 +713,7 @@ const HOOKS_DIR = path.join(ROOT, 'scripts', 'hooks');
 const DELIVERY_HOOK = path.join(HOOKS_DIR, 'delivery-check.mjs');
 const STYLE_HOOK = path.join(HOOKS_DIR, 'style-reminder.mjs');
 /** Os hooks de guarda que a conversa leva na própria pasta (cópia, ver prepareRun): o agente não edita o que os aplica. */
-const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs', 'memory-guard.mjs', 'memory-cap.mjs', 'heavy-guard.mjs', 'heavy-lock.mjs', 'git-guard.mjs', 'git-guard-lib.mjs'] as const;
+const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs', 'memory-guard.mjs', 'memory-cap.mjs', 'heavy-guard.mjs', 'heavy-lock.mjs', 'git-guard.mjs', 'git-guard-lib.mjs', 'club-origins.mjs'] as const;
 /** O hook da fila de validação pesada e a lib dele (o heavy-guard importa o heavy-lock da mesma pasta). Vão para a pasta do Claude e a do Codex. */
 const HEAVY_HOOK_FILES = ['heavy-guard.mjs', 'heavy-lock.mjs'] as const;
 /** O hook do git destrutivo e a regra dele (o git-guard importa o git-guard-lib da mesma pasta). Também vão para os dois motores. */
