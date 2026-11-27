@@ -73,6 +73,16 @@
       .defender li.is-ok { color: var(--ink-green); }
       .defender .def-cmd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
       .defender .def-done { color: var(--ink-green); font-weight: 600; }
+      /* Dependências usadas: recolhida. Os pacotes do package.json, com a versão instalada, a licença e o link para o npm. A lista longa rola. */
+      .deps .dep-group { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); margin-top: 8px; }
+      .deps .dep-group h3 { margin: 0; font-size: 13px; font-weight: 600; }
+      .deps .dep-list { list-style: none; margin: 0; padding: 0 6px 0 0; display: grid; gap: 8px; max-height: 260px; overflow: auto; }
+      .deps .dep { display: grid; gap: 2px; min-width: 0; }
+      .deps .dep-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; overflow-wrap: anywhere; }
+      .deps .dep-top a { font-weight: 600; color: var(--ink-blue); }
+      .deps .dep-ver { font: 12px ui-monospace, Consolas, monospace; }
+      .deps .dep-ver.is-falta { color: var(--danger); }
+      .deps .dep-desc { margin: 0; overflow-wrap: anywhere; }
     </style>
   </head>
   <body>
@@ -108,6 +118,14 @@
           </p>
           <button id="recheck" class="btn-secondary" type="button">Verificar de novo</button>
         </div>
+        <details class="log deps" id="deps-box" hidden>
+          <summary><h2>Dependências usadas</h2><span class="muted small" id="deps-count"></span></summary>
+          <p class="muted small">
+            Pacotes de código aberto do npm que o Claudio’s Club usa, tirados do <code>package.json</code>, com a versão instalada, a licença e
+            o link para a página de cada um.<span id="deps-total"></span>
+          </p>
+          <div id="deps-groups"></div>
+        </details>
         <details class="log defender" id="defender" hidden>
           <summary><h2>Opcional: disco mais rápido</h2><span class="muted small" id="defender-state"></span></summary>
           <p class="muted small">
@@ -349,6 +367,73 @@
         el('defender-state').textContent = tip.excludedKnown === false ? 'não verificado' : pending ? '' : '✓ aplicado';
       }
 
+      // Dependências usadas (status.deps, do npm run doctor; ausente em status.js antigo): os pacotes do package.json do app, com a versão
+      // instalada, a licença e a descrição. Cada nome vai para a página no npm. Tudo por textContent: licença e descrição vêm de terceiros.
+      const NPM_PAGE = 'https://www.npmjs.com/package/';
+      function depItem(d) {
+        const li = document.createElement('li');
+        li.className = 'dep';
+        const top = document.createElement('div');
+        top.className = 'dep-top';
+        const a = document.createElement('a');
+        a.href = NPM_PAGE + String(d.name).split('/').map((part) => encodeURIComponent(part).replace(/^%40/, '@')).join('/');
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = d.name;
+        const ver = document.createElement('span');
+        ver.className = 'dep-ver';
+        if (d.version) {
+          ver.textContent = d.version;
+        } else {
+          ver.classList.add('is-falta');
+          ver.textContent = `não instalado (pede ${d.wanted})`;
+        }
+        top.append(a, ver);
+        if (d.license) {
+          const lic = document.createElement('span');
+          lic.className = 'muted small';
+          lic.textContent = d.license;
+          top.append(lic);
+        }
+        li.append(top);
+        if (d.description) {
+          const p = document.createElement('p');
+          p.className = 'muted small dep-desc';
+          p.textContent = d.description;
+          li.append(p);
+        }
+        return li;
+      }
+      function renderDeps(dep) {
+        const box = el('deps-box');
+        const list = dep && Array.isArray(dep.deps) ? dep.deps.filter((d) => d && typeof d.name === 'string') : [];
+        if (!list.length) {
+          box.hidden = true;
+          return;
+        }
+        box.hidden = false;
+        const prod = list.filter((d) => !d.dev);
+        const dev = list.filter((d) => d.dev);
+        el('deps-count').textContent = `${prod.length} do app · ${dev.length} para montar e testar`;
+        el('deps-total').textContent = typeof dep.installedTotal === 'number'
+          ? ` Ao todo, ${dep.installedTotal} pacotes instalados contando as dependências deles.`
+          : '';
+        const groups = el('deps-groups');
+        groups.textContent = '';
+        [['Do app', prod], ['Para montar e testar', dev]].forEach(([title, items]) => {
+          if (!items.length) return;
+          const div = document.createElement('div');
+          div.className = 'dep-group';
+          const h = document.createElement('h3');
+          h.textContent = `${title} (${items.length})`;
+          const ul = document.createElement('ul');
+          ul.className = 'dep-list';
+          items.forEach((d) => ul.append(depItem(d)));
+          div.append(h, ul);
+          groups.append(div);
+        });
+      }
+
       function render(st, buildOk, up) {
         const byId = {};
         if (st && Array.isArray(st.checks)) st.checks.forEach((c) => { if (c && c.id) byId[c.id] = c; });
@@ -368,6 +453,7 @@
           : '';
         el('doctor-tip').hidden = Array.isArray(st && st.checks);
         renderDefender(st && st.defender);
+        renderDeps(st && st.deps);
       }
 
       async function refresh(up) {
