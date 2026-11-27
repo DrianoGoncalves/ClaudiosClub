@@ -1,6 +1,6 @@
 # Claudio's Club (repo `MyCo`): comandos e travas
 
-Windows, PowerShell 5.1 (sem `&&`/`||`; encadeie com `;`). Node >= 22. Visão e regras de produto: `SPEC.md` (não repetido aqui).
+No Windows, PowerShell 5.1 (sem `&&`/`||`; encadeie com `;`). No Linux/macOS, o shell é bash. Node >= 22. Visão e regras de produto: `SPEC.md` (não repetido aqui).
 
 ## Verificar
 - Tipos: `npx tsc --noEmit` (na raiz, cobre server, client e shared).
@@ -10,12 +10,13 @@ Windows, PowerShell 5.1 (sem `&&`/`||`; encadeie com `;`). Node >= 22. Visão e 
 - Vitest roda em `environment: node` (sem DOM): tela se testa por `renderToStaticMarkup`.
 
 ## Rodar
-- Ver tela em desenvolvimento: `npx vite --port 5173` (o Vite repassa a API ao servidor).
+- Ver tela em desenvolvimento: `npx vite --port 5173` (o Vite repassa a API ao servidor; é a tela do dono: o navegador dos funcionários não a abre, por nenhum endereço. Para prints, a prévia abaixo).
 - A porta 4848 só serve o build (`npm run build`), não o código novo.
 - Pareamento com a porta do Vite: `npm run pair:dev`.
+- Prévia sem servidor (prints de tela): `npm run preview:ui` sobe o front em `127.0.0.1:5199` (porta fixa), sem proxy e sem backend do Club; `/api` é simulado por `scripts/preview/mockApi.ts` com dados fictícios de `scripts/preview/fixtures.ts` (só o quadro). Não aponta para o seu projeto real.
 
 ## Travas
-- Nunca `npm ci`/`npm install` com o servidor do Club no ar (o `esbuild.exe` fica travado).
+- Nunca `npm ci`/`npm install` com o servidor do Club no ar (o binário do `esbuild` fica travado; no Windows, `esbuild.exe`).
 - Fora do git: `.myco/`, `PLANO.md`, `.claude/agents/`, `faces/`, `undefined/` (traz `secrets/pairing.key`: nunca vai para commit), `.env*`.
 - Nada de segredo no código, no client nem em log; dado sensível só no servidor.
 - `main` só recebe PR com o job `test` verde (`.github/workflows/ci.yml`). Nunca force-push.

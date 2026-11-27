@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Task, TestRun } from '../shared/model';
 import { expandScope, nextVersion, parseReleaseBody, releaseBody, releaseProgress } from '../shared/release';
 import { ReleaseError, ReleaseService, type ReleaseDeps } from '../server/release';
+import { installOwnership, NotOwnerError, ownsProject, ProjectOwnership } from '../server/projectOwner';
 import { tempDirs } from './support/tmp';
 
 // Versão com escopo: o dono escolhe as tarefas, as de fora esperam, a versão se prepara sozinha (testes, número, commit local) e publicar e criar a tag são
@@ -229,6 +230,44 @@ describe('ReleaseService', () => {
     await c.svc.sweep();
     await c.svc.settled('p');
     expect((await c.svc.state('p'))!.prepared?.sha).toBe('a'.repeat(40));
+  });
+
+  it('posse do projeto (t-f50944): a rotina de uma versão aberta num projeto de outro servidor não põe card na fila nem prepara; no dono, sim', async () => {
+    const c = await setup();
+    const alive = new Set([8101, 8102]);
+    const mk = (home: string, pid: number) => {
+      const o = new ProjectOwnership({ home: path.join(c.dir, '..', `home-${home}`), defaultHome: path.join(c.dir, '..', 'home-main'), pid, isAlive: (p) => alive.has(p), log: () => {} });
+      o.open();
+      return o;
+    };
+    const main = mk('main', 8101);
+    const teste = mk('teste', 8102);
+    try {
+      await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'], docsStaffId: 'luana-1' }, true);
+      c.set('t-bbbb02', 'done');
+      expect((await main.claim(c.dir)).owner).toBe(true); // o principal registrou o projeto
+      c.deps.owns = async () => ownsProject(c.dir);
+      const before = await fs.readFile(c.file, 'utf8');
+      const gitBefore = c.h.git.length;
+
+      installOwnership(teste);
+      await c.svc.sweep();
+      expect(c.h.started).toEqual([]);
+      expect(c.h.git).toHaveLength(gitBefore);
+      expect(c.h.tests).toBe(0);
+      expect(await fs.readFile(c.file, 'utf8')).toBe(before);
+      // gravar o estado da versão também é do dono (a rota já recusa antes, com 423)
+      await expect(c.svc.changeScope('p', { add: ['t-out003'] }, true)).rejects.toBeInstanceOf(NotOwnerError);
+      expect(await fs.readFile(c.file, 'utf8')).toBe(before);
+
+      installOwnership(main);
+      await c.svc.sweep();
+      expect(c.h.started).toEqual(['t-docs09']);
+    } finally {
+      installOwnership(null);
+      main.releaseSync();
+      teste.releaseSync();
+    }
   });
 
   it('publicar: push do commit da versão para release/<versão> (sem force, sem tags) e o PR para a branch padrão; tag depois da mescla fecha a versão', async () => {

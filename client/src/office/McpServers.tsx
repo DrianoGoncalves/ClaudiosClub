@@ -3,6 +3,7 @@ import type { Project } from '../../../shared/model';
 import { api, isPairingError, type McpRef } from '../api';
 import { t, type MsgKey } from '../i18n';
 import { TrashIcon } from '../icons';
+import { VaultWarning } from './VaultWarning';
 import {
   MCP_SCOPES,
   MCP_TYPES,
@@ -193,6 +194,7 @@ function McpForm({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [vaultWarn, setVaultWarn] = useState<string | null>(null);
   const set = (patch: Partial<McpDraft>) => onChange({ ...d, ...patch });
   const kind = pairKind(d.type);
 
@@ -203,7 +205,11 @@ function McpForm({
     setBusy(true);
     setError(null);
     try {
-      await api.saveMcpServer(saveBody(d));
+      const r = await api.saveMcpServer(saveBody(d));
+      if (r?.vaultWarning) {
+        setVaultWarn(r.vaultWarning);
+        return;
+      }
       await onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -212,6 +218,8 @@ function McpForm({
   };
 
   const setPair = (i: number, patch: Partial<PairDraft>) => set({ [kind]: d[kind].map((p, j) => (j === i ? { ...p, ...patch } : p)) });
+
+  if (vaultWarn) return <VaultWarning text={vaultWarn} onDone={() => void onSaved()} />;
 
   return (
     <form className="conn-form mcp-form" onSubmit={submit} noValidate>

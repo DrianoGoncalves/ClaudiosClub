@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { renameWithRetry } from './atomicWrite';
 import { ensureMycoGitignore } from './mycoGitignore';
+import { assertOwner } from './projectOwner';
 
 // Registro das execuções de tarefa: `<projeto>/.myco/task-runs.jsonl`, uma linha JSON por evento. Só cresce (append-only):
 // `start` quando a tentativa abre (começar, fila, retomada, ajuste) e `end` quando ela fecha (entregue, parada, limite,
@@ -47,6 +48,8 @@ export function appendRun(dir: string, ev: TaskRunEvent): Promise<void> {
   const file = runsFile(dir);
   const prev = queues.get(file) ?? Promise.resolve();
   const run = prev.then(async () => {
+    // O registro é dado do projeto: só quem manda nele grava (ver server/projectOwner.ts).
+    await assertOwner(dir);
     await ensureMycoGitignore(dir);
     await fs.mkdir(path.dirname(file), { recursive: true });
     const { size, clean: endsClean } = await tail(file);

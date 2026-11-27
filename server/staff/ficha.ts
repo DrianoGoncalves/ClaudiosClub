@@ -318,14 +318,16 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
     .filter((f) => !/\s/.test(f))
     .map((f) => `Read(${f.startsWith('//') ? f : `/${f}`})`);
   const remote = REMOTE_TOOLS.flatMap((t) => [`Bash(${t}:*)`, `PowerShell(${t}:*)`]);
+  // O chaveiro do sistema guarda os segredos do cofre no Linux (server/secretVault.ts): com ele destravado, `secret-tool search` lista tudo. Só o Claudio’s Club o usa.
+  const keyring = ['Bash(secret-tool:*)'];
   // Para todos: os .env de verdade e as chaves privadas. O .env.example (e afins) fica livre, que é o modelo
   // que o dev lê e edita; rodar o app, os testes e as migrações carrega o .env pelo próprio programa, sem o Read.
   const envFiles = ['.env', '.env.local', '.env.*.local', '.env.development', '.env.dev', '.env.staging', '.env.production', '.env.prod'];
   const local = [...envFiles.flatMap((f) => [`Read(**/${f})`, `Edit(**/${f})`]), 'Read(**/*.pem)', 'Read(**/*.key)'];
-  if (!p.servers.length) return [...always, ...local, ...remote, ...keys];
+  if (!p.servers.length) return [...always, ...local, ...remote, ...keyring, ...keys];
   // Com servidor, qualquer .env.* (backup, cópia do de produção), mesmo o .env.example.
   const secrets = ['Read(**/.env.*)', 'Edit(**/.env.*)'];
-  return [...always, ...local, ...secrets, ...keys, ...remote];
+  return [...always, ...local, ...secrets, ...keys, ...remote, ...keyring];
 }
 
 const FTP_TOOLS = ['ftp_list', 'ftp_download', 'ftp_upload', 'ftp_delete', 'ftp_rename', 'ftp_mkdir'];
@@ -591,7 +593,7 @@ const CLEAN_MOTIVO: Record<CleanBrowserInfo['motivos'][number], string> = {
   internet: 'a opção "Permitir acesso à internet" está desligada nas Configurações',
   ssh: 'esta conversa tem acesso a servidor, e o navegador seria um canal para o conteúdo dele sair',
   indisponivel: CHROME_MOTIVO.indisponivel,
-  'sem-chrome': 'nem o Google Chrome nem o Microsoft Edge estão instalados neste computador',
+  'sem-chrome': process.platform === 'linux' ? 'nem Chrome, Edge, Chromium nem Brave estão instalados neste computador' : 'nem o Google Chrome nem o Microsoft Edge estão instalados neste computador',
 };
 
 /** O navegador limpo (MCP `myco-navegador`), igual nos dois motores: entrou (o que é e o que faz), ou os motivos. Sem `cleanBrowser`, nada. */

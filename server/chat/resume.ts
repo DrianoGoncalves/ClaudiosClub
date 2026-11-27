@@ -121,6 +121,16 @@ export interface ResumeDeps {
    * volta pela retomada das órfãs quando o projeto for retomado; as outras, quando você mandar mensagem). Erro ao perguntar: não retoma.
    */
   paused?: (projectId: string) => Promise<boolean>;
+  /**
+   * Esta instância manda no projeto da conversa (ver server/projectOwner.ts)? Quem não manda nele não a retoma, nem a segura nem a devolve ao principal: o reinício é de quem
+   * tem a conversa, e retomar uma conversa que está viva em outro servidor a duplicaria. Sem a opção, vale.
+   */
+  owns?: (projectId: string) => Promise<boolean>;
+  /**
+   * Antes de abrir qualquer conversa: encerra o que sobrou do servidor anterior (os escopos de conversa do systemd que ficaram vivos, sem dono). Sem isto, a
+   * conversa sem dono seguiria o turno por conta própria e a retomada abriria outro `claude` na mesma sessão: dois processos no mesmo jsonl. Erro não impede a retomada.
+   */
+  beforeResume?: () => Promise<unknown>;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -134,6 +144,10 @@ export async function resumeAfterRestart(d: ResumeDeps): Promise<void> {
   const log = d.log ?? ((line: string) => console.log(`[retomar] ${line}`));
   const entries = await takeResume(d.file, d.now?.() ?? Date.now(), log);
   for (const e of entries) {
+    if (d.owns && !(await d.owns(e.projectId).catch(() => false))) {
+      log(`${e.sessionId}: não retomada: este servidor não manda no projeto (é de outra instância)`);
+      continue;
+    }
     // Ninguém sabe se a ação cortada chegou a acontecer: retomar sozinho poderia repeti-la (push, deploy, comando no servidor).
     if (e.cut) {
       try {
@@ -184,6 +198,7 @@ export async function resumeAfterRestart(d: ResumeDeps): Promise<void> {
  */
 export async function bootResume(d: ResumeDeps, startTimers: () => void): Promise<void> {
   try {
+    await Promise.resolve(d.beforeResume?.()).catch((err: unknown) => (d.log ?? ((line: string) => console.log(`[retomar] ${line}`)))(`não consegui encerrar o que sobrou do servidor anterior: ${errorText(err)}`));
     await resumeAfterRestart(d);
   } finally {
     startTimers();

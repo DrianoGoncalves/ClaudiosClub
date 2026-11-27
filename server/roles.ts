@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { BUILTIN_ROLES, type RoleEntry, type RoleTemplate } from '../shared/roles';
+import { BUILTIN_ROLES, NICHES, type RoleEntry, type RoleTemplate } from '../shared/roles';
 import { NAME as SKILL_NAME } from './adapters/claude/skillWrite';
 import { MYCO_HOME } from './config';
 import { writeAtomic } from './staff/store';
@@ -39,6 +39,8 @@ export const RoleInput = z.object({
   skills: z.array(z.string().regex(SKILL_NAME, 'skill do cargo: letras, números, _ e hífen (até 64), começando por letra ou número')).max(50).optional(),
   servers: z.boolean().optional(),
   canHire: z.boolean().optional(),
+  // Nichos da tela "Ver cargos": só os da lista fixa, sem repetir.
+  niches: z.array(z.enum(NICHES)).max(NICHES.length).transform((a) => [...new Set(a)]).optional(),
 });
 
 interface RolesFile {
@@ -53,9 +55,13 @@ export async function readRolesFile(file = FILE): Promise<RolesFile> {
     const d = raw ? (JSON.parse(raw.replace(/^﻿/, '')) as Partial<RolesFile>) : {};
     const items = (Array.isArray(d.items) ? d.items : []).flatMap((r) => {
       // Uma skill com nome inválido no arquivo sai dela, sem derrubar o cargo inteiro.
-      const cleaned = r && typeof r === 'object' && Array.isArray((r as { skills?: unknown }).skills)
+      let cleaned: unknown = r && typeof r === 'object' && Array.isArray((r as { skills?: unknown }).skills)
         ? { ...r, skills: ((r as { skills: unknown[] }).skills).filter((s): s is string => typeof s === 'string' && SKILL_NAME.test(s)) }
         : r;
+      // Idem nichos: um nicho que não existe mais sai da lista, sem derrubar o cargo.
+      if (cleaned && typeof cleaned === 'object' && Array.isArray((cleaned as { niches?: unknown }).niches)) {
+        cleaned = { ...cleaned, niches: ((cleaned as { niches: unknown[] }).niches).filter((n) => (NICHES as readonly unknown[]).includes(n)) };
+      }
       const ok = RoleInput.safeParse(cleaned);
       return ok.success && ok.data.id ? [{ ...ok.data, id: ok.data.id } as RoleTemplate] : [];
     });
@@ -72,6 +78,8 @@ export async function listRoles(file = FILE): Promise<RoleEntry[]> {
   const mine = new Map(f.items.map((r) => [r.id, r]));
   const builtins = BUILTIN_ROLES.filter((r) => !f.removed.includes(r.id)).map((r) => ({
     ...(mine.get(r.id) ?? r),
+    // Pronto sem nichos salvos na sua versão usa os do código.
+    niches: mine.get(r.id)?.niches ?? r.niches,
     builtin: true,
     edited: mine.has(r.id),
     isDefault: f.defaultId === r.id,

@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { getAuthStatus } from '../server/auth';
+import { markCleanStop } from '../server/exitReason';
 import { PAIR_APPROVE_PATH, PAIR_USER_CODE, pairCode, pairUrl, readOrCreatePairKey } from '../server/pairing';
+import { reapChatScopes } from '../server/scopeCommand';
 import { openTerminal } from '../server/terminal';
 import { DAEMON_BUNDLE, SERVER_BUNDLE, bundle } from './bundle';
 import {
@@ -12,7 +14,9 @@ import {
   LOG_FILE,
   PID_FILE,
   ROOT,
+  LAST_EXIT_FILE,
   RUN_DIR,
+  SESSION_FILE,
   START_PAGE,
   STOP_FILE,
   TSX,
@@ -175,7 +179,8 @@ async function start(opts: { offerMod: boolean }): Promise<void> {
   );
   const log = fs.openSync(LOG_FILE, 'a');
   // Linux: o vigia sobe no próprio escopo do systemd (ver daemonCommand); sem systemd do usuário, sobe como sempre.
-  const launch = daemonCommand(process.execPath, [...daemon, '--port', String(port)], { scope: systemdScopeUsable() });
+  // `omit`: o oomd nunca escolhe o vigia por pressão de memória, e é ele que religa o servidor; `keepOnOom`: o kernel matar um processo dele não para o escopo (server/scopeCommand.ts).
+  const launch = daemonCommand(process.execPath, [...daemon, '--port', String(port)], { scope: systemdScopeUsable(), oom: 'omit', keepOnOom: true });
   const child = spawn(launch.cmd, launch.args, {
     cwd: ROOT,
     detached: true,
@@ -212,8 +217,17 @@ function stop(): void {
   for (let i = 0; i < 50 && isAlive(pid); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   fs.rmSync(PID_FILE, { force: true });
   fs.rmSync(STOP_FILE, { force: true });
+  // No Windows o `taskkill /F` não deixa o vigia marcar a própria parada: parar a pedido é saída limpa, e a próxima subida não a estranha.
+  // E o aviso "Por que parou" de uma saída anterior some: quem parou foi o usuário (o `writeLogSnapshot` do fim do script grava o log.js sem ele).
+  markCleanStop(SESSION_FILE, LAST_EXIT_FILE);
   appendLog('daily', 'parado a pedido (npm run daily:stop)');
   console.log('Claudio’s Club parado.');
+}
+
+/** Depois de parar (ou de achar o vigia parado): as conversas que ficaram sem servidor, cada uma no seu escopo do systemd, não podem seguir sozinhas. */
+async function reapLeftoverChats(): Promise<void> {
+  const reaped = await reapChatScopes({ log: (line) => appendLog('daily', line) });
+  if (reaped.length) console.log(`${reaped.length} conversa(s) que ficaram sem servidor foram encerradas.`);
 }
 
 async function status(): Promise<void> {
@@ -392,6 +406,8 @@ switch (action) {
     break;
   case 'stop':
     stop();
+    // Só com o vigia de fato parado: "não deu para confirmar" deixa tudo como está.
+    if (process.platform === 'linux' && !runningDaemon()) await reapLeftoverChats();
     break;
   case 'status':
     await status();

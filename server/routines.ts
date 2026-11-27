@@ -53,6 +53,21 @@ export interface RoutineSchedulerOptions {
   log?: (line: string) => void;
 }
 
+/**
+ * As fichas que o agendador deve ver: só as que têm rotina e são de projeto que este servidor possui (ver server/projectOwner.ts). A rotina de um projeto que é de outro
+ * servidor quem dispara é o dono dele: aqui ela nem é armada, e nada é gravado no estado. Pergunta uma vez por projeto; erro ao perguntar vale como "não é meu".
+ */
+export async function ownedRoutineStaff(list: StaffProfile[], owns: (projectId: string) => Promise<boolean>): Promise<StaffProfile[]> {
+  const verdict = new Map<string, boolean>();
+  const out: StaffProfile[] = [];
+  for (const s of list) {
+    if (!s.routines?.length) continue;
+    if (!verdict.has(s.projectId)) verdict.set(s.projectId, await owns(s.projectId).catch(() => false));
+    if (verdict.get(s.projectId)) out.push(s);
+  }
+  return out;
+}
+
 /** O estado de uma rotina (em `routines.json`, `version: 2`). */
 export interface RoutineState {
   /** Impressão digital da recorrência a que o cursor pertence; null = ainda não conferida (arquivo antigo). */

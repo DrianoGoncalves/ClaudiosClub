@@ -816,7 +816,11 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <p>Se o botão <b class="ui">Iniciar</b> não fizer nada, rode esse comando <b>uma vez</b>: ele registra o link e sobe o Claudio’s Club.</p>
       </div>
     </div>
-    <p><b>Opcional, no Windows: disco mais rápido.</b> A página de início tem a seção <b class="ui">Opcional: disco mais rápido</b>, recolhida. O antivírus do Windows (Defender) verifica cada arquivo que o Claudio’s Club, o git e os testes abrem, e num HD isso pesa. A seção mostra dois comandos, cada um com o botão <b class="ui">Copiar</b> e o comando que desfaz: o <b>recomendado</b> (risco baixo) tira da verificação os transcripts das conversas e o histórico do git do Claudio’s Club; o <b>opcional</b> (mais ganho, mais risco) tira o <code>node_modules</code>, código de terceiros baixado do npm que deixaria de ser verificado. Quem roda é você, no PowerShell aberto como administrador: a página nunca roda nada.</p>
+    <p><b>Faixa “O Claudio’s Club parou”.</b> Quando uma ação diz que o Claudio’s Club está reiniciando, é só esperar: se ele volta em até 1 minuto, nada muda. Passado esse prazo, ele não vai voltar sozinho (o sistema pode tê-lo encerrado por falta de memória, por exemplo): aparece uma faixa vermelha fixa no alto da tela. Clique em <b class="ui">Ir para a página de início</b> e, nela, em <b class="ui">Iniciar</b>.</p>
+    <p><b>Por que parou.</b> Se o Claudio’s Club foi encerrado sem você pedir (por exemplo, o sistema o fechou por falta de memória), ele não consegue avisar na hora: quem descobre é a subida seguinte. Ao clicar em <b class="ui">Iniciar</b> na página de início, quando o Club volta, a página <b>não entra direto nele</b>: ela fica com o quadro <b class="ui">Por que parou</b>, com a hora e o motivo (ou “provavelmente falta de memória”, quando o sistema não deixou registro), e o botão <b class="ui">Abrir o Claudio’s Club</b>. O motivo também fica no log. Feche programas pesados antes de seguir. A conversa que estava no meio de um turno foi interrompida: abra-a e peça para continuar. O quadro aparece uma vez por saída (depois de <b class="ui">Abrir</b> ele não volta neste navegador) e por até 30 minutos. Parar o Claudio’s Club de propósito (<b class="ui">Parar</b>, ou <code>npm run daily:stop</code>) apaga o aviso: quem parou foi você. Reiniciar pelo botão não gera o quadro; computador desligado ou reiniciado só aparece no log.</p>
+    <p><b>Pouca memória no Linux.</b> Com o systemd do usuário, o Claudio’s Club se divide em grupos separados do sistema: o vigia (que sobe o servidor de novo), o servidor e cada conversa. Quando a memória acaba, o sistema passa a encerrar só a conversa mais pesada, e o vigia e o servidor continuam no ar. Como o Club deixou de ser um bloco só, o sistema também pode escolher outro programa seu (por exemplo, o navegador) em vez dele. Isso é esperado e não bloqueia nada. A conversa encerrada fica no disco: abra-a e peça para continuar. Ao parar o Claudio’s Club (botão <b class="ui">Parar</b>, <b class="ui">Reiniciar</b> ou <code>npm run daily:stop</code>), as conversas que sobrarem sem servidor são encerradas. No Windows e no macOS nada muda. <b>Só vale para um vigia novo:</b> o botão <b class="ui">Reiniciar</b> não recarrega o vigia. Depois de atualizar o Claudio’s Club, use <b class="ui">Parar</b> e <b class="ui">Iniciar</b> uma vez (ou reinicie o computador); a divisão em grupos passa a valer a partir daí.</p>
+    <p><b>Opcional, no Windows: disco mais rápido.</b> A página de início tem a seção <b class="ui">Opcional: disco mais rápido</b>, recolhida. O antivírus do Windows (Defender) verifica cada arquivo que o Claudio’s Club, o git e os testes abrem, e num HD isso pesa. A seção mostra dois comandos, cada um com o botão <b class="ui">Copiar</b> e o comando que desfaz: o <b>recomendado</b> (risco baixo) tira da verificação os transcripts das conversas e o histórico do git do Claudio’s Club; o <b>opcional</b> (mais ganho, mais risco) tira o <code>node_modules</code>, código de terceiros baixado do npm que deixaria de ser verificado. Quem roda é você, no PowerShell aberto como administrador (só no Windows; no Linux não há esse passo): a página nunca roda nada.</p>
+    <p><b>Dependências usadas.</b> A página de início também tem a seção <b class="ui">Dependências usadas</b>, recolhida. Ela lista os pacotes do npm que o Claudio’s Club usa, em dois grupos: <b class="ui">Do app</b> e <b class="ui">Para montar e testar</b>. Cada pacote mostra a versão instalada, a licença, uma descrição curta e o link para a página dele no npm. A lista vem do <code>package.json</code> e atualiza a cada subida ou com <code>npm run doctor</code>. Pacote que falta instalar aparece em vermelho, com a versão pedida.</p>
   </article>
 
   <article class="blk" id="segundo-plano">
@@ -987,7 +991,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <tbody>
         <tr><td data-label="Sintoma">Tela em branco, sem erro no console</td><td data-label="O que fazer"><code>npm run build</code></td></tr>
         <tr><td data-label="Sintoma">Build falha com <code>Failed to resolve entry for package</code></td><td data-label="O que fazer"><code>npm ci</code>, depois <code>npm run build</code> (o <code>npm install</code> não conserta)</td></tr>
-        <tr><td data-label="Sintoma">O botão <b class="ui">Iniciar</b> não faz nada, ou o Windows oferece a Microsoft Store</td><td data-label="O que fazer"><code>npm run daily:start</code> uma vez</td></tr>
+        <tr><td data-label="Sintoma">O botão <b class="ui">Iniciar</b> não faz nada, ou o Windows oferece a Microsoft Store</td><td data-label="O que fazer"><code>npm run daily:start</code> uma vez. No Linux, o link é um <code>.desktop</code> registrado com <code>xdg-mime</code>; se ainda não abrir, saia e entre de novo na sessão (ou rode <code>update-desktop-database ~/.local/share/applications</code>)</td></tr>
         <tr><td data-label="Sintoma">Ações dizem que o navegador não está pareado</td><td data-label="O que fazer">Clique em <b class="ui">Parear este navegador</b> e rode o <code>npm run pair CÓDIGO</code> que aparece. Use sempre o mesmo endereço (<code>claudio.localhost</code>)</td></tr>
       </tbody>
     </table></div>
@@ -1088,7 +1092,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <h4>No nível simples</h4>
     <div class="split">
       <ol class="steps">
-        <li><p class="st">Escolha o <b>cargo</b> nos botões. Já vem marcado o cargo padrão, se houver; senão, o Orquestrador(a).</p></li>
+        <li><p class="st">O <b>cargo</b> escolhido aparece num card (nome, missão, modelo e a marca <b>padrão</b>). Já vem escolhido o cargo padrão, se houver; senão, o Orquestrador(a). <b>Trocar cargo</b> abre a tela cheia de cargos, com os mesmos cards e filtros de <b>Ver cargos</b>, só para escolher: toque no card para aplicar o cargo e voltar ao formulário com o que você já digitou; <b>Voltar</b> ou Esc fecham sem trocar.</p></li>
         <li><p class="st">Preencha <b class="ui">Nome*</b> e, se quiser, <b class="ui">Retrato</b>.</p></li>
         <li><p class="st">Clique em <b class="ui">Contratar</b>.</p></li>
       </ol>
@@ -1141,20 +1145,22 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <div class="split">
       <div>
         <p><span class="path"><b>Configurações</b><i>›</i><b>Cargos</b></span> (<b class="ui">Cargos para contratar</b>)</p>
+        <p>Ali ficam o cargo padrão e o botão <b class="ui">Ver cargos</b>, que abre uma tela cheia com um card por cargo (nome, missão, modelo e se é pronto, editado ou seu). Volte com <b class="ui">Voltar</b> ou Esc.</p>
         <ul>
-          <li><b class="ui">editar</b>: muda o modelo.</li>
-          <li><b class="ui">padrão</b>: o que já vem marcado ao contratar.</li>
-          <li><b class="ui">tirar</b> ou <b class="ui">voltar ao original</b>.</li>
-          <li><b class="ui">Novo cargo</b>, e salve com <b class="ui">Salvar cargo</b>.</li>
+          <li><b>Filtros</b> no topo: <b class="ui">Todos</b>, os nichos (<b class="ui">Fábrica de software</b>, <b class="ui">Sites e landing pages</b>, <b class="ui">E-commerce</b>, <b class="ui">Produto com IA</b>, <b class="ui">Infra e servidores</b>, <b class="ui">Dados e BI</b>) e <b class="ui">Meus cargos</b>. Um mesmo cargo pode aparecer em mais de um nicho.</li>
+          <li>Clique no card para <b class="ui">editar</b>: muda o modelo e os <b>nichos</b> do cargo (seleção múltipla).</li>
+          <li>No card: <b class="ui">padrão</b> (o que já vem marcado ao contratar) e <b class="ui">tirar</b> ou <b class="ui">voltar ao original</b>.</li>
+          <li><b class="ui">Novo cargo</b> fica no topo da tela; salve com <b class="ui">Salvar cargo</b>.</li>
         </ul>
         <p>A mudança vale para os <b>próximos</b> contratados.</p>
       </div>
-      <figure class="mock panel" role="img" aria-label="Cargos para contratar: cada cargo com editar, padrão e tirar; botão Novo cargo">
+      <figure class="mock panel" role="img" aria-label="Ver cargos: filtros por nicho e um card por cargo, com padrão e tirar; botão Novo cargo">
         <div class="mock-t">Cargos para contratar</div>
         <div class="mock-b m-col">
+          <div class="m-row"><span class="mb sm on">Todos</span><span class="mb sm">Fábrica de software</span><span class="mb sm">Sites e landing pages</span><span class="mb sm">Meus cargos</span></div>
           <ul class="mlist">
-            <li><span class="grow"><b>Front-end</b></span><span class="mb sm">editar</span><span class="mb sm on">padrão</span><span class="mb sm">tirar</span></li>
-            <li><span class="grow"><b>Back-end</b></span><span class="mb sm">editar</span><span class="mb sm">padrão</span><span class="mb sm">voltar ao original</span></li>
+            <li><span class="grow"><b>Front-end</b></span><span class="mb sm on">padrão</span><span class="mb sm">tirar</span></li>
+            <li><span class="grow"><b>Back-end</b></span><span class="mb sm">padrão</span><span class="mb sm">voltar ao original</span></li>
           </ul>
           <div class="m-row"><span class="mb"><svg class="i"><use href="#i-plus"/></svg>Novo cargo</span><span class="mb p">Salvar cargo</span></div>
         </div>
@@ -2685,7 +2691,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <li>O botão <b class="ui">RH e ranking</b> (ícone de pessoas) no topo do quadro abre o painel lateral, com as abas <b class="ui">RH</b>, <b class="ui">Gastos</b> e <b class="ui">Economia</b>.</li>
         <li>Aba <b class="ui">Gastos</b> (“Quem mais gasta”): a parte de cada um no consumo total. Serve para comparar; as sessões rodam pela assinatura.</li>
         <li>Aba <b class="ui">Economia</b> (“Quem mais economiza”): estimativa, comparada com o chefe fazendo tudo no modelo dele.</li>
-        <li><b>Período:</b> <b class="ui">Hoje</b>, <b class="ui">7 dias</b>, <b class="ui">1 mês</b>, <b class="ui">Últimos 3 meses</b> (padrão) ou <b class="ui">Tudo</b>.</li>
+        <li><b>Período:</b> <b class="ui">Hoje</b> (padrão), <b class="ui">7 dias</b>, <b class="ui">1 mês</b>, <b class="ui">Últimos 3 meses</b> ou <b class="ui">Tudo</b>.</li>
         <li>Enquanto os transcripts são lidos: “Ainda lendo os transcripts: os números vão crescer.”</li>
         <li>Na aba <b>Gastos</b>, quem tem ficha tem uma <b>lupa</b>: <b class="ui">Analisar o custo de {nome}</b>. Conversa sem ficha (<b class="ui">Freela</b>) só leva ao nó no quadro.</li>
       </ul>
@@ -2693,7 +2699,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <div class="mock-t"><svg class="i"><use href="#i-users"/></svg>RH e ranking<span class="x"><svg class="i"><use href="#i-x"/></svg></span></div>
         <div class="mock-b m-col">
           <div class="mtabs" style="margin:0"><span>RH</span><span class="on">Gastos</span><span>Economia</span></div>
-          <div class="m-row"><span class="m-note">Período</span><span class="mb sm">Hoje</span><span class="mb sm">7 dias</span><span class="mb sm">1 mês</span><span class="mb sm on">Últimos 3 meses</span><span class="mb sm">Tudo</span></div>
+          <div class="m-row"><span class="m-note">Período</span><span class="mb sm on">Hoje</span><span class="mb sm">7 dias</span><span class="mb sm">1 mês</span><span class="mb sm">Últimos 3 meses</span><span class="mb sm">Tudo</span></div>
           <ul class="mlist">
             <li><span class="port sm">A</span><span class="grow">Ana<br><span class="bar lg"><i class="mid" style="width:62%"></i></span></span><span class="mb sm pn" aria-label="lupa"><svg class="i"><use href="#i-search"/></svg></span></li>
             <li><span class="port sm">D</span><span class="grow">Davi<br><span class="bar lg"><i style="width:30%"></i></span></span><span class="mb sm"><svg class="i"><use href="#i-search"/></svg></span></li>
@@ -2936,6 +2942,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <tr><td data-label="Sintoma ou mensagem"><b class="ui">Codex sem login</b></td><td data-label="O que fazer">Clique em <b class="ui">Entrar no Codex</b>.</td></tr>
         <tr><td data-label="Sintoma ou mensagem">“Codex: sem leitura” ou “Não deu para ler os limites do Codex”</td><td data-label="O que fazer">Tente de novo. Se continuar, confira o login do Codex.</td></tr>
         <tr><td data-label="Sintoma ou mensagem">“atualize: {comando}” (Codex)</td><td data-label="O que fazer">Rode o comando mostrado. Há uma versão nova do Codex CLI.</td></tr>
+        <tr><td data-label="Sintoma ou mensagem">Linha <code>[cofre] Sem chaveiro do sistema (…)</code> no log do servidor (Linux)</td><td data-label="O que fazer">As senhas (FTP e valores de MCP) ficam no chaveiro do sistema (Secret Service). Sem ele, o Club segue funcionando, mas guarda em arquivo protegido só por permissão (0600, sem cifra). Quem salva pela tela também vê o aviso <b class="ui">Salvo, mas sem cifra</b>, no formulário de FTP e no de MCP, até clicar em <b class="ui">Entendi</b>. Para cifrar: instale o <code>secret-tool</code> (pacote <code>libsecret-tools</code> ou <code>libsecret</code>) e um chaveiro (GNOME Keyring, KWallet ou KeePassXC) e reinicie o Club. As senhas que estavam em arquivo migram sozinhas na subida (o log diz quantas). <code>MYCO_VAULT_KEYRING=off</code> desliga o chaveiro. Só vale na pasta padrão <code>~/.myco</code>; com <code>MYCO_HOME</code> diferente, use <code>MYCO_VAULT_KEYRING=on</code>.</td></tr>
         <tr><td data-label="Sintoma ou mensagem">Dúvida sobre o que falta para rodar</td><td data-label="O que fazer">Rode <code>npm run doctor</code>. Ele só lê e mostra o que falta.</td></tr>
       </tbody>
     </table></div>

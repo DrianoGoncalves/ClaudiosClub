@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { FtpConnection } from '../shared/model';
 import {
   basicFtpConnector,
@@ -22,6 +22,7 @@ import {
 } from '../server/staff/ftp';
 import { saveConnection } from '../server/staff/servers';
 import { getSecret, hasSecret } from '../server/secretVault';
+import { fakeKeyring } from './support/fakeKeyring';
 import { removeTemp } from './support/tmp';
 
 const PASSWORD = 'S3nh@-Secreta-FTP';
@@ -83,6 +84,28 @@ describe('conexões FTP: cadastro', () => {
     // Para a ficha: sem usuário.
     expect(await listFtpServers(dir, vault)).toEqual([{ name: 'site', source: 'ftp', protocol: 'ftps', host: 'ftp.example.com', remoteRoot: '/public_html' }]);
     expect(await everything(dir, [saved])).not.toContain(PASSWORD);
+  });
+
+  it('a resposta de salvar traz o aviso só quando o chaveiro do sistema não serviu e a senha foi para arquivo', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const kr = fakeKeyring();
+    const kvault = { dir: path.join(root, 'secrets-aviso'), platform: 'linux' as const, keyring: kr };
+    const ok = await saveFtpConnection(await project('aviso-ok'), ftp(), kvault);
+    expect(ok.vaultWarning).toBeUndefined();
+    expect(Object.keys(ok)).not.toContain('vaultWarning');
+    expect(kr.items.size).toBe(1);
+
+    kr.down = 'no-bus';
+    const dir = await project('aviso-sem');
+    const saved = await saveFtpConnection(dir, ftp(), kvault);
+    expect(saved.vaultWarning).toMatch(/Sem chaveiro do sistema \(.*D-Bus.*\).*sem cifra/);
+    expect(saved.vaultWarning).not.toContain(PASSWORD);
+    expect(await getSecret(ftpSecretId(dir, 'site'), kvault)).toBe(PASSWORD); // funciona, no formato atual
+    expect(saved.hasPassword).toBe(true);
+    // Editar sem trocar a senha não regrava nada: sem aviso.
+    expect((await saveFtpConnection(dir, ftp({ password: undefined, originalName: 'site', host: 'novo.example.com' }), kvault)).vaultWarning).toBeUndefined();
+    // Chaveiro desligado por escolha: sem aviso.
+    expect((await saveFtpConnection(await project('aviso-off'), ftp(), { ...kvault, keyring: null })).vaultWarning).toBeUndefined();
   });
 
   it('criar exige senha; editar sem senha mantém; renomear leva a senha; apagar apaga a senha', async () => {

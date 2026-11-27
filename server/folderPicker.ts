@@ -8,7 +8,7 @@ import path from 'node:path';
 // Nada que venha do cliente entra no comando: `pickFolder` não recebe corpo, caminho inicial nem texto da tela. O script do Windows, o do
 // macOS e os argumentos do Linux são constantes deste arquivo; o que volta é só lido (nunca executado) e conferido como caminho absoluto.
 // Um seletor por vez (o segundo pedido com um aberto é recusado) e, passado o prazo, o processo é morto e a resposta é "cancelado".
-// Sem a ferramenta do sistema (zenity/kdialog no Linux, sem tela, PowerShell ausente), a resposta é "unsupported" e a tela cai no campo de texto.
+// Sem a ferramenta do sistema (zenity/kdialog/portal no Linux, sem tela, PowerShell ausente), a resposta é "unsupported" e a tela cai no campo de texto.
 
 /** O que a rota devolve: o caminho escolhido, a janela fechada sem escolher (ou o prazo), ou que este computador não abre a janela. */
 export type PickFolderResult = { path: string } | { cancelled: true } | { unsupported: true };
@@ -259,6 +259,114 @@ export function readMac(r: RunResult, platform: NodeJS.Platform = 'darwin'): Pic
   return /\(-128\)|user canceled/i.test(r.stderr) ? { cancelled: true } : null;
 }
 
+// ---- Linux: portal do sistema (org.freedesktop.portal.FileChooser) por um python3 com Gio ----
+//
+// Para quem não tem zenity nem kdialog (Omarchy, Hyprland, Sway, GNOME/KDE enxutos): o portal é a janela de escolher arquivo do próprio
+// ambiente, já instalada com o xdg-desktop-portal. O script fala D-Bus por UMA conexão só (a resposta do portal é um sinal endereçado à conexão
+// que perguntou: `gdbus call`/`dbus-send` abrem outra e saem antes dela chegar) e assina o sinal no caminho previsto ANTES de pedir, para uma
+// resposta imediata não se perder. O título vai como argumento (argv[1]), nunca dentro do código.
+//
+// Saída (só stdout/código): `OK:<base64 dos bytes do caminho>` ou `CANCEL`, com código 0; qualquer falha sai com 2 e uma linha no stderr (um
+// traceback do Python sairia com 1, e fechar a janela do zenity também: por isso o "cancelou" é uma marca, não o código). Sem python3, sem o módulo
+// `gi`, sem sessão D-Bus, sem portal ou com um portal antigo (< v3, que ignora `directory` e deixaria escolher arquivo) é falha: a ferramenta
+// some e o resultado é "unsupported", como sem zenity. Morrer (o prazo do runner) basta para a janela sumir: o portal fecha os pedidos de quem
+// sai do barramento (conferido com SIGTERM e SIGKILL no xdg-desktop-portal 1.22 + portal-gtk), então não há tratamento de sinal aqui.
+// Sem barra invertida nem `${` aqui dentro: é um template literal.
+const PORTAL_PY = `
+import base64, os, sys
+
+def fail(msg):
+    print("portal FileChooser: " + msg, file=sys.stderr)
+    sys.exit(2)
+
+try:
+    import gi
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+except Exception as e:
+    fail("sem python3-gi (%s)" % e)
+
+PORTAL = "org.freedesktop.portal.Desktop"
+OBJECT = "/org/freedesktop/portal/desktop"
+CHOOSER = "org.freedesktop.portal.FileChooser"
+
+def main(title):
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    version = bus.call_sync(PORTAL, OBJECT, "org.freedesktop.DBus.Properties", "Get", GLib.Variant("(ss)", (CHOOSER, "version")),
+                            GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, 30000, None).unpack()[0]
+    if version < 3:
+        fail("o portal é v%d e não escolhe pasta (precisa da v3)" % version)
+
+    loop = GLib.MainLoop()
+    answer = {}
+
+    def on_response(connection, sender, path, interface, signal_name, params):
+        code, results = params.unpack()
+        answer["code"] = code
+        answer["uris"] = results.get("uris", [])
+        loop.quit()
+
+    def subscribe(path):
+        bus.signal_subscribe(PORTAL, "org.freedesktop.portal.Request", "Response", path, None, Gio.DBusSignalFlags.NONE, on_response)
+
+    token = "myco%d" % os.getpid()
+    predicted = "/org/freedesktop/portal/desktop/request/%s/%s" % (bus.get_unique_name()[1:].replace(".", "_"), token)
+    subscribe(predicted)
+    handle = bus.call_sync(PORTAL, OBJECT, CHOOSER, "OpenFile",
+                           GLib.Variant("(ssa{sv})", ("", title, {"handle_token": GLib.Variant("s", token), "directory": GLib.Variant("b", True),
+                                                                  "multiple": GLib.Variant("b", False)})),
+                           None, Gio.DBusCallFlags.NONE, 30000, None).unpack()[0]
+    if handle != predicted:
+        subscribe(handle)
+
+    opened = GLib.get_monotonic_time()
+    loop.run()
+
+    # Resposta 1 = Cancelar. Fechar a janela pelo gerenciador de janelas (Super+Q, o X da barra) o portal-gtk responde 2 ("terminou de outro
+    # jeito"): se a pessoa teve tempo de ver a janela, é ela fechando; resposta 2 na hora é o portal falhando de verdade, e isso é falha.
+    code = answer.get("code")
+    if code == 1 or (code == 2 and GLib.get_monotonic_time() - opened > 1500000):
+        sys.stdout.write("CANCEL" + chr(10))
+        return 0
+    if code != 0 or not answer["uris"]:
+        fail("o portal terminou sem escolha (código %s)" % code)
+    chosen, host = GLib.filename_from_uri(answer["uris"][0])
+    if host or not os.path.isdir(chosen):
+        fail("o portal devolveu algo que não é uma pasta local")
+    sys.stdout.write("OK:" + base64.b64encode(os.fsencode(chosen)).decode("ascii") + chr(10))
+    return 0
+
+try:
+    sys.exit(main(sys.argv[1]))
+except GLib.Error as e:
+    fail(e.message)
+except Exception as e:
+    fail(repr(e))
+`;
+
+/** O script do portal: constante (nada do cliente). Exportado para os testes conferirem o que roda. */
+export function portalScript(): string {
+  return PORTAL_PY.trim();
+}
+
+/** Portal (python3 + Gio): `OK:<base64 dos bytes do caminho>` ou `CANCEL`, com código 0; qualquer outra coisa é falha. */
+export function readPortal(r: RunResult, platform: NodeJS.Platform = 'linux'): PickFolderResult | null {
+  if (r.code !== 0) return null;
+  const lines = r.stdout.split(/\r?\n/).map((l) => l.trim());
+  if (lines.includes('CANCEL')) return { cancelled: true };
+  const ok = lines.find((l) => /^OK:[A-Za-z0-9+/=]+$/.test(l));
+  if (!ok) return null;
+  let decoded: string;
+  try {
+    // Caminho que não é UTF-8 válido não vira texto confiável: falha em vez de devolver um caminho que não existe.
+    decoded = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(ok.slice(3), 'base64'));
+  } catch {
+    return null;
+  }
+  const p = cleanPath(decoded, platform);
+  return p ? { path: p } : null;
+}
+
 /** Sem tela (o zenity/kdialog sai com 1 e reclama no stderr): é falha, não cancelamento. */
 const NO_DISPLAY = /cannot open display|no display|unable to init|could not connect|failed to connect|display.*not set/i;
 
@@ -284,9 +392,13 @@ export function toolsFor(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = pro
   }
   if (platform === 'linux') {
     if (!env.DISPLAY && !env.WAYLAND_DISPLAY) return [];
+    // zenity e kdialog primeiro: quem tem um dos dois já abre a janela hoje e continua igual (nenhum risco novo); e um portal instalado mas sem
+    // backend que funcione deixaria a janela nunca aparecer até o prazo, enquanto o zenity abriria na hora. Sem eles, o `spawn` falha com ENOENT na
+    // hora e o portal entra. `python3 -I`: modo isolado, sem PYTHON* do ambiente, sem a pasta atual no caminho de módulos, sem site do usuário.
     return [
       { cmd: 'zenity', args: ['--file-selection', '--directory', `--title=${TITLE}`], read: readLinux },
       { cmd: 'kdialog', args: ['--getexistingdirectory', '--title', TITLE], read: readLinux },
+      { cmd: 'python3', args: ['-I', '-c', portalScript(), TITLE], read: readPortal },
     ];
   }
   return [];

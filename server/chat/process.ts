@@ -12,6 +12,7 @@ import { claudeDenied, type DeniedInfo } from './denied';
 import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
 import { ASK_TOOL, cleanAnswers, parseQuestions } from './questions';
 import { killTree } from './registry';
+import { conversationCommand, conversationScopes, splitScopeMarker } from '../scopeCommand';
 import { scanSecrets, type ClassifiedSecret, type SecretSource } from './secrets';
 import { capText, TurnBudget, type TurnCaps } from './turnCap';
 import type { TurnContext, TurnEnd } from './turnRetry';
@@ -37,6 +38,8 @@ export const STREAM_FLAGS = [
 ];
 
 const MAX_LOG = 5_000;
+/** Quanto esperar o escopo do systemd nascer antes de abrir a conversa sem ele. */
+const SCOPE_START_MS = 10_000;
 
 /**
  * Quantos itens a conversa aberta guarda na memória (os mais recentes). O resto já está no transcript e volta de lá no
@@ -133,6 +136,10 @@ export interface ChatProcessOptions {
   onTurnEnd?: (end: TurnEnd) => void;
   /** O processo saiu (`error` com o motivo, se saiu com erro). */
   onExit?: (pid: number | null, error: string | null) => void;
+  /** O escopo do systemd por conversa (padrão: o desta instância, e só no spawn padrão; os testes passam o deles junto de `spawnImpl`). */
+  scopes?: { readonly usable: boolean; fail(reason: string): void };
+  /** O processo foi aberto de novo (sem o escopo do systemd, quando o `systemd-run` falhou): o pid que o registro de órfãos guarda mudou. */
+  onRelaunch?: (pid: number | null) => void;
   /**
    * Algo com cara de segredo passou pela conversa (o tipo, o palpite de ser real e a dica mascarada; o valor nunca sai daqui). Chamado uma vez por
    * rótulo achado no texto, do mais grave ao menos grave. `file`: o arquivo da ferramenta onde ele apareceu, como o motor o deu (absoluto ou
@@ -336,6 +343,19 @@ export class ChatProcess {
   }
 
   start() {
+    // No Linux com systemd do usuário, cada conversa ganha o seu escopo: o oomd mata só a mais pesada, não o Claudio’s Club inteiro (ver server/scopeCommand.ts).
+    // Só o spawn padrão: quem injeta `spawnImpl` (os testes) recebe o `claude` puro, a menos que passe `scopes`.
+    this.spawnClaude(!!this.scopes?.usable);
+  }
+
+  private get scopes() {
+    return this.opts.scopes ?? (this.opts.spawnImpl ? null : conversationScopes);
+  }
+
+  /** Lançamento embrulhado no escopo ainda sem confirmação: o que se escreveu nele (para refazer sem escopo se o `systemd-run` falhar) e o prazo. */
+  private scopeTry: { child: ChildProcessWithoutNullStreams; sent: string[]; timer: NodeJS.Timeout } | null = null;
+
+  private spawnClaude(scoped: boolean) {
     // No Unix o processo vira líder do próprio grupo: encerrar o grupo leva também os comandos que ele abriu.
     const run =
       this.opts.spawnImpl ??
@@ -351,20 +371,79 @@ export class ChatProcess {
       MYCO_SESSION_ID: this.opts.sessionId,
       ...(this.opts.mycoToken && { MYCO_TOKEN: this.opts.mycoToken }),
     };
-    const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env });
+    const args = [...STREAM_FLAGS, ...this.opts.args];
+    const wrapped = scoped ? conversationCommand('claude', args, this.opts.sessionId) : null;
+    const child = run(wrapped?.cmd ?? 'claude', wrapped?.args ?? args, { cwd: this.opts.cwd, env });
     this.child = child;
     this.closedByUs = false;
     this.streamError = null;
     this.apiError = null;
     this.setState({ running: true, error: null });
-    child.stdout.on('data', (chunk: Buffer) => this.onData(chunk.toString('utf8')));
-    child.stderr.on('data', (chunk: Buffer) => {
-      this.stderr = (this.stderr + chunk.toString('utf8')).slice(-2_000);
+    if (wrapped) {
+      // Sem confirmação em 10 s (o gerenciador do usuário travado), o `systemd-run` sai à força e a conversa abre sem escopo.
+      const timer = setTimeout(() => {
+        if (this.scopeTry?.child === child) child.kill('SIGKILL');
+      }, SCOPE_START_MS);
+      timer.unref();
+      this.scopeTry = { child, sent: [], timer };
+    }
+    child.stdout.on('data', (chunk: Buffer) => {
+      this.scopeConfirmed(child);
+      this.onData(chunk.toString('utf8'));
     });
-    child.on('error', (err) => this.finish(`não foi possível iniciar o claude: ${err.message}`));
-    child.on('exit', (code, signal) => this.finish(this.exitError(code), { code, signal }));
+    child.stderr.on('data', (chunk: Buffer) => {
+      let text = chunk.toString('utf8');
+      if (this.scopeTry?.child === child) {
+        const r = splitScopeMarker(text);
+        if (r.marker) this.scopeConfirmed(child);
+        text = r.text;
+      }
+      this.stderr = (this.stderr + text).slice(-2_000);
+    });
+    child.on('error', (err) => {
+      if (this.scopeFailed(child, `não foi possível iniciar o systemd-run: ${err.message}`)) return;
+      this.finish(`não foi possível iniciar o claude: ${err.message}`);
+    });
+    child.on('exit', (code, signal) => {
+      // Saiu antes de o escopo ser confirmado: foi o `systemd-run` (ele só dá exec no claude depois de criar o escopo). Espera o stderr fechar para o motivo ir ao log.
+      if (this.scopeTry?.child === child) {
+        child.once('close', () => {
+          if (!this.scopeFailed(child, this.stderr.trim().split('\n')[0] || `systemd-run saiu com código ${code ?? signal}`)) this.finish(this.exitError(code), { code, signal });
+        });
+        return;
+      }
+      if (this.child !== child) return; // um lançamento que já foi trocado pelo sem escopo
+      this.finish(this.exitError(code), { code, signal });
+    });
     // EPIPE/"write after end" no stdin de um processo que está saindo: sem ouvinte, o evento 'error' derrubaria o servidor inteiro. A saída do processo já é tratada acima.
     child.stdin?.on('error', () => undefined);
+  }
+
+  /** O escopo nasceu (a linha do `systemd-run` ou a primeira saída do claude chegou): o que se escreveu até aqui já está com o claude. */
+  private scopeConfirmed(child: ChildProcessWithoutNullStreams) {
+    const t = this.scopeTry;
+    if (!t || t.child !== child) return;
+    clearTimeout(t.timer);
+    this.scopeTry = null;
+  }
+
+  /**
+   * O `systemd-run` falhou antes de rodar o claude (ENOENT, "Failed to start transient scope", gerenciador do usuário parado, prazo): abre de novo na hora, sem
+   * escopo, e refaz as escritas que ficaram sem o claude para ler. A conversa nunca deixa de abrir por causa do escopo; as próximas abrem sem ele até a sonda
+   * seguinte dar certo. Devolve false quando não era um lançamento embrulhado pendente.
+   */
+  private scopeFailed(child: ChildProcessWithoutNullStreams, reason: string): boolean {
+    const t = this.scopeTry;
+    if (!t || t.child !== child) return false;
+    clearTimeout(t.timer);
+    this.scopeTry = null;
+    this.scopes?.fail(reason.slice(0, 200));
+    console.warn(`[chat] ${this.sessionId}: o escopo do systemd não abriu (${reason.slice(0, 200)}); abrindo sem escopo`);
+    this.stderr = '';
+    this.spawnClaude(false);
+    for (const line of t.sent) this.child?.stdin.write(line);
+    this.opts.onRelaunch?.(this.child?.pid ?? null);
+    return true;
   }
 
   /** O erro da conversa quando o processo sai: nenhum se saiu limpo ou se fomos nós que fechamos; senão o stderr, o último erro do stream, ou o código. */
@@ -1169,7 +1248,10 @@ export class ChatProcess {
     if (!this.child) throw new Error('a conversa não está aberta');
     // Fechando (o stdin já terminou): escrever daria "write after end". Erro limpo, e a mensagem não some calada.
     if (this.child.stdin.writableEnded || this.child.stdin.destroyed) throw new Error('a conversa está fechando: mande de novo em instantes');
-    this.child.stdin.write(JSON.stringify(obj) + '\n');
+    const line = JSON.stringify(obj) + '\n';
+    // Escopo ainda sem confirmação: se o systemd-run falhar, a linha vai de novo ao claude que abrir sem escopo (ver scopeFailed).
+    this.scopeTry?.sent.push(line);
+    this.child.stdin.write(line);
   }
 
   protected putItem(item: ChatItem) {

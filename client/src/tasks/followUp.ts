@@ -2,6 +2,7 @@ import type { FollowUp, InboxItem, Task } from '../../../shared/model';
 import { ApiError } from '../api';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
+import { offlineMessageKey } from '../serverStatus';
 import type { Tr } from '../inbox/secretText';
 
 // Follow-up de revisão (`Task.followUps`): a melhoria que o revisor achou DEPOIS de aprovar. Não vira card sozinha: o gestor que pediu a tarefa (ou
@@ -100,7 +101,7 @@ export function followUpText(item: Pick<InboxItem, 'summary' | 'followUp'>, tr: 
 export function decisionErrorText(err: unknown, tr: Tr = t): string {
   if (err instanceof ApiError) {
     if (err.status === 409) return tr('tasks.fuErrDecided');
-    if (err.code === 'offline') return tr('app.serverOffline');
+    if (err.code === 'offline') return tr(offlineMessageKey());
   }
   return err instanceof Error ? err.message : String(err);
 }

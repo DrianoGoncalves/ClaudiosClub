@@ -22,12 +22,18 @@ Depois disso, use tudo pelo navegador.
 - Use o botão **Iniciar** na página de início, que aparece no mesmo endereço quando o Claudio's Club está parado. O botão chama o link `myco://`. Na primeira vez, o navegador pergunta se pode abrir: marque "sempre permitir".
 - Ou rode `npm run daily:start` no terminal. Se o botão **Iniciar** não fizer nada, rode esse comando uma vez: ele registra o link e sobe o Claudio's Club.
 
+**Por que parou.** Se o Claudio's Club foi encerrado sem você pedir (por exemplo, o sistema o fechou por falta de memória), ele não consegue avisar na hora: quem descobre é a subida seguinte. Ao clicar em **Iniciar** na página de início, quando o Club volta, a página **não entra direto nele**: ela fica com o quadro **Por que parou**, com a hora e o motivo (ou "provavelmente falta de memória", quando o sistema não deixou registro), e o botão **Abrir o Claudio's Club**. O motivo também fica no log. Feche programas pesados antes de seguir. A conversa que estava no meio de um turno foi interrompida: abra-a e peça para continuar. O quadro aparece uma vez por saída (depois de **Abrir** ele não volta neste navegador) e por até 30 minutos. Parar o Claudio's Club de propósito (**Parar**, ou `npm run daily:stop`) apaga o aviso: quem parou foi você. Reiniciar pelo botão não gera o quadro; computador desligado ou reiniciado só aparece no log.
+
+**Pouca memória no Linux.** Com o systemd do usuário, o Claudio's Club se divide em grupos separados do sistema: o vigia (que sobe o servidor de novo), o servidor e cada conversa. Quando a memória acaba, o sistema passa a encerrar só a conversa mais pesada, e o vigia e o servidor continuam no ar. Como o Club deixou de ser um bloco só, o sistema também pode escolher outro programa seu (por exemplo, o navegador) em vez dele. Isso é esperado e não bloqueia nada. A conversa encerrada fica no disco: abra-a e peça para continuar. Ao parar o Claudio's Club (botão **Parar**, **Reiniciar** ou `npm run daily:stop`), as conversas que sobrarem sem servidor são encerradas. No Windows e no macOS nada muda. **Só vale para um vigia novo:** o botão **Reiniciar** não recarrega o vigia. Depois de atualizar o Claudio's Club, use **Parar** e **Iniciar** uma vez (ou reinicie o computador); a divisão em grupos passa a valer a partir daí.
+
 **Opcional, no Windows: disco mais rápido.** A página de início tem a seção **Opcional: disco mais rápido**, recolhida. O antivírus do Windows (Defender) verifica cada arquivo que o Claudio's Club, o git e os testes abrem, e num HD isso pesa no disco. A seção mostra dois comandos, cada um com o botão **Copiar** e o comando que desfaz:
 
 - **Recomendado (risco baixo):** tira da verificação os transcripts das conversas e o histórico do git do Claudio's Club.
 - **Opcional (mais ganho, mais risco):** tira o `node_modules`. Ele é código de terceiros baixado do npm, então um pacote malicioso deixaria de ser verificado.
 
-Quem roda é você, no PowerShell aberto como administrador. A página nunca roda nada. As pastas que já estão fora da verificação aparecem marcadas.
+Quem roda é você, no PowerShell aberto como administrador (só no Windows; no Linux não há esse passo). A página nunca roda nada. As pastas que já estão fora da verificação aparecem marcadas.
+
+**Dependências usadas.** A página de início também tem a seção **Dependências usadas**, recolhida. Ela lista os pacotes do npm que o Claudio's Club usa, em dois grupos: **Do app** e **Para montar e testar**. Cada pacote mostra a versão instalada, a licença, uma descrição curta e o link para a página dele no npm. A lista vem do `package.json` e atualiza a cada subida ou com `npm run doctor`. Pacote que falta instalar aparece em vermelho, com a versão pedida.
 
 ## Parear o navegador
 
@@ -108,7 +114,9 @@ Rode `npm run doctor`: ele aponta o passo com problema e o comando de correção
 | --- | --- |
 | Tela em branco, sem erro no console | `npm run build` |
 | Build falha com `Failed to resolve entry for package` | `npm ci`, depois `npm run build` (o `npm install` não conserta) |
-| O botão **Iniciar** não faz nada, ou o Windows oferece a Microsoft Store | `npm run daily:start` uma vez |
+| O botão **Iniciar** não faz nada, ou o Windows oferece a Microsoft Store | `npm run daily:start` uma vez. No Linux, o link é um `.desktop` registrado com `xdg-mime`; se ainda não abrir, saia e entre de novo na sessão (ou rode `update-desktop-database ~/.local/share/applications`) |
+| Aparece a faixa vermelha **O Claudio’s Club parou** (ele ficou mais de 1 minuto fora do ar, sem voltar sozinho, por exemplo porque o sistema o encerrou por falta de memória) | Clique em **Ir para a página de início** e, nela, em **Iniciar**. Se voltar sozinho antes de 1 minuto, a tela só mostra "reiniciando" e nada precisa ser feito |
+| Ao clicar em **Iniciar**, a página mostrou o quadro **Por que parou** em vez de entrar no app | É o motivo da última saída sem aviso (falta de memória, por exemplo). Clique em **Abrir o Claudio's Club**. Se for uma conversa que ficou pela metade, abra-a e peça para continuar |
 | Ações dizem que o navegador não está pareado | Clique em **Parear este navegador** e rode o `npm run pair CÓDIGO` que aparece. Use sempre o mesmo endereço (`claudio.localhost`) |
 
 Se o problema não estiver aqui, diga isso ao usuário e aponte `npm run doctor`.

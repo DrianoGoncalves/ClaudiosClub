@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import type http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { readLastExit, type ExitReport } from './exitReason';
 import { ROOT } from './root';
 
 // A página de início (scripts/start.html) também é a tela de "parado": o service worker (client/public/sw.js)
@@ -10,7 +11,10 @@ import { ROOT } from './root';
 // parado nada mais carrega. O checklist (scripts/status.js, do `npm run doctor`) vai à parte, em /status.js, e o
 // fim do log (~/.myco/logs/server.log), em /log.js.
 
-const LOG_FILE = path.join(process.env.MYCO_HOME ?? path.join(os.homedir(), '.myco'), 'logs', 'server.log');
+const HOME = process.env.MYCO_HOME ?? path.join(os.homedir(), '.myco');
+const LOG_FILE = path.join(HOME, 'logs', 'server.log');
+/** O que o vigia achou da saída anterior (ver server/exitReason.ts): a página mostra o aviso quando ela não foi limpa. */
+const LAST_EXIT_FILE = path.join(HOME, 'run', 'last-exit.json');
 
 export interface LogEntry {
   /** AAAA-MM-DD HH:MM:SS; vazio nas linhas sem carimbo (saída do servidor ou do build). */
@@ -52,9 +56,13 @@ export function logEntries(text: string, max = 40): LogEntry[] {
     });
 }
 
-/** O log como script para a página de início: window.claudioLog = { at, entries }. */
-export function logScript(entries: LogEntry[], at = new Date()): string {
-  return `window.claudioLog = ${JSON.stringify({ at: at.toISOString(), entries })};`;
+/**
+ * O log como script para a página de início: window.claudioLog = { at, entries, exit }. `exit` é o aviso de saída anterior não limpa (ver
+ * server/exitReason.ts), ou null: vai junto do log, que o service worker já guarda para a página funcionar com o servidor parado.
+ */
+export function logScript(entries: LogEntry[], at = new Date(), exit: ExitReport | null = null): string {
+  const notice = exit && { cause: exit.cause, at: exit.at, lastBeat: exit.lastBeat, message: exit.message, detectedAt: exit.detectedAt };
+  return `window.claudioLog = ${JSON.stringify({ at: at.toISOString(), entries, exit: notice })};`;
 }
 
 const dataUri = async (file: string) => `data:image/png;base64,${(await fs.readFile(file)).toString('base64')}`;
@@ -88,7 +96,7 @@ export async function serveStartFiles(pathname: string, res: http.ServerResponse
   }
   if (pathname === '/log.js') {
     res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(logScript(logEntries(await readTail(LOG_FILE))));
+    res.end(logScript(logEntries(await readTail(LOG_FILE)), new Date(), readLastExit(LAST_EXIT_FILE)));
     return true;
   }
   return false;

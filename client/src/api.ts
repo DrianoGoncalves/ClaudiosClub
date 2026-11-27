@@ -1,4 +1,5 @@
 import { showAlert } from './lib/dialogStore';
+import { noteOffline, noteOnline, offlineMessageKey } from './serverStatus';
 import type {
   AccountUsage,
   AnyConnection,
@@ -29,6 +30,7 @@ import type {
   Effort,
   Engine,
   FtpConnection,
+  FtpConnectionSaved,
   FtpConnectionInput,
   FollowUpCardResult,
   FollowUpResult,
@@ -118,7 +120,10 @@ export interface McpRef {
 /** Leituras tentam de novo só em erro de rede (servidor reiniciando): 3 tentativas no total. */
 const GET_ATTEMPTS = 3;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-const offlineError = () => new ApiError(t('app.serverOffline'), 'offline', null);
+const offlineError = () => {
+  noteOffline();
+  return new ApiError(t(offlineMessageKey()), 'offline', null);
+};
 
 /** GETs iguais em voo ao mesmo tempo (o quadro, a fila e a busca pedindo a mesma lista) dividem uma ida ao servidor. `gen`: ver `writeGen`. */
 const inflight = new Map<string, { gen: number; res: Promise<Response> }>();
@@ -182,6 +187,7 @@ async function get<T>(url: string, stable = false): Promise<T> {
     let res: Response;
     try {
       res = await sharedFetch(url);
+      noteOnline();
     } catch (err) {
       if (!(err instanceof TypeError)) throw err;
       if (attempt >= GET_ATTEMPTS) throw offlineError();
@@ -769,7 +775,7 @@ export const api = {
   // MCPs da conta e dos projetos (Configurações › MCPs). Valores de env/cabeçalho só vão; a lista traz só a chave e `set`.
   mcpServers: (projectId: string | null) =>
     get<{ servers: McpServer[] }>(`/api/mcp-servers${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
-  saveMcpServer: (body: McpSaveBody) => post<{ server: McpServer }>('/api/mcp-servers/save', body),
+  saveMcpServer: (body: McpSaveBody) => post<{ server: McpServer; vaultWarning?: string }>('/api/mcp-servers/save', body),
   deleteMcpServer: (ref: McpRef) => post<{ ok: true }>('/api/mcp-servers/delete', ref),
   testMcpServer: (ref: McpRef) => post<{ ok: boolean; tools: string[]; readOnly?: string[]; error?: string }>('/api/mcp-servers/test', ref),
   serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
@@ -780,7 +786,7 @@ export const api = {
     c: { name: string; host: string; port: number; user: string; identityFile: string; remoteRoot: string | null; originalName?: string },
   ) => post<ProjectConnection>(`/api/projects/${projectId}/connections`, c),
   // A senha só vai: a resposta traz `hasPassword`, nunca o valor.
-  saveFtpConnection: (projectId: string, c: FtpConnectionInput) => post<FtpConnection>(`/api/projects/${projectId}/connections/ftp`, c),
+  saveFtpConnection: (projectId: string, c: FtpConnectionInput) => post<FtpConnectionSaved>(`/api/projects/${projectId}/connections/ftp`, c),
   removeConnection: (projectId: string, name: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/delete`),
   testConnection: (projectId: string, name: string) =>
     post<{ ok: boolean; message: string }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/test`),

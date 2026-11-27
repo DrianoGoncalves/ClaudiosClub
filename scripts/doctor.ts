@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { getAuthStatus } from '../server/auth';
 import { defenderTip, readDefenderExclusions } from './defender';
+import { listDeps } from './deps';
 import { BUILT, ROOT, brokenBuild, brokenDeps, launcherInstalled } from './lib';
 
 // Checklist do Claudio’s Club: confere o que falta para rodar (Node 22+, Git, Claude Code, login, dependências, build
@@ -90,8 +91,10 @@ async function main(): Promise<void> {
   const statusFile = path.join(ROOT, 'scripts', 'status.js');
   // Dica opcional do Windows Defender (ver scripts/defender.ts): não entra no checklist (não falta nada sem ela), só na seção "Opcional" da página.
   const defender = process.platform === 'win32' ? defenderTip(os.homedir(), ROOT, readDefenderExclusions()) : null;
-  // status.js: window.claudioStatus = { at, checks, defender }. UTF-8.
-  const payload = { at: new Date().toISOString(), checks, defender };
+  // Dependências do package.json, com a versão instalada (seção "Dependências usadas" da página; ver scripts/deps.ts).
+  const deps = listDeps(ROOT);
+  // status.js: window.claudioStatus = { at, checks, defender, deps }. UTF-8.
+  const payload = { at: new Date().toISOString(), checks, defender, deps };
   fs.writeFileSync(statusFile, `window.claudioStatus = ${JSON.stringify(payload)};`, 'utf8');
 
   for (const c of checks) {
@@ -101,6 +104,8 @@ async function main(): Promise<void> {
     const pending = [...defender.recommended.paths, ...defender.optional.paths].filter((p) => p.excluded === false).length;
     console.log(`· Opcional: Windows Defender ${!defender.excludedKnown ? '(não deu para ler as exclusões)' : pending ? `(${pending} pasta(s) ainda verificada(s): veja a página de início)` : '(pastas já fora da verificação)'}`);
   }
+  const appDeps = deps.deps.filter((d) => !d.dev).length;
+  console.log(`· ${appDeps} dependências do app e ${deps.deps.length - appDeps} de desenvolvimento`);
   const okCount = checks.filter((c) => c.ok).length;
   console.log(`${okCount} de ${checks.length} ok. Gravado em ${statusFile}`);
 }

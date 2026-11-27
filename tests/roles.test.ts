@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AGENT_PRESETS, PLAYBOOK_AGENTS } from '../shared/agentPresets';
-import { BUILTIN_ROLES } from '../shared/roles';
+import { BUILTIN_NICHES, BUILTIN_ROLES, NICHES } from '../shared/roles';
 import { listRoles, removeRole, restoreBuiltins, saveRole, setDefaultRole } from '../server/roles';
 import { removeTemp } from './support/tmp';
 
@@ -104,5 +104,43 @@ describe('cargos', () => {
     await expect(setDefaultRole('fantasma', file)).rejects.toThrow(/não encontrado/);
     await expect(saveRole({ ...custom, label: ' ' }, file)).rejects.toThrow(/nome/);
     await expect(saveRole({ ...custom, model: 'opus; rm -rf' }, file)).rejects.toThrow(/modelo inválido/);
+  });
+});
+
+describe('nichos dos cargos', () => {
+  it('cada cargo pronto está nos nichos da descrição, e o orquestrador em todos', () => {
+    for (const n of NICHES) {
+      const ids = BUILTIN_ROLES.filter((r) => r.niches?.includes(n)).map((r) => r.id);
+      expect(ids.sort()).toEqual([...BUILTIN_NICHES[n]].sort());
+      expect(ids).toContain('orquestrador');
+    }
+    expect(BUILTIN_ROLES.find((r) => r.id === 'dados')!.niches).toEqual(['software-factory', 'ecommerce', 'ai-product', 'infra', 'data-bi']);
+    for (const r of BUILTIN_ROLES) expect(r.niches!.length).toBeGreaterThan(0);
+  });
+
+  it('salva e devolve os nichos do cargo seu (sem repetir) e rejeita nicho que não existe', async () => {
+    const file = path.join(root, 'niches.json');
+    const list = await saveRole({ ...custom, niches: ['sites', 'infra', 'sites'] }, file);
+    expect(list.find((r) => r.label === 'Copywriter')!.niches).toEqual(['sites', 'infra']);
+    await expect(saveRole({ ...custom, niches: ['agencia'] }, file)).rejects.toThrow();
+    const sem = await saveRole({ ...custom, label: 'Sem nicho' }, file);
+    expect(sem.find((r) => r.label === 'Sem nicho')!.niches).toBeUndefined();
+  });
+
+  it('pronto sem nichos salvos usa os do código; com nichos salvos usa os da sua versão', async () => {
+    const file = path.join(root, 'niches-builtin.json');
+    const base = BUILTIN_ROLES.find((r) => r.id === 'infra')!;
+    const { niches: _n, ...semNichos } = base;
+    let list = await saveRole(semNichos, file);
+    expect(list.find((r) => r.id === 'infra')).toMatchObject({ edited: true, niches: base.niches });
+    list = await saveRole({ ...semNichos, niches: ['sites'] }, file);
+    expect(list.find((r) => r.id === 'infra')!.niches).toEqual(['sites']);
+  });
+
+  it('nicho que não existe mais no arquivo sai da lista sem derrubar o cargo', async () => {
+    const file = path.join(root, 'niches-old.json');
+    await fs.writeFile(file, JSON.stringify({ items: [{ ...custom, id: 'velho', niches: ['sites', 'extinto'] }], removed: [], defaultId: null }));
+    const list = await listRoles(file);
+    expect(list.find((r) => r.id === 'velho')!.niches).toEqual(['sites']);
   });
 });

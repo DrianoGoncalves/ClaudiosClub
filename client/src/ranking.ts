@@ -4,7 +4,7 @@ import type { AppConfig, Board, SavingsReport, SessionSavings } from '../../shar
 import { ghostNodeId, staffNodeId } from './board/layout';
 import { t } from './i18n';
 
-/** Período do ranking em dias (null = tudo): hoje (desde a meia-noite), 7 dias, 1 mês, 3 meses (o padrão) e tudo. */
+/** Período do ranking em dias (null = tudo): hoje (o padrão, desde a meia-noite), 7 dias, 1 mês, 3 meses e tudo. */
 export const RANKING_PERIODS: Array<[string, number | null, string]> = [
   ['1', 1, t('detail.periodToday')],
   ['7', 7, t('detail.period7d')],

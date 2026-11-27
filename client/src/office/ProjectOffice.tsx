@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { AnyConnection, AppConfig, ConnectionProtocol, FtpConnection } from '../../../shared/model';
+import type { AnyConnection, AppConfig, ConnectionProtocol, FtpConnection, FtpConnectionSaved } from '../../../shared/model';
 import { api, isPairingError } from '../api';
 import { t } from '../i18n';
 import { askConfirm } from '../lib/dialogStore';
 import { ProtocolBadge } from './ProtocolBadge';
+import { VaultWarning } from './VaultWarning';
 
 // No detalhe do projeto: o workspace dele (a aba onde aparece) e as conexões SSH e FTP, que os
 // funcionários usam conforme a ficha de cada um. O Claudio’s Club só guarda o caminho da chave, nunca o conteúdo;
@@ -68,6 +69,7 @@ function Connections({ projectId }: { projectId: string }) {
   const [list, setList] = useState<AnyConnection[] | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [vaultWarn, setVaultWarn] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tests, setTests] = useState<Record<string, { ok: boolean; message: string } | 'running'>>({});
 
@@ -85,6 +87,7 @@ function Connections({ projectId }: { projectId: string }) {
     setBusy(true);
     setError(null);
     try {
+      let saved: FtpConnectionSaved | undefined;
       if (draft.protocol === 'ssh') {
         await api.saveConnection(projectId, {
           name: draft.name.trim(),
@@ -96,7 +99,7 @@ function Connections({ projectId }: { projectId: string }) {
           ...(draft.originalName && { originalName: draft.originalName }),
         });
       } else {
-        await api.saveFtpConnection(projectId, {
+        saved = await api.saveFtpConnection(projectId, {
           protocol: draft.protocol,
           name: draft.name.trim(),
           host: draft.host.trim(),
@@ -108,6 +111,7 @@ function Connections({ projectId }: { projectId: string }) {
           ...(draft.originalName && { originalName: draft.originalName }),
         });
       }
+      if (saved?.vaultWarning) setVaultWarn(saved.vaultWarning);
       setDraft(null);
       await reload();
     } catch (err) {
@@ -202,7 +206,9 @@ function Connections({ projectId }: { projectId: string }) {
           );
         })}
       </ul>
-      {draft ? (
+      {vaultWarn ? (
+        <VaultWarning text={vaultWarn} onDone={() => setVaultWarn(null)} />
+      ) : draft ? (
         <form className="conn-form" onSubmit={save}>
           {/* Trocar de protocolo só ao criar: editar mantém o arquivo onde a conexão mora (.vps/config.json ou ftp.json). */}
           {!draft.originalName && (

@@ -29,7 +29,23 @@ export interface RoleTemplate {
   servers?: boolean;
   /** Já vem com "pode contratar subfuncionários" marcado. */
   canHire?: boolean;
+  /** Nichos em que o cargo aparece na tela "Ver cargos" (ids de NICHES; um cargo pode estar em vários). */
+  niches?: Niche[];
 }
+
+/** Nichos de trabalho: lista fixa (o usuário não cria nicho). Os textos vêm da i18n (`roles.niche.<id>`). */
+export const NICHES = ['software-factory', 'sites', 'ecommerce', 'ai-product', 'infra', 'data-bi'] as const;
+export type Niche = (typeof NICHES)[number];
+
+/** Cargos prontos de cada nicho; o orquestrador entra em todos. */
+export const BUILTIN_NICHES: Record<Niche, string[]> = {
+  'software-factory': ['orquestrador', 'produto', 'planejador', 'desenvolvedor', 'dados', 'frontend', 'design-system', 'ia', 'testador', 'revisor', 'seguranca', 'infra', 'documentacao'],
+  sites: ['orquestrador', 'web-designer', 'frontend', 'design-system', 'trafego'],
+  ecommerce: ['orquestrador', 'web-designer', 'frontend', 'desenvolvedor', 'trafego', 'seguranca', 'dados'],
+  'ai-product': ['orquestrador', 'ia', 'desenvolvedor', 'dados', 'seguranca', 'testador'],
+  infra: ['orquestrador', 'infra', 'seguranca', 'dados'],
+  'data-bi': ['orquestrador', 'dados', 'ia', 'desenvolvedor'],
+};
 
 /** Como o cargo aparece para você: pronto ou seu, editado ou não, e se é o padrão. */
 export interface RoleEntry extends RoleTemplate {
@@ -48,7 +64,7 @@ const IMPLEMENTER = { pickExecutors: true, playbook: 'plan-big-execute-small' } 
 // quem passar cada pedido (a 1ª frase da missão é o que ele vê da pessoa, ver server/staff/ficha.ts).
 // Modelo e esforço na medida do papel: o modelo grande só onde se decide (planejar, coordenar);
 // quem executa ou revisa fica no médio, e o trabalho mecânico vai para agents menores.
-export const BUILTIN_ROLES: RoleTemplate[] = [
+const RAW_ROLES: RoleTemplate[] = [
   {
     // Padrão orquestrador → equipe e executores: o modelo grande divide e confere; quem é da área
     // faz o que é da área, e os agents em modelos menores (ferramenta Agent) o mecânico sem dono.
@@ -392,3 +408,6 @@ export const BUILTIN_ROLES: RoleTemplate[] = [
     doneWhen: 'A documentação bate com o código atual, os exemplos foram conferidos e você listou o que mudou.',
   },
 ];
+
+/** Os cargos prontos já com os nichos do código (BUILTIN_NICHES). */
+export const BUILTIN_ROLES: RoleTemplate[] = RAW_ROLES.map((r) => ({ ...r, niches: NICHES.filter((n) => BUILTIN_NICHES[n].includes(r.id)) }));

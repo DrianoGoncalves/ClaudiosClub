@@ -11,6 +11,7 @@ import { buildClaudeArgs, renderFicha, secretDenyRules, type FichaContext } from
 import { saveFtpConnection, type FtpConnector, type FtpEntry, type FtpSession } from '../server/staff/ftp';
 import { createFtpMcp, ftpMcpCommand, ftpMcpServerConfig, resolveLocal, TOOLS } from '../server/staff/ftpMcp';
 import { StaffService } from '../server/staff/service';
+import { fakeKeyring } from './support/fakeKeyring';
 import { removeTemp } from './support/tmp';
 
 const PASSWORD = 'Senha-Do-FTP-123';
@@ -110,6 +111,30 @@ describe('MCP de FTP: protocolo', () => {
     for (const t of list.result.tools) expect(t.inputSchema.required).toContain('connection');
     expect(await mcp.handle({ jsonrpc: '2.0', id: 5, method: 'resources/list' })).toMatchObject({ error: { code: -32601 } });
     expect(await mcp.handle({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'rm_rf' } })).toMatchObject({ error: { code: -32602 } });
+  });
+});
+
+describe('MCP de FTP: cofre que não abre', () => {
+  it('senha no chaveiro bloqueado: o erro diz o motivo (não "sem senha"), sem a senha nem tentar conectar', async () => {
+    const kr = fakeKeyring();
+    const kvault = { dir: path.join(root, 'secrets-kr'), platform: 'linux' as const, keyring: kr };
+    const kproj = path.join(root, 'proj-kr'); // projeto à parte: o `proj` é conferido por contagem em outros testes
+    await fs.mkdir(path.join(kproj, '.myco', 'staff'), { recursive: true });
+    await saveFtpConnection(kproj, { name: 'cofre', protocol: 'ftps', host: 'ftp3.example.com', user: 'u', password: PASSWORD }, kvault);
+    expect(kr.items.size).toBe(1); // a senha foi para o chaveiro
+    kr.down = 'locked';
+    const f = fakeFtp();
+    const mcp = createFtpMcp({ projectPath: kproj, root: kproj, staffId: null, allowed: ['cofre'], vault: kvault, connect: f.connect });
+    const r = await mcp.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'ftp_list', arguments: { connection: 'cofre' } } });
+    expect(isError(r)).toBe(true);
+    expect(text(r)).toMatch(/destrave o chaveiro/);
+    expect(text(r)).not.toMatch(/sem senha no cofre/);
+    expect(text(r)).not.toContain(PASSWORD);
+    expect(f.passwords).toEqual([]);
+    // Destravado, abre.
+    kr.down = null;
+    expect(isError(await mcp.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'ftp_list', arguments: { connection: 'cofre' } } }))).toBe(false);
+    expect(f.passwords).toEqual([PASSWORD]);
   });
 });
 
@@ -286,7 +311,10 @@ describe('MCP de FTP: lançamento e ficha', () => {
     expect(md).not.toContain(PASSWORD);
 
     const deny = secretDenyRules(profile(), [], ['site']);
-    expect(deny).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(scp:*)', 'Read(**/.env)', 'Read(~/.myco/secrets/**)']));
+    expect(deny).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(scp:*)', 'Read(**/.env)', 'Read(~/.myco/secrets/**)', 'Bash(secret-tool:*)']));
+    // O chaveiro do sistema guarda os segredos do cofre no Linux: o terminal do funcionário não o consulta, com ou sem servidor na ficha.
+    expect(secretDenyRules(profile({ servers: [] }))).toContain('Bash(secret-tool:*)');
+    expect(secretDenyRules(profile({ servers: ['site', 'prod'] }), [], ['site'])).toContain('Bash(secret-tool:*)');
     // Com uma SSH na ficha, o ssh continua bloqueado (o acesso a servidor é pelo MCP myco-ssh).
     expect(secretDenyRules(profile({ servers: ['site', 'prod'] }), [], ['site'])).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(scp:*)']));
     // Sem lista de MCPs na ficha, o de FTP só se soma (sem --strict-mcp-config).

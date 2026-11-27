@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ROOT } from '../server/root';
+import { readLastExit } from '../server/exitReason';
+import { scopeCommand } from '../server/scopeCommand';
 import { logEntries, logScript, readTail } from '../server/startPage';
 
 // Base dos scripts do dia a dia (daily, daemon, doctor, launcher, autostart). Roda igual no Windows, no macOS e
@@ -18,6 +20,10 @@ export const PID_FILE = path.join(RUN_DIR, 'daemon.pid');
 export const STOP_FILE = path.join(RUN_DIR, 'daemon.stop');
 /** O servidor grava ao sair pelo botão Reiniciar (ou Atualizar): só então o vigia refaz pacote e cliente. */
 export const RESTART_FILE = path.join(RUN_DIR, 'daemon.restart');
+/** O vigia grava ao subir e a cada 30 s; só a parada de verdade o marca limpo (ver server/exitReason.ts). */
+export const SESSION_FILE = path.join(RUN_DIR, 'daemon.session.json');
+/** O que o vigia achou da saída anterior (some quando ela foi limpa); a página de início lê. */
+export const LAST_EXIT_FILE = path.join(RUN_DIR, 'last-exit.json');
 export const BUILT = path.join(ROOT, 'dist', 'client', 'index.html');
 export const VITE = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 export const DAEMON = path.join(ROOT, 'scripts', 'daemon.ts');
@@ -90,11 +96,12 @@ export function appendLog(source: string, line: string): void {
 
 /**
  * Copia o fim do log para scripts/log.js, que a página de início lê quando aberta como arquivo (o navegador não
- * deixa uma página file:// ler o log direto). Pela porta, o servidor entrega o mesmo em /log.js.
+ * deixa uma página file:// ler o log direto). Pela porta, o servidor entrega o mesmo em /log.js. Leva junto o aviso de saída anterior não
+ * limpa (`exit`, de run/last-exit.json), que some quando o Claudio’s Club é parado de propósito. `files` troca os caminhos (só os testes).
  */
-export async function writeLogSnapshot(): Promise<void> {
-  const entries = logEntries(await readTail(LOG_FILE));
-  await fs.promises.writeFile(LOG_SNAPSHOT, logScript(entries)).catch(() => {});
+export async function writeLogSnapshot(files: { log?: string; snapshot?: string; lastExit?: string } = {}): Promise<void> {
+  const entries = logEntries(await readTail(files.log ?? LOG_FILE));
+  await fs.promises.writeFile(files.snapshot ?? LOG_SNAPSHOT, logScript(entries, new Date(), readLastExit(files.lastExit ?? LAST_EXIT_FILE))).catch(() => {});
 }
 
 /** Porta: --port, depois MYCO_PORT, depois 4848. */
@@ -179,18 +186,16 @@ export function runningDaemon(probe: DaemonProbe = {}): number | null {
  * xdg-desktop-portal, e reiniciar ou parar o portal mataria o Claudio’s Club com todas as conversas, que ainda
  * contariam a memória no portal. `--scope` (e não um serviço) faz o systemd-run dar exec no comando: mesmo PID,
  * mesma pasta e o mesmo ambiente (PATH do mise etc.). Função pura: quem decide se o systemd serve é `systemdScopeUsable`.
+ * `oom: 'omit'` tira o escopo da lista do systemd-oomd e `keepOnOom` impede o systemd de parar o escopo quando o kernel mata um processo dele (ver
+ * server/scopeCommand.ts: o vigia é o que religa o servidor, então precisa sobreviver a quem mata por memória).
  */
 export function daemonCommand(
   cmd: string,
   args: string[],
-  opts: { platform?: NodeJS.Platform; scope?: boolean; stamp?: number | string } = {},
+  opts: { platform?: NodeJS.Platform; scope?: boolean; stamp?: number | string; unitPrefix?: string; oom?: 'omit' | 'avoid'; keepOnOom?: boolean } = {},
 ): { cmd: string; args: string[] } {
-  if ((opts.platform ?? process.platform) !== 'linux' || !opts.scope) return { cmd, args };
-  const unit = `app-claudios-${opts.stamp ?? Date.now()}`;
-  return {
-    cmd: 'systemd-run',
-    args: ['--user', '--scope', '--quiet', '--collect', '--slice=app.slice', `--unit=${unit}`, "--description=Claudio's Club", '--', cmd, ...args],
-  };
+  const unit = `${opts.unitPrefix ?? 'app-claudios-'}${opts.stamp ?? Date.now()}`;
+  return scopeCommand(cmd, args, { unit, description: "Claudio's Club", ...(opts.oom && { oom: opts.oom }), ...(opts.keepOnOom && { keepOnOom: true }) }, { platform: opts.platform, enabled: !!opts.scope });
 }
 
 /** O systemd-run existe e o gerenciador do usuário responde? Prova com um escopo descartável; qualquer falha = não. */

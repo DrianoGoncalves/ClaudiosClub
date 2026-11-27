@@ -28,6 +28,7 @@ import { CapabilityError } from './engineCapability';
 import { StateBusyError } from './atomicWrite';
 import { backupTasks, BoardCorruptError, type BoardFile, boardFilePath, boardReadOk, hasBackups, isBoardCorrupt, knownCorruptVersion, recoverTasks } from './boardGuard';
 import { writeAtomic } from './staff/store';
+import { assertOwner, ownsProject } from './projectOwner';
 import { abortStaleMerge, checkpoint, CodeError, codeTouchedSince, commitsToMerge, detectTest, formatLimit, integratedSha, locateCode, mergeCode, readCode, runTests, scopedTestCommand, type CodePlace } from './taskCode';
 import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
@@ -762,6 +763,8 @@ export class TaskService {
   private async restartAsks(projectId: string, dir: string, tasks: Task[]): Promise<Task[]> {
     const stale = (t: Task) => t.question?.source === 'ask' && t.question.status !== 'answered' && Date.parse(t.question.askedAt) < this.bootedAt;
     if (!tasks.some(stale)) return tasks;
+    // Só a instância dona grava (a listagem também é lida por quem não é: ela só lê, e a dúvida segue como está no arquivo).
+    if (!(await ownsProject(dir))) return tasks;
     await this.mutate(projectId, (all) =>
       all.map((t) => (stale(t) && t.question ? noted({ ...t, question: { ...t.question, source: 'text' } }, 'dúvida de antes do reinício: a resposta do gestor chega como mensagem') : t)),
     );
@@ -775,7 +778,10 @@ export class TaskService {
   async restoreFallbacks(): Promise<number> {
     let n = 0;
     for (const projectId of await this.deps.projectIds()) {
-      for (const t of (await this.list(projectId)) ?? []) {
+      const mine = (await this.list(projectId)) ?? [];
+      // Sem a posse do projeto não há o que restaurar: o override vive na memória de quem manda nas conversas, e a troca não é daqui.
+      if (!mine.some((t) => t.fallback) || !(await this.owns(projectId))) continue;
+      for (const t of mine) {
         if (!t.fallback || !t.sessionId || !RESTORABLE.includes(t.status)) continue;
         // A troca não terminou (o servidor caiu entre gravá-la e abrir a conversa nova): a troca sai da tarefa, e a conversa
         // antiga volta ao motor principal. Se bater o limite de novo, a tarefa pode trocar.
@@ -2313,7 +2319,7 @@ export class TaskService {
    * Ordem: grava a troca antes de matar a antiga; tira o "continue" dela; para o processo; abre a nova.
    */
   async onLimit(ev: { sessionId: string; engine: Engine; hit: LimitHit }): Promise<void> {
-    const where = await this.where(ev.sessionId);
+    const where = await this.whereOwned(ev.sessionId);
     // Card automático: a conversa é direta, e o limite dela é da troca direta (ver server/directFallback.ts), não da tarefa.
     if (where?.role !== 'work' || where.auto) return;
     const { projectId, taskId } = where;
@@ -2509,7 +2515,7 @@ export class TaskService {
    * `text` (o aviso do reinício) no fim, em vez de reabrir a antiga. True = devolvida (quem chamou não retoma a antiga); false = segue como sempre.
    */
   async resumeOnPrimary(projectId: string, sessionId: string, text: string): Promise<boolean> {
-    const where = await this.where(sessionId);
+    const where = await this.whereOwned(sessionId);
     if (where?.role !== 'work' || where.auto || where.projectId !== projectId) return false;
     const task = await this.fresh(projectId, where.taskId);
     if (!task?.staffId || task.sessionId !== sessionId || !task.fallback) return false;
@@ -2687,6 +2693,8 @@ export class TaskService {
   async tick(now = new Date(), only?: string): Promise<void> {
     for (const projectId of only ? [only] : await this.deps.projectIds()) {
       const tasks = (await this.list(projectId)) ?? [];
+      // Sem tarefa não há o que fazer, e sem a posse do projeto (outra instância manda nele) a rodada nem começa: a recuperação de reinício, a fila e os avisos só rodam no dono.
+      if (!tasks.length || !(await this.owns(projectId))) continue;
       // Projeto pausado (ver `paused`): a rodada mantém o que não abre trabalho de execução (avisos, notas, a fila ganhando cartão, a revisão das entregas já feitas) e o que o `takeNext`
       // deixa passar (o seu ajuste guardado). A retomada das órfãs e o prazo do segundo plano ficam para quando ele for retomado, e a rodada que o retoma pega tudo na ordem de
       // sempre. Sem a leitura da pausa (arquivo ilegível), vale como pausado.
@@ -3420,7 +3428,9 @@ export class TaskService {
 
   /** Se ele está livre: primeiro os ajustes guardados (o mais antigo antes), depois a próxima da fila. */
   private kick(projectId: string, staffId: string): Promise<void> {
-    return this.locked(projectId, staffId, 'fila', () => this.takeNext(projectId, staffId)).catch(() => {});
+    return this.locked(projectId, staffId, 'fila', async () => {
+      if (await this.owns(projectId)) await this.takeNext(projectId, staffId);
+    }).catch(() => {});
   }
 
   /**
@@ -3967,7 +3977,7 @@ export class TaskService {
    * funcionário anda. Fora de planejando, não mexe.
    */
   async onPlanRejected(sessionId: string): Promise<void> {
-    const where = await this.where(sessionId);
+    const where = await this.whereOwned(sessionId);
     if (!where || where.role !== 'work') return;
     let rejected: Task | null = null;
     const seen: { before?: Task } = {};
@@ -3991,7 +4001,7 @@ export class TaskService {
    * nova dele, e a tarefa segue. True se foi ao gestor; false, a pergunta fica com você, como antes.
    */
   async onAsk(sessionId: string, requestId: string, questions: NonNullable<TaskQuestion['questions']>): Promise<boolean> {
-    const where = await this.where(sessionId);
+    const where = await this.whereOwned(sessionId);
     if (where?.role !== 'work') return false;
     const t = ((await this.list(where.projectId)) ?? []).find((x) => x.id === where.taskId);
     if (!t?.requestedBy || (t.status !== 'doing' && t.status !== 'planning')) return false;
@@ -4002,7 +4012,7 @@ export class TaskService {
 
   /** A pergunta foi respondida na conversa do funcionário (pelo usuário, no chat): fecha a dúvida. Repetida, não muda nada. */
   async onAskAnswered(sessionId: string, requestId: string, by: 'manager' | 'user', summary: string): Promise<void> {
-    const where = await this.where(sessionId);
+    const where = await this.whereOwned(sessionId);
     if (where?.role !== 'work') return;
     await this.change(where.projectId, where.taskId, (t) => closeQuestion(t, requestId, by, summary) ?? t);
   }
@@ -4799,7 +4809,7 @@ export class TaskService {
     // Primeiro o que é barato: memória, ficha e o que está fora do projeto saem aqui, sem tocar no quadro.
     const files = [...new Set(ev.files.map((f) => codePath(f, ev.cwd, dir)).filter((f): f is string => !!f))];
     if (!files.length) return;
-    const where = await this.where(ev.sessionId);
+    const where = await this.whereOwned(ev.sessionId);
     // O trabalho de uma tarefa comum: a edição entra na lista dela, que é a prova de "nada editado ainda" da dúvida escalada (ver `releasesStaff`).
     if (where?.role === 'work' && !where.auto) return this.noteTaskEdit(where.projectId, where.taskId, ev.sessionId, dir, files);
     // A conversa já é de uma tarefa (revisão, deploy ou dúvida), ou a troca de motor a deixou para trás: o card é o dela.
@@ -4987,7 +4997,7 @@ export class TaskService {
    * ajustes voltam para a conversa de trabalho.
    */
   private async onReviewTurn(sessionId: string): Promise<void> {
-    const where = await this.where(sessionId);
+    const where = await this.whereOwned(sessionId);
     if (where?.role !== 'review') return;
     const current = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId);
     // Conversa de uma rodada anterior (a tarefa foi entregue de novo, ou a revisão é outra): o turno dela não responde ao pedido de agora,
@@ -5493,7 +5503,7 @@ export class TaskService {
   private async workDone(sessionId: string, reason?: 'turn' | 'background' | 'exit', now = new Date()): Promise<void> {
     // Edição que ainda está sendo registrada (o card automático nasce dela) entra antes de fechar o turno.
     await this.edits.get(sessionId);
-    const where = await this.where(sessionId);
+    const where = await this.whereOwned(sessionId);
     if (where?.role !== 'work') return;
     // Turno que falhou por causa passageira: a decisão de retomar (marcar a retomada, ou segurar a conversa para você) sai antes de ler o que vem abaixo.
     await this.deps.settleRetry?.(sessionId).catch(() => {});
@@ -6161,7 +6171,7 @@ export class TaskService {
    * resposta, e a resposta a reabre). A fila do funcionário anda. Devolve a tarefa, se foi para Aguardar.
    */
   async parkClosed(sessionId: string): Promise<Task | null> {
-    const where = await this.where(sessionId);
+    const where = await this.whereOwned(sessionId);
     if (where?.role !== 'work' || where.auto) return null;
     const asking = (t: Task) => t.question?.status === 'open' || t.question?.status === 'escalated';
     const parked = await this.parkWaiting(where.projectId, where.taskId, sessionId, CLOSED_BY_YOU, 'you', 'stopped', ['doing', 'planning', 'todo'], asking);
@@ -6387,7 +6397,7 @@ export class TaskService {
   }
 
   private async onSession(sessionId: string, role: Role, fn: (t: Task) => Task | null): Promise<void> {
-    const where = await this.where(sessionId);
+    const where = await this.whereOwned(sessionId);
     if (where && where.role === role) await this.change(where.projectId, where.taskId, (t) => fn(t) ?? t);
   }
 
@@ -6442,6 +6452,21 @@ export class TaskService {
     return this.bySession.get(sessionId) ?? null;
   }
 
+  /**
+   * Esta instância manda no projeto (ver server/projectOwner.ts)? Sem a posse ela só lê: não grava cards, não anda a fila, não retoma órfã nem abre conversa. Toma a
+   * posse se ninguém tem. Projeto que não existe: não é dela.
+   */
+  private async owns(projectId: string): Promise<boolean> {
+    const dir = await this.deps.projectPath(projectId);
+    return !!dir && (await ownsProject(dir));
+  }
+
+  /** `where` para os avisos que MEXEM na tarefa (fim de turno, plano, pergunta, limite): de projeto que esta instância não possui, o aviso é de outro servidor e não é tratado aqui. */
+  private async whereOwned(sessionId: string) {
+    const where = await this.where(sessionId);
+    return where && (await this.owns(where.projectId)) ? where : null;
+  }
+
   /** `fn` recebe a tarefa e o quadro inteiro (para conferir dependências); lançar aborta a gravação. */
   private async change(projectId: string, taskId: string, fn: (t: Task, all: Task[]) => Task): Promise<Task | null> {
     const seen: { before?: Task; after?: Task } = {};
@@ -6462,6 +6487,8 @@ export class TaskService {
   private async mutate(projectId: string, fn: (tasks: Task[]) => Task[]): Promise<boolean> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return false;
+    // A porta de toda gravação nos cards: sem a posse do projeto, lança NotOwnerError antes de tocar no arquivo (ver server/projectOwner.ts).
+    await assertOwner(dir);
     const file = tasksFile(dir);
     const prev = this.queues.get(file) ?? Promise.resolve();
     const finished: string[] = [];
@@ -6697,6 +6724,9 @@ async function loadFile(dir: string, board: BoardFile, strict: boolean): Promise
     return null;
   };
   const recover = async (version: string | null, missing: boolean): Promise<readonly Task[] | null> => {
+    // Recuperar GRAVA no projeto (guarda o estragado ao lado e põe a cópia no lugar): só o servidor que manda nele (ver server/projectOwner.ts). Quem só lê fica com a
+    // última versão lida, ou sem quadro (o aviso explica), e não conserta o arquivo de outro.
+    if (!(await ownsProject(dir))) return hit ? freeze([...hit.tasks]) : nothing();
     const restored = await recoverTasks(dir, parseTasks, hit ? [...hit.tasks] : null, version, board, missing);
     tasksCache.delete(file);
     return restored ? freeze(restored) : nothing();

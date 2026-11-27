@@ -32,3 +32,6 @@ scripts/log.js
 
 # Sondas temporárias de tela (prints)
 _probe.*
+
+# Cache de teste do vitest: não vai para o git.
+.vitest/

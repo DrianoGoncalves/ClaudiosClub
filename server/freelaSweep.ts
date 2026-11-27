@@ -1,6 +1,7 @@
 import type { Project, StaffProfile } from '../shared/model';
 import type { ToolAdapter } from './adapters/types';
 import { autoArchiveFreelas, readConfig } from './config';
+import { ownedByOther } from './projectOwner';
 
 const DAY_MS = 86_400_000;
 
@@ -34,6 +35,11 @@ export async function sweepFreelas(deps: FreelaSweepDeps, now = new Date()): Pro
   let complete = true;
   const found: Array<{ id: string; updatedAt: string }> = [];
   for (const p of projects) {
+    // Projeto de outro servidor (ver server/projectOwner.ts): esta instância não arquiva nada dele, e o controle não esquece quem já estava lá.
+    if (await ownedByOther(p.path)) {
+      complete = false;
+      continue;
+    }
     // includeOld: a varredura precisa ver também as antigas (senão o controle apagaria os marcadores delas).
     const sessions = await deps.adapter.getProjectSessions(p.id, { includeOld: true }).catch(() => null);
     if (!sessions) {
