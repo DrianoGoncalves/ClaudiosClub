@@ -196,6 +196,7 @@ Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Geral);
 | Opcional: atalho no menu de programas · tirar o atalho e o link `myco://` | `npm run launcher` · `npm run launcher:remove` |
 | Parear um navegador: aprovar o código que o botão **Parear este navegador** mostra · sem código, abre o navegador padrão já pareado | `npm run pair CÓDIGO` · `npm run pair` (no `npm run dev`: `npm run pair:dev`) |
 | Desenvolver o Claudio's Club (recarrega a cada arquivo salvo, em http://claudio.localhost:5173) | `npm run dev` |
+| Ver e tirar print das telas com dados fictícios, sem servidor do Club e sem tocar no projeto real (http://127.0.0.1:5199, API simulada em `scripts/preview/`, só leitura, sem proxy) | `npm run preview:ui` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
 | Conferir o que falta para rodar (Node, Git, Claude Code, login, dependências, build, botão Iniciar) | `npm run doctor` |
@@ -208,7 +209,7 @@ Rode `npm run doctor`: ele aponta o passo com problema e o comando de correção
 | --- | --- | --- |
 | Tela em branco, sem erro no console | O build aponta para arquivos de `dist/client/assets` que não existem (build interrompido ou arquivos apagados). O servidor responde 404 para eles. | `npm run build` |
 | O build falha com `Failed to resolve entry for package` | `node_modules` incompleto (arquivos `.js` apagados, instalação interrompida). `npm install` não repara. | `npm ci`, depois `npm run build` |
-| O botão **Iniciar** não faz nada, ou o Windows oferece a Microsoft Store | O link `myco://` não está registrado neste computador (nunca subiu por aqui, ou foi tirado com `launcher:remove`) | `npm run daily:start` uma vez: registra o link e sobe; daí em diante ele se refaz sozinho |
+| O botão **Iniciar** não faz nada, ou o Windows oferece a Microsoft Store | O link `myco://` não está registrado neste computador (nunca subiu por aqui, ou foi tirado com `launcher:remove`) | `npm run daily:start` uma vez: registra o link e sobe; daí em diante ele se refaz sozinho. No Linux, o link é um `.desktop` registrado com `xdg-mime`; se ainda não abrir, saia e entre de novo na sessão (ou rode `update-desktop-database ~/.local/share/applications`) |
 | Ações dizem que o navegador não está pareado | O cookie do pareamento falta (navegador novo, outro endereço como `127.0.0.1`, cookies limpos) ou o atalho é antigo e só abre a página | **Parear este navegador** (aviso ou config) e rode no terminal o `npm run pair CÓDIGO` que aparece. O cookie é por endereço: use sempre o mesmo (`claudio.localhost`) |
 
 ### Atualizações e versões

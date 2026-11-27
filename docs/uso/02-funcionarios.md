@@ -20,14 +20,14 @@ Fontes: `client/src/staff/HireForm.tsx`, `AgentForm.tsx`, `agentRoles.ts`, `Play
 
 ### No nível simples
 
-- Escolha o cargo nos botões. Já vem marcado o cargo padrão, se houver; senão, o Orquestrador(a).
+- O cargo escolhido aparece num card (nome, missão, modelo e a marca **padrão**). Já vem escolhido o cargo padrão, se houver; senão, o Orquestrador(a). **Trocar cargo** abre a tela cheia de cargos, com os mesmos cards e filtros de **Ver cargos** mas só para escolher (sem editar nada): toque no card para aplicar o cargo e voltar ao formulário, com o que você já digitou; **Voltar** ou Esc fecham sem trocar.
 - Preencha **Nome\*** e, se quiser, **Retrato**. Clique em **Contratar**.
 - Ele nasce sem MCPs. Para os outros campos, clique em **Mostrar todos os campos**.
 - A conversa abre vazia. A primeira tarefa você manda pelo chat (ver `03-chat.md`).
 
 ## Cargos prontos
 
-Um cargo é um modelo de ficha: preenche o formulário, e cada campo continua editável naquele funcionário. Para mudar o modelo de um cargo, vá em **Configurações** → **Cargos** (**Cargos para contratar**): **editar**, **padrão** (o que já vem marcado ao contratar), **tirar** ou **voltar ao original**, e **Novo cargo**. Salve com **Salvar cargo**. A mudança vale para os próximos contratados.
+Um cargo é um modelo de ficha: preenche o formulário, e cada campo continua editável naquele funcionário. Para mudar o modelo de um cargo, vá em **Configurações** → **Cargos** (**Cargos para contratar**): ali ficam o cargo padrão e o botão **Ver cargos**, que abre uma tela cheia com um card por cargo (nome, missão, modelo e se é pronto, editado ou seu). Use os filtros do topo (**Todos**, os nichos como **Fábrica de software**, **Sites e landing pages**, **E-commerce**, **Produto com IA**, **Infra e servidores**, **Dados e BI**, e **Meus cargos**); um mesmo cargo pode aparecer em mais de um nicho. Clique no card para **editar** (inclusive os nichos do cargo); no card também ficam **padrão** (o que já vem marcado ao contratar) e **tirar** ou **voltar ao original**; **Novo cargo** fica no topo da tela. Salve com **Salvar cargo**; **Voltar** ou Esc fecham a tela. A mudança vale para os próximos contratados.
 
 | Cargo | Modelo | Esforço | Autonomia |
 | --- | --- | --- | --- |
@@ -114,7 +114,7 @@ Com conexões marcadas na ficha, o funcionário trabalha no servidor (por exempl
 - **Escrita, só com as duas condições juntas**: **Permitir comandos de escrita** marcado na conexão (aba **Projeto**) e uma autonomia que altera algo (**Edita sozinho**, **Autônomo** ou **Sem travas**). Com **Só planeja** ou **Pede tudo**, o servidor fica só leitura, mesmo com a caixa marcada. Escrever é rodar um comando livre (`ssh_executar`) ou enviar um arquivo do projeto para a pasta do servidor (`ssh_enviar`).
 - **Aprovação**: no Claude, a escrita segue a autonomia (em **Edita sozinho** cada comando pede o seu ok; em **Sem travas** não pede). O Codex não pergunta a cada comando: nele, as travas são a caixa de escrita e a autonomia.
 - **Envio de arquivo**: só arquivo do projeto, até 10 MB, para dentro da **Pasta do projeto no servidor** (sem ela, não envia). Não cria pastas e só troca um arquivo que já existe se o funcionário pedir. Não envia `.env`, chaves nem `.git`, e não escreve em `.ssh`, `.git` nem `authorized_keys`.
-- **Limites**: 60 segundos por comando, um comando por vez em cada conexão, e pausa de 30 segundos depois de 3 falhas seguidas de conexão. Todo comando fica no registro `~/.myco/logs/ssh-comandos.jsonl`. O `ssh` precisa estar instalado no seu computador (no Windows, o recurso opcional **Cliente OpenSSH**).
+- **Limites**: 60 segundos por comando, um comando por vez em cada conexão, e pausa de 30 segundos depois de 3 falhas seguidas de conexão. Todo comando fica no registro `~/.myco/logs/ssh-comandos.jsonl`. O `ssh` precisa estar instalado no seu computador (no Windows, o recurso opcional **Cliente OpenSSH**; no Linux, o pacote `openssh`: `sudo pacman -S openssh` no Arch, `sudo apt install openssh-client` no Debian/Ubuntu).
 - **No projeto do próprio Claudio’s Club** o acesso a servidor fica desligado nos dois motores.
 - **FTP só no Claude**, pelas ferramentas `ftp_*`, presas à pasta da conexão (a senha fica no cofre do sistema). Com conexão FTP marcada, não dá para escolher o Codex.
 
