@@ -2081,7 +2081,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li><b>Publicar (push e PR):</b> botão seu, com confirmação. Envia o commit da versão para <code>release/X</code> no GitHub (nunca force) e abre o PR para a branch padrão.</li>
       <li><b>Criar tag vX:</b> depois de mesclar o PR. A tag anotada vai no commit da mescla, com o resumo e as tarefas. <b>É ela que publica a versão</b> para as instalações do Club. A versão fecha aqui.</li>
       <li><b>Cancelar versão:</b> a fila e as mesclas de fora voltam; um commit de versão já feito fica.</li>
-      <li><b>Histórico:</b> as versões publicadas (tags <code>vX.Y.Z</code>), com data, commit, resumo e as tarefas que entraram. Versões de antes desta ferramenta aparecem sem a lista de tarefas.</li>
+      <li><b>Histórico:</b> as versões publicadas (tags <code>vX.Y.Z</code>), com data, commit, resumo e as tarefas que entraram. A lista de tarefas vem do bloco <code>Tarefas:</code> da mensagem da tag (que o fluxo <b class="ui">Versão</b> grava); numa tag criada à mão, sem esse bloco, vem dos títulos dos commits com <code>(t-xxxxxx)</code> desde a tag anterior (o título é o do quadro, quando o cartão existe). A primeira tag, sem anterior, aparece sem a lista.</li>
       <li><b>Só você:</b> tudo isso é só pelo navegador do Club; funcionário recebe recusa (403).</li>
     </ul>
     <h4>Pausa de versão (pela API)</h4>

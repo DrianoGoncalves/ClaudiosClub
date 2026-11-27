@@ -44,6 +44,13 @@ describe('cargos que implementam: pensam e delegam', () => {
     expect(BUILTIN_ROLES.find((r) => r.id === 'orquestrador')).toMatchObject({ pickExecutors: true, playbook: 'plan-big-execute-small' });
   });
 
+  it('o orquestrador sabe como criar tag à mão: bloco "Tarefas:" com "- t-xxxxxx Título" e "(t-xxxxxx)" no título do commit', () => {
+    const rule = BUILTIN_ROLES.find((r) => r.id === 'orquestrador')!.rules.find((r) => r.includes('Tag de versão'))!;
+    expect(rule).toContain('"Tarefas:"');
+    expect(rule).toContain('"- t-xxxxxx Título"');
+    expect(rule).toContain('"(t-xxxxxx)"');
+  });
+
   it('a versão que o dono já gravou de um pronto não é tocada (só o pronto novo muda)', async () => {
     const file = path.join(root, 'versao-antiga.json');
     const dev = BUILTIN_ROLES.find((r) => r.id === 'desenvolvedor')!;

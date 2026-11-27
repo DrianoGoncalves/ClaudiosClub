@@ -1,8 +1,10 @@
+import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Task, TestRun } from '../shared/model';
-import { expandScope, nextVersion, parseReleaseBody, releaseBody, releaseProgress } from '../shared/release';
+import { expandScope, hasTasksBlock, nextVersion, parseReleaseBody, releaseBody, releaseProgress, tasksFromSubjects } from '../shared/release';
+import { gitDefault } from '../server/autoCommit';
 import { ReleaseError, ReleaseService, type ReleaseDeps } from '../server/release';
 import { installOwnership, NotOwnerError, ownsProject, ProjectOwnership } from '../server/projectOwner';
 import { tempDirs } from './support/tmp';
@@ -50,10 +52,36 @@ describe('contas da versão (shared/release.ts)', () => {
     expect(parseReleaseBody(body)).toEqual({ summary: 'Versão 1.5.2', tasks: [{ id: 't-aaaa01', title: 'Tela nova de versão' }] });
     expect(parseReleaseBody('notas antigas\nsem tarefas')).toEqual({ summary: 'notas antigas\nsem tarefas', tasks: [] });
   });
+
+  it('o bloco "Tarefas:": o cabeçalho ou uma linha de tarefa bastam; resumo solto não é bloco', () => {
+    expect(hasTasksBlock(releaseBody('x', [{ id: 't-aaaa01', title: 'A' }]))).toBe(true);
+    expect(hasTasksBlock('resumo\n\nTarefas:\n')).toBe(true);
+    expect(hasTasksBlock('- t-aaaa01 A')).toBe(true);
+    expect(hasTasksBlock('Versão 1.6.2\n\nnotas sobre Tarefas: várias')).toBe(false);
+    expect(hasTasksBlock('')).toBe(false);
+  });
+
+  it('os cards dos títulos dos commits: "(t-xxxxxx)", id repetido uma vez, título do quadro ou o do commit sem o id', () => {
+    const subjects = ['Linux: navegador limpo (t-2cb3b6)', 'Merge pull request #84 from x/y', 'Cofre (t-60f77a)', 'Ajuste do navegador (t-2cb3b6)', 'Dois cards (t-aaaa01) (t-bbbb02)', 'Sem id t-cccc03', '(t-dddd04)'];
+    expect(tasksFromSubjects(subjects)).toEqual([
+      { id: 't-2cb3b6', title: 'Linux: navegador limpo' },
+      { id: 't-60f77a', title: 'Cofre' },
+      { id: 't-aaaa01', title: 'Dois cards' },
+      { id: 't-bbbb02', title: 'Dois cards' },
+      { id: 't-dddd04', title: 't-dddd04' },
+    ]);
+    expect(tasksFromSubjects(subjects, (id) => (id === 't-2cb3b6' ? 'Navegador  limpo\nno Linux' : undefined))[0]).toEqual({ id: 't-2cb3b6', title: 'Navegador limpo no Linux' });
+  });
 });
 
+const DEFAULT_REFS = [
+  ['v1.5.2', '2026-11-23T10:00:00-03:00', 'b'.repeat(40), 'c'.repeat(40), 'Versão 1.5.2', releaseBody('PR: x', [{ id: 't-aaaa01', title: 'A' }])],
+  ['v1.5.1', '2026-11-19T10:00:00-03:00', 'd'.repeat(40), 'e'.repeat(40), "Claudio's Club v1.5.1", 'notas'],
+  ['nao-semver', '2026-11-01T10:00:00-03:00', '1'.repeat(40), '', 'x', ''],
+];
+
 /** Um projeto numa pasta temporária, com as tarefas na memória e o git e o gh falsos que anotam cada chamada. */
-async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; tags?: string[]; merged?: boolean } = {}) {
+async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; tags?: string[]; merged?: boolean; refs?: string[][]; log?: string } = {}) {
   const dir = await tmp('myco-release-');
   await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.5.0' }, null, 2) + '\n');
   await fs.writeFile(path.join(dir, 'package-lock.json'), JSON.stringify({ name: 'x', version: '1.5.0', packages: { '': { name: 'x', version: '1.5.0' } } }, null, 2) + '\n');
@@ -81,13 +109,10 @@ async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; tags?: stri
     if (cmd === 'remote') return 'https://github.com/dono/club.git\n';
     if (cmd === 'config') return '';
     if (cmd === 'symbolic-ref') return 'origin/main\n';
+    if (cmd === 'log') return opts.log ?? '';
     if (cmd === 'for-each-ref')
-      return [
-        ['v1.5.2', '2026-11-23T10:00:00-03:00', 'b'.repeat(40), 'c'.repeat(40), 'Versão 1.5.2', releaseBody('PR: x', [{ id: 't-aaaa01', title: 'A' }])].join('\0'),
-        ['v1.5.1', '2026-11-19T10:00:00-03:00', 'd'.repeat(40), 'e'.repeat(40), "Claudio's Club v1.5.1", 'notas'].join('\0'),
-        ['nao-semver', '2026-11-01T10:00:00-03:00', '1'.repeat(40), '', 'x', ''].join('\0'),
-      ]
-        .map((r) => `\n${r}\x1e`)
+      return (opts.refs ?? DEFAULT_REFS)
+        .map((r) => `\n${r.join('\0')}\x1e`)
         .join('');
     return '';
   };
@@ -306,6 +331,107 @@ describe('ReleaseService', () => {
     expect(hist.entries[0]).toMatchObject({ sha: 'c'.repeat(40), subject: 'Versão 1.5.2', summary: 'PR: x', tasks: [{ id: 't-aaaa01', title: 'A' }] });
     expect(hist.entries[1]).toMatchObject({ summary: 'notas', tasks: [] });
     expect(hist.suggested).toBe('1.5.3');
+  });
+
+  describe('histórico de tag criada à mão (sem o bloco "Tarefas:")', () => {
+    const sha = (c: string) => c.repeat(40);
+    const ref = (tag: string, day: number, commit: string, body: string) => [tag, `2026-11-${day}T10:00:00-03:00`, sha('0'), sha(commit), `Versão ${tag.slice(1)}`, body];
+    // Linear: A(v1.6.0) ← a2 ← B(v1.6.1) ← c3b ← c3 ← c2 ← C(v1.6.2) ← D(v1.6.3, com o bloco). Do mais novo ao mais velho, como o `git log` devolve (A fica fora: é o `--not`).
+    const refs = [
+      ref('v1.6.1', 28, 'b', 'notas à mão'), // a tag mais nova em data, mas a 2ª em versão: a anterior é pela versão, não pela data
+      ref('v1.6.3', 27, 'd', releaseBody('PR', [{ id: 't-eeee05', title: 'Do bloco' }])),
+      ref('v1.6.2', 26, 'c', ''),
+      ref('v1.6.0', 24, 'a', ''),
+    ];
+    const line = (c: string, parent: string, subject: string) => `${sha(c)}\0${sha(parent)}\0${subject}\n`;
+    const log = line('c', '2', 'Versão 1.6.2') + line('2', '3', 'Ajuste do cofre (t-60f77a)') + line('3', '4', 'Cofre do Linux (t-60f77a)') + line('4', 'b', 'Sem card no quadro (t-9999ab)') + line('b', '5', 'Navegador limpo (t-2cb3b6)') + line('5', 'a', 'Posse do projeto (t-f50944)');
+    const board = [task('t-60f77a', 'done', { title: 'Cofre no chaveiro do Linux' })];
+
+    it('lista os cards dos commits desde a tag anterior: título do quadro quando existe, o do commit senão, id repetido uma vez; a 1ª tag e a com bloco não mudam', async () => {
+      const c = await setup({ refs, log, tasks: board });
+      const hist = (await c.svc.history('p'))!;
+      const byTag = Object.fromEntries(hist.entries.map((e) => [e.tag, e.tasks]));
+      expect(byTag['v1.6.2']).toEqual([
+        { id: 't-9999ab', title: 'Sem card no quadro' },
+        { id: 't-60f77a', title: 'Cofre no chaveiro do Linux' },
+      ]);
+      expect(byTag['v1.6.1']).toEqual([
+        { id: 't-f50944', title: 'Posse do projeto' },
+        { id: 't-2cb3b6', title: 'Navegador limpo' },
+      ]);
+      expect(byTag['v1.6.0']).toEqual([]); // sem tag anterior
+      expect(byTag['v1.6.3']).toEqual([{ id: 't-eeee05', title: 'Do bloco' }]); // o bloco manda
+      expect(hist.entries.find((e) => e.tag === 'v1.6.1')!.summary).toBe('notas à mão');
+    });
+
+    it('custo: um for-each-ref e um só git log para todas as tags, só com as pontas das tags sem bloco, até a anterior mais velha', async () => {
+      const c = await setup({ refs, log, tasks: board });
+      await c.svc.history('p');
+      expect(c.h.git.filter((a) => a[0] === 'for-each-ref')).toHaveLength(1);
+      const logs = c.h.git.filter((a) => a[0] === 'log');
+      expect(logs).toHaveLength(1);
+      const tips = logs[0]!.slice(logs[0]!.findIndex((a) => a.startsWith('--format=')) + 1, logs[0]!.indexOf('--not'));
+      expect(tips.sort()).toEqual([sha('a'), sha('b'), sha('c')]); // v1.6.3 (com bloco) e a tag 1.6.0 como ponta de si mesma não entram
+      expect(logs[0]![logs[0]!.indexOf('--not') + 1]).toBe(sha('a'));
+    });
+
+    it('sem tag fora do bloco (ou só a 1ª), nenhum git log e o quadro nem é lido', async () => {
+      const c = await setup(); // padrão: v1.5.2 com bloco e v1.5.1 (a 1ª, sem anterior)
+      const read = vi.spyOn(c.deps, 'readTasks');
+      await c.svc.history('p');
+      expect(c.h.git.filter((a) => a[0] === 'log')).toHaveLength(0);
+      expect(read).not.toHaveBeenCalled();
+    });
+
+    it('git log ou quadro que falham: o histórico sai, só sem a lista da tag', async () => {
+      const c = await setup({ refs, log, tasks: board });
+      const git = c.deps.tools.git;
+      c.deps.tools.git = async (cwd, args, o) => {
+        if (args[0] === 'log') throw new Error('git caiu');
+        return git(cwd, args, o);
+      };
+      expect(Object.fromEntries((await c.svc.history('p'))!.entries.map((e) => [e.tag, e.tasks.length]))).toEqual({ 'v1.6.0': 0, 'v1.6.1': 0, 'v1.6.2': 0, 'v1.6.3': 1 });
+      c.deps.tools.git = git;
+      c.deps.readTasks = async () => {
+        throw new Error('quadro ilegível');
+      };
+      const hist = (await c.svc.history('p'))!;
+      expect(hist.entries.find((e) => e.tag === 'v1.6.2')!.tasks.map((t) => t.title)).toEqual(['Sem card no quadro', 'Cofre do Linux']);
+    });
+
+    it('com git de verdade: tags à mão (anotada, leve, mescla), a com bloco intacta', async () => {
+      const c = await setup({ tasks: board });
+      const repo = c.dir;
+      const git = (...args: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=T', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', ...args], { stdio: 'pipe' }).toString();
+      const commit = (msg: string) => git('commit', '--allow-empty', '-q', '-m', msg);
+      git('init', '-q', '-b', 'main');
+      commit('Primeiro');
+      git('tag', '-a', 'v1.0.0', '-m', 'Versão 1.0.0');
+      commit('Cofre (t-60f77a)');
+      commit('Outro (t-bbbb02)');
+      commit('Cofre de novo (t-60f77a)');
+      git('tag', '-a', 'v1.1.0', '-m', 'Versão 1.1.0');
+      commit('Só pelo bloco (t-cccc03)');
+      git('tag', '-a', 'v1.2.0', '-m', releaseBody('PR', [{ id: 't-dddd04', title: 'Do bloco' }]));
+      commit('Leve (t-eeee05)');
+      git('tag', 'v1.3.0');
+      git('checkout', '-q', '-b', 'lado');
+      commit('Do lado (t-ffff06)');
+      git('checkout', '-q', 'main');
+      commit('Na principal (t-aaaa07)');
+      git('merge', '-q', '--no-ff', 'lado', '-m', 'Merge branch lado');
+      git('tag', '-a', 'v1.4.0', '-m', 'Versão 1.4.0');
+      c.deps.tools.git = gitDefault;
+      const hist = (await c.svc.history('p'))!;
+      const ids = (tag: string) => hist.entries.find((e) => e.tag === tag)!.tasks.map((t) => t.id);
+      expect(ids('v1.0.0')).toEqual([]);
+      expect(ids('v1.1.0')).toEqual(['t-60f77a', 't-bbbb02']);
+      expect(hist.entries.find((e) => e.tag === 'v1.1.0')!.tasks[0]!.title).toBe('Cofre no chaveiro do Linux');
+      expect(hist.entries.find((e) => e.tag === 'v1.1.0')!.tasks[1]!.title).toBe('Outro');
+      expect(ids('v1.2.0')).toEqual(['t-dddd04']); // o bloco manda: o commit "Só pelo bloco" não entra
+      expect(ids('v1.3.0')).toEqual(['t-eeee05']);
+      expect(ids('v1.4.0').sort()).toEqual(['t-aaaa07', 't-ffff06']);
+    });
   });
 
   it('cancelar: a trava sai e a fila anda; arquivo estragado vira "nenhuma versão" com cópia .bad', async () => {

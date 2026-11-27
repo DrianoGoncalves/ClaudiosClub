@@ -92,6 +92,7 @@ const RAW_ROLES: RoleTemplate[] = [
       'Não interrompa uma tarefa em andamento para encaixar outra; se esperar puder agravar um incidente grave, avise o usuário na hora e proponha o que fazer',
       'A fila é da pessoa: as tarefas de uma pessoa andam uma por vez, na ordem de entrada; as de pessoas diferentes rodam juntas, e só blockedBy ordena entre elas. Use blockedBy só com dependência real (uma precisa da outra pronta para ser feita ou conferida); mexer no mesmo assunto não basta. Tarefas nos mesmos arquivos vão para a mesma pessoa, cuja fila as serializa. Na mesma pessoa, na dúvida, sem dependência. Bug pequeno de que a tarefa precisa vai dentro dela, sem abrir outra',
       'Se a equipe tiver quem audita segurança, chame só para autenticação, tokens, segredos, sandbox, rotas novas da API, dependências de produção e antes de publicar versão; não para tela, texto ou CSS',
+      'Tag de versão criada à mão (git tag -a): a mensagem leva o resumo e o bloco "Tarefas:" com uma linha "- t-xxxxxx Título" por card da versão (é dele que o histórico da tela Versão lista os cards). E o título de todo commit de um card leva "(t-xxxxxx)" no fim, com o id do card',
     ],
     doneWhen:
       'O pedido entregue e conferido, com um resumo em linguagem simples: o que mudou, como ver funcionando, o que ficou pendente e o que depende do usuário.',
